@@ -238,7 +238,7 @@
       x: 120, y: ground(120), vx: 0, vy: 0,
       speed: MIN_SPEED, angle: slopeAngle(120), angVel: 0,
       grounded: true, airTime: 0, totalRot: 0, coyote: 0, jumped: false,
-      tuck: 0, squash: 0, maxHeight: 0, startX: 120,
+      tuck: 0, squash: 0, maxHeight: 0, startX: 120, takeoffRel: 0, lipLaunch: false,
     });
     cam.x = player.x + 120; cam.y = player.y;
     particles = []; popups = []; ragdoll = [];
@@ -249,26 +249,34 @@
 
   function startRun() {
     resetWorld();
+    // A tap or key that started this run must not also jump or flip.
+    input.held = false; input.buffer = 0; input.holdTime = 0;
+    keysDown.clear();
+    updateCamera(0, true);
     setState('play');
     popup('Go!', COLORS.blue, 1.0);
   }
 
   function popup(text, color, life = 1.4, big = false) {
     if (window.__skierLog) window.__skierLog.push(text);
-    popups.push({ text, color, t: 0, life, big, x: player.x, y: player.y - 80 - popups.length * 26 });
+    popups.push({ text, color, t: 0, life, big, x: player.x, y: player.y - px(80) - popups.length * px(26) });
   }
 
   function doJump(a) {
     const nx = Math.sin(a), ny = -Math.cos(a);
     player.vx += nx * JUMP;
     player.vy += ny * JUMP;
+    player.vx = Math.max(player.vx, 120);
     player.jumped = true;
+    player.lipLaunch = false;
     input.buffer = 0;
-    leaveGround();
+    leaveGround(a);
     puff(player.x, player.y, 10, 1);
   }
 
-  function leaveGround() {
+  function leaveGround(a) {
+    // Remember the ski angle relative to the snow we left, so flips count against the slope.
+    if (player.grounded) player.takeoffRel = player.angle - a;
     player.grounded = false;
     player.airTime = 0;
     player.totalRot = 0;
@@ -307,9 +315,10 @@
         const k = curvature(nx);
         if (ny < gy - 2 || s * s * k > G * Math.cos(a) * 1.05) {
           // The snow fell away (lip, cliff, or a crest taken fast).
+          p.lipLaunch = ny < gy - 2;
           p.x = nx; p.y = ny;
           p.jumped = false;
-          leaveGround();
+          leaveGround(a);
         } else {
           p.x = nx; p.y = gy;
         }
@@ -320,8 +329,9 @@
       p.coyote = Math.max(0, p.coyote - dt);
       if (p.coyote > 0 && input.buffer > 0 && !p.jumped) {
         // Late jump right off a lip: the ollie stacks with the kicker.
+        const lip = p.lipLaunch;
         doJump(slopeAngle(p.x - p.vx * 0.05));
-        popup('Pop!', COLORS.blue, 0.8);
+        if (lip) popup('Pop!', COLORS.blue, 0.8);
       }
       p.vy += G * dt;
       p.vx *= 1 - 0.00012 * Math.abs(p.vx) * dt;
@@ -337,7 +347,11 @@
         p.angVel *= Math.exp(-SPIN_DAMP * dt);
         p.tuck = approach(p.tuck, 0.25, dt * 4);
         if (Math.abs(p.angVel) < 2.5) {
-          const target = slopeAngle(p.x + p.vx * 0.12);
+          let lx = p.x, ly = p.y, lvy = p.vy;
+          for (let i = 0; i < 120 && ly < ground(lx); i++) {
+            lvy += G / 60; lx += p.vx / 60; ly += lvy / 60;
+          }
+          const target = slopeAngle(lx);
           const d = wrapAngle(target - p.angle);
           p.angle += clamp(d, -AUTO_LEVEL * dt, AUTO_LEVEL * dt);
         }
@@ -360,12 +374,13 @@
     const a = slopeAngle(p.x);
     const diff = Math.abs(wrapAngle(p.angle - a));
     const spin = Math.abs(p.angVel);
-    const flips = Math.floor((Math.abs(p.totalRot) + 0.85) / (Math.PI * 2));
+    const rel = (p.angle - a) - (p.takeoffRel || 0);
+    const flips = Math.round(Math.abs(rel) / (Math.PI * 2));
     const tangential = p.vx * Math.cos(a) + p.vy * Math.sin(a);
     const impact = -p.vx * Math.sin(a) + p.vy * Math.cos(a);
 
     if (diff > SLOPPY || (spin > 5 && diff > CLEAN)) {
-      crash(flips > 0 ? 'Over-rotated the landing' : 'Caught an edge');
+      crash(Math.abs(rel) > Math.PI ? 'Over-rotated the landing' : 'Caught an edge');
       return;
     }
 
@@ -381,7 +396,7 @@
     let pts = 0;
     let label = '';
     if (flips > 0) {
-      const name = p.totalRot < 0 ? 'Backflip' : 'Frontflip';
+      const name = rel < 0 ? 'Backflip' : 'Frontflip';
       const mult = flips === 1 ? '' : (['', '', 'Double ', 'Triple ', 'Quad '][flips] || flips + 'x ');
       label = mult + name;
       pts = 300 * flips * flips;
@@ -464,7 +479,7 @@
     const toWorld = (lx, ly) => ({ x: p.x + lx * ca - ly * sa, y: p.y + lx * sa + ly * ca });
     const parts = [
       { kind: 'head', at: pose.head, r: 6.5 },
-      { kind: 'body', at: pose.hip, r: 5 },
+      { kind: 'body', at: pose.hip, r: 10 },
       { kind: 'ski', at: { x: 0, y: -2 }, r: 2 },
       { kind: 'ski', at: { x: 3, y: -4 }, r: 2 },
       { kind: 'pole', at: pose.hand, r: 2 },
@@ -500,6 +515,8 @@
         b.vy = nvt * ty + nvn * tx;
         b.va *= 0.75;
         if (b.kind === 'ski') b.a = lerp(b.a, a, 0.2);
+        else if (b.kind === 'pole') b.a = lerp(b.a, a + Math.round((b.a - a) / Math.PI) * Math.PI, 0.2);
+        else if (b.kind === 'body') b.a = lerp(b.a, a - Math.PI / 2 + Math.round((b.a - a + Math.PI / 2) / (2 * Math.PI)) * 2 * Math.PI, 0.2);
       }
     }
   }
@@ -531,14 +548,18 @@
       q.y += q.vy * dt;
     }
     particles = particles.filter(q => q.t < q.life);
-    for (const u of popups) { u.t += dt; u.y -= 30 * dt; }
+    for (const u of popups) {
+      u.t += dt;
+      u.y -= 30 * dt;
+      if (state === 'play') { u.x += player.vx * dt; u.y += player.vy * dt; }
+    }
     popups = popups.filter(u => u.t < u.life);
   }
 
   // ---------- Camera ----------
   function updateCamera(dt, snap) {
     const p = player;
-    const lead = clamp(p.vx * 0.18, 0, 220);
+    const lead = clamp(p.vx * 0.18, 0, Math.min(220, (W * 0.18) / scale));
     const tx = p.x + lead;
     const ty = p.grounded ? p.y : lerp(p.y, ground(p.x), 0.35);
     const k = snap ? 1 : 1 - Math.exp(-dt * 6);
@@ -789,6 +810,17 @@
       if (c.x > viewLeft && c.x < viewRight) xs.push(c.x - 0.01, c.x);
     }
     xs.sort((a, b) => a - b);
+    const vb = cam.y + (H * (1 - anchor.y)) / scale + 10;
+    ctx.beginPath();
+    xs.forEach((x, i) => {
+      const y = ground(x);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(xs[xs.length - 1], vb);
+    ctx.lineTo(xs[0], vb);
+    ctx.closePath();
+    ctx.fillStyle = COLORS.paper;
+    ctx.fill();
     ctx.strokeStyle = COLORS.track;
     ctx.lineWidth = px(2.4);
     ctx.lineJoin = 'round';
@@ -870,7 +902,10 @@
       ctx.fillStyle = u.color;
       ctx.font = `${u.big ? 700 : 600} ${px(u.big ? 22 : 16)}px ${FONT}`;
       ctx.textAlign = 'center';
-      ctx.fillText(u.text, u.x, u.y);
+      const hw = ctx.measureText(u.text).width / 2;
+      const minX = cam.x + (hw + 8 - W * anchor.x) / scale;
+      const maxX = cam.x + (W * (1 - anchor.x) - hw - 8) / scale;
+      ctx.fillText(u.text, clamp(u.x, minX, maxX), u.y);
     }
     ctx.globalAlpha = 1;
 
@@ -930,13 +965,32 @@
     return 0;
   }
 
+  function fitFont(text, weight, size, maxW) {
+    ctx.font = `${weight} ${size}px ${FONT}`;
+    while (size > 11 && ctx.measureText(text).width > maxW) {
+      size--;
+      ctx.font = `${weight} ${size}px ${FONT}`;
+    }
+  }
+
   function panel(title, lines, cta) {
-    const w = Math.min(W - 32, 420);
+    let w = Math.min(W - 32, 420);
     const lh = 24;
-    const h = 92 + lines.length * lh + (cta ? 44 : 6);
-    const x = (W - w) / 2;
-    // Sit below the skier so the hill stays visible.
-    const y = clamp(H * anchor.y + 70, 16, Math.max(16, H - h - 24));
+    const h = 92 + lines.length * lh + 44;
+    let x = (W - w) / 2;
+    // Sit below the skier so the hill stays visible; on short screens sit beside it.
+    let y = H * anchor.y + 70;
+    if (y + h > H - 16) {
+      const left = W * anchor.x + 60;
+      if (W - left - 16 >= 260) {
+        w = Math.min(420, W - left - 16);
+        x = W - w - 16;
+        y = Math.max(16, (H - h) / 2);
+      } else {
+        y = Math.max(16, H - h - 16);
+      }
+    }
+    const cx = x + w / 2;
     ctx.fillStyle = 'rgba(255,255,255,0.88)';
     ctx.strokeStyle = COLORS.ink;
     ctx.lineWidth = 2;
@@ -948,21 +1002,23 @@
     ctx.textBaseline = 'top';
     ctx.fillStyle = COLORS.ink;
     ctx.font = `800 ${W < 380 ? 30 : 36}px ${FONT}`;
-    ctx.fillText(title, W / 2, y + 22);
+    ctx.fillText(title, cx, y + 22);
     ctx.strokeStyle = COLORS.red;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(W / 2 - 40, y + 68); ctx.lineTo(W / 2 + 40, y + 68);
+    ctx.moveTo(cx - 40, y + 68); ctx.lineTo(cx + 40, y + 68);
     ctx.stroke();
-    ctx.font = `500 16px ${FONT}`;
     ctx.fillStyle = '#333';
-    lines.forEach((l, i) => ctx.fillText(l, W / 2, y + 82 + i * lh));
+    lines.forEach((l, i) => {
+      fitFont(l, 500, 16, w - 24);
+      ctx.fillText(l, cx, y + 82 + i * lh);
+    });
     if (cta) {
       const pulse = 0.65 + 0.35 * Math.sin(time * 4);
       ctx.globalAlpha = pulse;
       ctx.fillStyle = COLORS.blue;
-      ctx.font = `700 17px ${FONT}`;
-      ctx.fillText(cta, W / 2, y + 90 + lines.length * lh);
+      fitFont(cta, 700, 17, w - 24);
+      ctx.fillText(cta, cx, y + 90 + lines.length * lh);
       ctx.globalAlpha = 1;
     }
   }
@@ -970,19 +1026,31 @@
   // ---------- Input ----------
   let isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   let pointers = 0;
+  const keysDown = new Map(); // key code -> flip direction
 
   function press(dir) {
     if (state === 'title') { startRun(); return; }
     if (state === 'over') { if (stateTime > 0.5) startRun(); return; }
     if (state === 'paused') { setState('play'); return; }
     if (state !== 'play') return;
+    if (!input.held) input.holdTime = 0;
     input.held = true;
     input.dir = dir;
-    input.holdTime = 0;
     input.buffer = BUFFER;
   }
   function release() {
     input.held = false;
+  }
+  function releaseAll() {
+    pointers = 0;
+    keysDown.clear();
+    release();
+    input.buffer = 0;
+  }
+  function pause() {
+    if (state !== 'play') return;
+    setState('paused');
+    releaseAll();
   }
 
   canvas.addEventListener('pointerdown', e => {
@@ -995,7 +1063,7 @@
   });
   const up = e => {
     pointers = Math.max(0, pointers - 1);
-    if (pointers === 0) release();
+    if (pointers === 0 && keysDown.size === 0) release();
   };
   canvas.addEventListener('pointerup', up);
   canvas.addEventListener('pointercancel', up);
@@ -1004,10 +1072,12 @@
   const BACK_KEYS = new Set(['Space', 'ArrowUp', 'KeyW', 'ArrowLeft', 'KeyA', 'Enter']);
   const FRONT_KEYS = new Set(['ArrowRight', 'KeyD']);
   window.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // leave browser shortcuts alone
     if (e.code === 'KeyP' || e.code === 'Escape') {
-      if (state === 'play') setState('paused');
-      else if (state === 'paused') setState('play');
       e.preventDefault();
+      if (e.repeat) return;
+      if (state === 'play') pause();
+      else if (state === 'paused') setState('play');
       return;
     }
     const back = BACK_KEYS.has(e.code), front = FRONT_KEYS.has(e.code);
@@ -1015,17 +1085,20 @@
     e.preventDefault();
     isTouch = false;
     if (e.repeat) return;
-    press(front ? 1 : -1);
+    const dir = front ? 1 : -1;
+    keysDown.set(e.code, dir);
+    press(dir);
   });
   window.addEventListener('keyup', e => {
-    if (BACK_KEYS.has(e.code) || FRONT_KEYS.has(e.code)) {
-      if ((FRONT_KEYS.has(e.code) && input.dir === 1) || (BACK_KEYS.has(e.code) && input.dir === -1)) release();
-    }
+    if (!keysDown.has(e.code)) return;
+    keysDown.delete(e.code);
+    if (keysDown.size) input.dir = [...keysDown.values()].pop();
+    else if (pointers === 0) release();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state === 'play') { setState('paused'); release(); }
+    if (document.hidden) { pause(); releaseAll(); }
   });
-  window.addEventListener('blur', () => { if (state === 'play') { setState('paused'); release(); } });
+  window.addEventListener('blur', () => { pause(); releaseAll(); });
 
   // ---------- Main loop ----------
   let last = performance.now();
