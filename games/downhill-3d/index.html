@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#cfe3f3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Downhill 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage" aria-label="Downhill 3D game"></div>
+<div id="hud">
+  <div class="hud-left"><span id="score">0</span><small id="mult"></small></div>
+  <div class="hud-right"><span id="dist">0 m</span><small id="speed">0 km/h</small></div>
+</div>
+<div id="popups"></div>
+<div id="overlay" class="show">
+  <div class="card">
+    <h1 id="title">Downhill 3D</h1>
+    <p id="subtitle">Carve through the trees, hit the kickers, land your tricks.</p>
+    <div id="result" hidden>
+      <div class="big" id="final">0</div>
+      <div id="best"></div>
+    </div>
+    <ul class="help" id="help-keys">
+      <li><b>← →</b> carve, or spin in the air</li>
+      <li><b>↑ ↓</b> flip in the air, <b>↓</b> tucks on snow</li>
+      <li><b>Space</b> hop</li>
+    </ul>
+    <ul class="help" id="help-touch">
+      <li><b>Drag sideways</b> to carve, or spin in the air</li>
+      <li><b>Drag up / down</b> to flip in the air, drag down to tuck</li>
+      <li><b>Tap</b> to hop</li>
+    </ul>
+    <p class="tip">Land with your skis pointing downhill. Release early so the spin settles.</p>
+    <button id="go" type="button">Start</button>
+  </div>
+</div>
+<div id="loading">Loading…</div>
+<script type="module" src="game.js"></script>
+<script>
+  // If the 3D engine can't load (offline, blocked CDN), say so instead of hanging.
+  setTimeout(function () {
+    var l = document.getElementById('loading');
+    if (l) { l.className = 'err'; l.textContent = 'Could not load the 3D engine. Check your connection and reload.'; }
+  }, 12000);
+</script>
+</body>
+</html>
