@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b1630">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Golden Ski</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage" aria-label="Golden Ski game"></div>
+
+<div id="hud" hidden>
+  <div id="plate" class="panel">
+    <div class="run">RUN <b id="hole-no">1</b></div>
+    <div class="meta"><span id="hole-par">PAR 4</span><span id="hole-len">320 M</span></div>
+    <div class="name" id="hole-name">First Chair</div>
+  </div>
+  <div id="card-mini" class="panel">
+    <div><small>SHOT</small><b id="shot-no">1</b></div>
+    <div><small>TOTAL</small><b id="total">E</b></div>
+  </div>
+  <canvas id="map" class="panel" width="120" height="180" aria-label="Overhead map of the run"></canvas>
+
+  <div id="announce"></div>
+  <div id="hint"></div>
+
+  <div id="meter" aria-hidden="true"><div id="meter-fill"></div><div id="meter-mark"></div><span id="meter-pct"></span></div>
+  <button id="aim-l" class="aim" type="button" aria-label="Aim left">&#9664;</button>
+  <button id="aim-r" class="aim" type="button" aria-label="Aim right">&#9654;</button>
+
+  <div id="bar">
+    <div id="wind" class="panel">
+      <svg id="wind-arrow" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -10 L7 2 L2.5 2 L2.5 10 L-2.5 10 L-2.5 2 L-7 2 Z"/></svg>
+      <div><small>WIND</small><b id="wind-mph">0</b><small>MPH</small></div>
+    </div>
+    <button id="tech" class="panel" type="button" aria-label="Change technique">
+      <small>TECHNIQUE</small><b id="tech-name">TUCK</b><small id="tech-dist">176 M</small>
+    </button>
+    <div id="lie" class="panel">
+      <small id="lie-name">GROOMED</small><b id="to-pin">0 M</b><small>TO GATE</small>
+    </div>
+  </div>
+</div>
+
+<div id="overlay" class="show">
+  <div class="card">
+    <div class="logo"><span>GOLDEN</span><span>SKI</span></div>
+    <div id="card-body">
+      <p class="sub">Nine runs down Golden Peak. Fewest pushes wins.</p>
+      <ul class="help" id="help-touch">
+        <li><b>Pull back, flick up</b> to push off. Faster flick, more power.</li>
+        <li><b>Flick on an angle</b> to carve left or right.</li>
+        <li><b>Drag sideways</b> or tap the arrows to aim.</li>
+        <li><b>Tap the technique box</b> to change from Tuck to Skate.</li>
+      </ul>
+      <ul class="help" id="help-keys">
+        <li><b>Mouse:</b> pull back and flick up, like a trackball.</li>
+        <li><b>Space</b> hold and release for power; <b>← →</b> while holding to carve.</li>
+        <li><b>← →</b> aim, <b>↑ ↓</b> technique, <b>Enter</b> skip flyover.</li>
+      </ul>
+      <p class="tip">Cross between the finish gate wands to hole out. Trees and the creek cost a stroke.</p>
+    </div>
+    <button id="go" type="button">Tee Off</button>
+  </div>
+</div>
+<div id="loading">Loading…</div>
+<script type="module" src="game.js"></script>
+<script>
+  // If the 3D engine can't load (offline, blocked CDN), say so instead of hanging.
+  setTimeout(function () {
+    var l = document.getElementById('loading');
+    if (l) { l.className = 'err'; l.textContent = 'Could not load the 3D engine. Check your connection and reload.'; }
+  }, 12000);
+</script>
+</body>
+</html>
