@@ -62,11 +62,12 @@ html, body {
   white-space: nowrap;
   transition: font-size .35s ease;
 }
-#timer.done { top: 14%; padding: 8px 26px 10px; }
+/* After the finish the time and Retry sit in the open snow below the skier, clear of the FINISH banner. */
+#timer.done { top: min(62%, calc(100% - 176px - env(safe-area-inset-bottom))); padding: 8px 26px 10px; }
 #timer.done #time { font-size: 54px; }
 #retry {
   position: fixed;
-  top: calc(14% + 104px);
+  top: min(calc(62% + 104px), calc(100% - 72px - env(safe-area-inset-bottom)));
   left: 50%;
   transform: translateX(-50%);
   padding: 8px 26px 10px;

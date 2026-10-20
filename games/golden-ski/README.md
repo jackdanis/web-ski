@@ -11,10 +11,10 @@ Built with [Three.js](https://threejs.org/) 0.160 loaded as an ES module from js
 | | Keyboard | Touch or mouse |
 | --- | --- | --- |
 | Start | Any control key | Touch the screen |
-| Steer | ← → or A D | Drag left or right. How far you drag sets how hard you turn |
+| Steer | ← → or A D | Drag left or right. How far you drag sets how hard you turn. The newest finger down steers |
 | Tuck (faster, turns wider) | ↓ or S | Hold your thumb still |
-| Brake (hockey stop) | ↑ or W | Swipe up and hold |
-| Jump | Space | Tap |
+| Brake (hockey stop) | ↑ or W | Swipe up quickly. Pull your thumb back down to cancel |
+| Jump | Space | Tap, with any finger |
 | Retry after the finish | Enter | Retry button |
 
 The clock starts at the start line and stops at the finish line. The only thing on screen is the timer.
@@ -26,15 +26,17 @@ Design book chapter 05, kept deliberately small:
 - **Gravity** pulls the skier along the slope, so steep pitches are fast and flats are slow.
 - **Snow friction** is low on the groomed run and higher in the powder off the edges.
 - **Air drag** grows with speed squared; tucking halves it. A soft cap holds top speed around 94 km/h.
-- **Edges**: steering turns the skis, and grip bends your path toward them. Within the grip limit that's a clean carve that keeps speed. Turn harder than the snow can hold and the rest becomes a skid that bleeds speed and sprays snow.
+- **Edges**: steering turns the skis, and grip bends your path toward them. Within the grip limit that's a clean carve that keeps speed. Turn harder than the snow can hold and the rest becomes a skid that bleeds speed and sprays snow. Tucking holds less edge, so tucked turns are wider.
 - **Air**: if the ground drops away faster than gravity can pull you down onto it, you leave the snow. Landings within 20° of your travel are clean, 20 to 45° are sloppy and cost speed, and worse is a wipeout.
-- **Trees** are solid. Hitting one fast is a wipeout; brushing one is a hard stop. After a wipeout, or skiing far off the run, you're reset onto the run and the clock keeps going.
+- **Trees** are solid. Hitting one head-on fast is a wipeout; brushing one slows you and slides you round it. After a wipeout, skiing far off the run, or getting stuck by the edge for 3 seconds, you're reset onto the run and the clock keeps going.
 
 Physics runs at a fixed 60 steps a second. All the feel numbers are in the tuning block at the top of `game.js`. The terrain is a height grid: the mesh uses its flat-shaded triangles, and the physics samples a smooth surface through the same points.
 
 ## Art
 
 `assets/goldie.png` is Goldie's placeholder sprite sheet (10 frames of 96×128: stand, carve left, carve right, tuck, brake, air, land, wipeout, front, celebrate), traced from photo references. It will be replaced by sprites pre-rendered from a 3D model. Only back and front views exist so far, so the skier always shows her back while skiing.
+
+`assets/goldie_n.png` is the matching normal map, made with the Sprite Normals tool. Goldie is lit with Snowlight, the project's lighting style: each pixel is lit by the sun, the sky and the sunlit snow below according to its normal, then snapped to four bands. The sun is the same one that lights the terrain.
 
 ## Testing hooks
 

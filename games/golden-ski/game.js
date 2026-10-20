@@ -13,13 +13,14 @@ const SNOW = {
 };
 const DRAG = 0.006;             // air drag per (m/s)^2
 const TUCK_DRAG = 0.5;          // tucking halves drag...
-const TUCK_TURN = 0.55;         // ...and turns wider
+const TUCK_TURN = 0.55;         // ...and turns wider: the skis turn slower
+const TUCK_GRIP = 0.6;          // ...and hold less edge
 const SPEED_CAP = 26;           // soft cap, about 94 km/h
 const CAP_DRAG = 0.6;
 const SKID = 0.55;              // speed lost to sideways slip, as a share of the normal force
 const BRAKE = 8.5;              // hockey stop deceleration
 const TURN_RATE = 1.9;          // rad/s the skis turn at full steer
-const AIR_TURN = 2.6;           // rad/s in the air, to line up the landing
+const AIR_TURN = 1.2;           // rad/s in the air, to line up the landing
 const MAX_HEADING = 1.85;       // how far from the fall line the skis can point (about 106 degrees)
 const POP = 3.4;                // jump impulse along the slope normal
 const POP_COOLDOWN = 0.35;
@@ -35,6 +36,7 @@ const CRASH_DECEL = 7;
 const CRASH_HIT_SPEED = 7;      // hitting a tree faster than this is a wipeout
 const SKIER_R = 0.35;
 const OUT_OF_BOUNDS = 46;       // meters past the groomed edge before you're reset
+const STUCK_TIME = 3;           // seconds stuck by the edge (powder or a tree) before you're reset
 
 // ---------- Small helpers ----------
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -270,14 +272,15 @@ function snowTexture() {
 // Far peaks: a jagged ring that follows the camera, outside the fog.
 const farRing = (() => {
   const N = 140, R = 1900, pos = [], col = [];
-  const top = new THREE.Color(0xf4f8ff), mid = new THREE.Color(0xb9cbe4), low = new THREE.Color(0x8aa3c6);
+  const top = new THREE.Color(0xf4f8ff), mid = new THREE.Color(0xb9cbe4);
   for (let k = 0; k <= N; k++) {
     const a = (k / N) * Math.PI * 2;
     const ridge = 1 - Math.abs(noise2(k * 0.35, 7));         // sharp ridgelines
     const peak = 120 + 420 * ridge * ridge + 70 * noise2(k * 1.7, 3) + (k % 2 ? -40 : 30);
     const x = Math.cos(a) * R, z = Math.sin(a) * R;
-    pos.push(x, -260, z, x, peak * 0.55, z, x, peak, z);
-    col.push(low.r, low.g, low.b, mid.r, mid.g, mid.b, top.r, top.g, top.b);
+    // the base drops far below the horizon in the fog's color, so no sky shows beyond the terrain
+    pos.push(x, -1500, z, x, peak * 0.55, z, x, peak, z);
+    col.push(FOG.r, FOG.g, FOG.b, mid.r, mid.g, mid.b, top.r, top.g, top.b);
   }
   const idx = [];
   for (let k = 0; k < N; k++) {
@@ -528,7 +531,13 @@ const sprayPoints = (() => {
   spray.pos.fill(-1e4);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(spray.pos, 3));
-  const p = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.18, transparent: true, opacity: 0.9, depthWrite: false }));
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d');
+  const r = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.45, 'rgba(255,255,255,0.85)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 32, 32);
+  const p = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.24, map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.9, depthWrite: false }));
   p.frustumCulled = false;
   scene.add(p);
   return p;
@@ -537,11 +546,14 @@ const sprayPoints = (() => {
 // ---------- Input ----------
 // Keyboard: arrows or A/D steer, Down or S tucks, Up or W brakes, Space jumps.
 // Touch or mouse: drag sideways to steer, hold still to tuck, swipe up to brake, tap to jump.
+// The newest finger down steers; lifting it hands steering back to any finger still down.
 const input = { steer: 0, tuck: false, brake: false, jump: false };
 const keys = new Set();
 let keySteer = 0;
 const STEER_PX = 70;
-const ptr = { id: null, x0: 0, y0: 0, x: 0, y: 0, t0: 0, travel: 0, lastMove: 0, steer: 0, woke: false };
+const ptr = { id: null, x0: 0, x: 0, y: 0, t0: 0, travel: 0, lastMove: 0, steer: 0, woke: false, hist: [], passive: false, topY: 0 };
+const touches = new Map();      // every finger down: id -> [x, y]
+let hockeyStop = false;         // a swipe up starts a stop that holds until you've stopped
 const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowDown: 'tuck', KeyS: 'tuck', ArrowUp: 'brake', KeyW: 'brake', Space: 'jump' };
 window.addEventListener('keydown', (e) => {
   const k = KEYMAP[e.code];
@@ -553,34 +565,60 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'jump') input.jump = true;
 });
 window.addEventListener('keyup', (e) => { const k = KEYMAP[e.code]; if (k) keys.delete(k); });
-window.addEventListener('blur', () => { keys.clear(); ptr.id = null; });
+window.addEventListener('blur', () => { keys.clear(); touches.clear(); ptr.id = null; ptr.steer = 0; hockeyStop = false; });
 const canvas = renderer.domElement;
-canvas.addEventListener('pointerdown', (e) => {
-  if (ptr.id !== null) return;
-  ptr.id = e.pointerId;
-  ptr.x0 = ptr.x = e.clientX; ptr.y0 = ptr.y = e.clientY;
+function anchor(id, x, y, handedOver) {
+  ptr.id = id;
+  ptr.x0 = ptr.x = x; ptr.y = y;
   ptr.t0 = ptr.lastMove = performance.now();
-  ptr.travel = 0; ptr.steer = 0;
+  ptr.travel = handedOver ? Infinity : 0;  // a finger that was already down can't count as a tap
+  ptr.passive = handedOver;                // ...or tuck by resting until it moves
+  ptr.steer = 0;
+  ptr.hist = [[ptr.t0, x, y]];
+  ptr.topY = y;
+}
+canvas.addEventListener('pointerdown', (e) => {
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  anchor(e.pointerId, e.clientX, e.clientY, false);
+  hockeyStop = false;
   ptr.woke = phase === 'ready';
   canvas.setPointerCapture?.(e.pointerId);
   wake();
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, [e.clientX, e.clientY]);
   if (e.pointerId !== ptr.id) return;
+  const now = performance.now();
   const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
   ptr.travel += Math.hypot(dx, dy);
-  if (Math.hypot(dx, dy) > 1.5) ptr.lastMove = performance.now();
+  if (Math.hypot(dx, dy) > 1.5) { ptr.lastMove = now; ptr.passive = false; }
   ptr.x = e.clientX; ptr.y = e.clientY;
+  // Hockey stop: a quick, mostly upward flick (40 px within a quarter second).
+  // Pulling the thumb back down cancels it.
+  ptr.hist.push([now, ptr.x, ptr.y]);
+  while (now - ptr.hist[0][0] > 250) ptr.hist.shift();
+  const up = ptr.hist[0][2] - ptr.y, side = Math.abs(ptr.x - ptr.hist[0][1]);
+  if (dy < 0 && up > 40 && up > 1.5 * side) { hockeyStop = true; ptr.topY = ptr.y; }
+  ptr.topY = Math.min(ptr.topY, ptr.y);
+  if (hockeyStop && ptr.y - ptr.topY > 20) hockeyStop = false;
   // keep the anchor within one full steer of the thumb so reversing responds at once
   if (ptr.x - ptr.x0 > STEER_PX) ptr.x0 = ptr.x - STEER_PX;
   if (ptr.x0 - ptr.x > STEER_PX) ptr.x0 = ptr.x + STEER_PX;
   ptr.steer = clamp((ptr.x - ptr.x0) / STEER_PX, -1, 1);
 });
 function endPointer(e) {
+  touches.delete(e.pointerId);
   if (e.pointerId !== ptr.id) return;
   const quick = performance.now() - ptr.t0 < 220 && ptr.travel < 14;
   if (quick && e.type === 'pointerup' && !ptr.woke) input.jump = true;
-  ptr.id = null; ptr.steer = 0;
+  const rest = [...touches];
+  if (rest.length) {
+    // Another finger is still down: it takes over steering from where it is.
+    const [id, [x, y]] = rest[rest.length - 1];
+    anchor(id, x, y, true);
+  } else {
+    ptr.id = null; ptr.steer = 0;
+  }
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
@@ -600,11 +638,10 @@ function readInput(dt) {
   if (!target && Math.abs(keySteer) < 0.02) keySteer = 0;
   const now = performance.now();
   const held = ptr.id !== null;
-  const swipeUp = held && ptr.y0 - ptr.y > 45;
-  const still = held && now - ptr.lastMove > 200 && now - ptr.t0 > 200 && Math.abs(ptr.steer) < 0.25;
+  const still = held && !ptr.passive && now - ptr.lastMove > 200 && now - ptr.t0 > 200 && Math.abs(ptr.steer) < 0.25;
   input.steer = clamp(keySteer + (held ? ptr.steer : 0), -1, 1);
-  input.brake = keys.has('brake') || swipeUp;
-  input.tuck = !input.brake && (keys.has('tuck') || (still && !swipeUp));
+  input.brake = keys.has('brake') || hockeyStop;
+  input.tuck = !input.brake && (keys.has('tuck') || still);
 }
 
 // ---------- Simulation ----------
@@ -612,6 +649,7 @@ const sk = {
   pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(),
   heading: 0, grounded: true, airTime: 0, airMax: 0, popCD: 0,
   crashed: false, crashT: 0, landT: 0, landQ: '', skid: 0, tuck: false, brake: false, steer: 0, frame: FRAMES.stand,
+  stuckT: 0, stuckX: 0, stuckZ: 0,
 };
 let phase = 'ready';            // ready -> skiing -> finished
 let simTime = 0, runStart = null, runTime = 0, finishTime = null, finishAt = 0;
@@ -632,6 +670,7 @@ function placeSkier(d, speed) {
   sk.vel.addScaledVector(tmpN, -sk.vel.dot(tmpN));
   sk.grounded = true; sk.airTime = 0; sk.airMax = 0; sk.popCD = 0;
   sk.crashed = false; sk.crashT = 0; sk.landT = 0; sk.skid = 0;
+  sk.stuckT = 0; sk.stuckX = x; sk.stuckZ = z;
   cameraSnap = true;
 }
 function resetRun() {
@@ -696,7 +735,7 @@ function groundStep(dt) {
     const cosA = tmpA.dot(f);
     const sinA = tmpB.crossVectors(tmpA, f).dot(n);
     const alpha = Math.atan2(sinA, cosA);
-    const omega = (surf.grip * nAcc) / Math.max(speed, 1.5);
+    const omega = (surf.grip * (sk.tuck ? TUCK_GRIP : 1) * nAcc) / Math.max(speed, 1.5);
     const turn = clamp(alpha, -omega * dt, omega * dt);
     const c = Math.cos(turn), sn = Math.sin(turn);
     tmpB.crossVectors(n, sk.vel);
@@ -707,7 +746,10 @@ function groundStep(dt) {
 
   if (speed > 0) {
     const drag = DRAG * (sk.tuck ? TUCK_DRAG : 1) * speed * speed + (speed > SPEED_CAP ? CAP_DRAG * (speed - SPEED_CAP) ** 2 : 0);
-    const decel = surf.friction * nAcc + drag + SKID * sk.skid * nAcc + (sk.brake ? BRAKE : 0);
+    let fric = surf.friction * nAcc;
+    // Nearly stopped, friction never quite beats the slope, so pointing downhill always gets you going.
+    if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
+    const decel = fric + drag + SKID * sk.skid * nAcc + (sk.brake ? BRAKE : 0);
     const next = Math.max(0, speed - decel * dt);
     sk.vel.multiplyScalar(next / speed);
   }
@@ -794,7 +836,10 @@ function crashStep(dt) {
   if (speed > 0) sk.vel.multiplyScalar(Math.max(0, speed - CRASH_DECEL * dt) / speed);
   sk.pos.addScaledVector(sk.vel, dt);
   sk.pos.y = groundY(sk.pos.x, sk.pos.z);
-  if (sk.crashT > 1.6 && speed < 0.8) respawn(-sk.pos.z - 10);
+  if (sk.crashT > 1.6 && speed < 0.8) {
+    if (phase === 'finished') { sk.crashed = false; sk.vel.set(0, 0, 0); } // run's over: get up where you stopped
+    else respawn(-sk.pos.z - 10);
+  }
 }
 
 function respawn(d) {
@@ -818,12 +863,16 @@ function treeCollide() {
         sk.pos.z = t.z + nz * r;
         if (sk.grounded) sk.pos.y = groundY(sk.pos.x, sk.pos.z);
         const into = sk.vel.x * nx + sk.vel.z * nz;
-        if (!sk.crashed && sk.vel.length() > CRASH_HIT_SPEED) {
+        if (into >= 0) continue;
+        if (!sk.crashed && -into > CRASH_HIT_SPEED) {
           crash();
           sk.vel.multiplyScalar(0.35);
-        } else if (into < 0) {
-          // a glancing touch is a hard stop
-          sk.vel.set(0, 0, 0);
+        } else {
+          // Brushing a trunk: lose the part of your speed going into it and slide round it.
+          // A real knock is still a hard stop.
+          sk.vel.x -= into * nx;
+          sk.vel.z -= into * nz;
+          if (-into > 1) sk.vel.multiplyScalar(0.3);
         }
       }
     }
@@ -853,9 +902,16 @@ function step() {
   else if (sk.grounded) groundStep(dt);
   else airStep(dt);
   input.jump = false;
+  if (hockeyStop && (sk.vel.length() < 1 || sk.crashed || !sk.grounded || phase !== 'skiing')) hockeyStop = false;
   sk.landT = Math.max(0, sk.landT - dt);
   treeCollide();
   if (!sk.crashed && edgeDistance(sk.pos.x, sk.pos.z) > OUT_OF_BOUNDS) respawn(-sk.pos.z);
+  // Never a dead end: stuck by the edge (deep powder, a trunk) for a few seconds puts you
+  // back on the run, and the clock keeps going. Holding the brake is a choice, so it doesn't count.
+  if (phase === 'skiing' && !sk.crashed && !sk.brake && edgeDistance(sk.pos.x, sk.pos.z) > -1) {
+    if (Math.hypot(sk.pos.x - sk.stuckX, sk.pos.z - sk.stuckZ) > 1.5) { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
+    else if ((sk.stuckT += dt) > STUCK_TIME) respawn(-sk.pos.z - 5);
+  } else { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
 
   // Timing: the clock starts at the start line and stops at the finish line.
   const dAfter = -sk.pos.z;
@@ -870,6 +926,7 @@ function step() {
       phase = 'finished';
       finishAt = simTime;
       timerEl.classList.add('done');
+      cameraSnap = true;          // cut to the finish cam
     }
   }
   if (phase === 'finished' && retryEl.hidden && simTime - finishAt > 1.2) retryEl.hidden = false;
@@ -917,7 +974,8 @@ function updateCamera(p, dt) {
   look.y = p.y + 1.1;
   camera.lookAt(look);
   const fov = Math.min(74, 62 + speed * 0.4) * (camera.aspect < 1 ? 1.2 : 1);
-  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
+  if (cameraSnap) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  else if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
   cameraSnap = false;
 }
 
@@ -1000,11 +1058,16 @@ function render(alpha, dt) {
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+// A window dragged to a screen with a different pixel density may not fire resize.
+(function watchDensity() {
+  matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener('change', () => { resize(); watchDensity(); }, { once: true });
+})();
 
 // ---------- Main loop ----------
 let manual = false, acc = 0, last = performance.now();
