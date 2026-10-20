@@ -457,14 +457,58 @@ function addGate(d, text, halfSpan, height) {
 }
 
 // The skier: one camera-facing sprite from Goldie's sheet, plus a blob shadow.
+// Snowlight: each sprite pixel is lit from its normal map by the sun, the sky above
+// and the sunlit snow below, then snapped to four bands. Lighting happens in the
+// sprite's own space (x right, y up, z toward the camera), so only the sun turns.
 const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, front: 8, celebrate: 9 };
 const SPRITE_H = 2.0, SPRITE_W = 1.5;
-let skierTex = null;
-const skierMesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(SPRITE_W, SPRITE_H).translate(0, SPRITE_H / 2 - 0.04, 0),
-  new THREE.MeshBasicMaterial({ transparent: false, alphaTest: 0.5, side: THREE.DoubleSide }),
-);
+const SUN_DIR = new THREE.Vector3(-0.8, 0.75, 0.25).normalize(); // same sun as the terrain
+const SUN_COLOR = new THREE.Vector3(1.0, 0.98, 0.92);
+const SKY_COLOR = new THREE.Vector3(0.42, 0.55, 0.85);
+const SNOW_ALBEDO = new THREE.Vector3(0.95, 0.97, 1.0);
+const skierMat = new THREE.ShaderMaterial({
+  uniforms: {
+    map: { value: null },
+    normalMap: { value: null },
+    frameOffset: { value: 0 },
+    sunLocal: { value: new THREE.Vector3(0, 1, 0) },
+    sunColor: { value: SUN_COLOR },
+    skyColor: { value: SKY_COLOR },
+    bounce: { value: new THREE.Vector3() },
+  },
+  vertexShader: `
+    uniform float frameOffset;
+    varying vec2 vUv;
+    void main() {
+      vUv = vec2(uv.x * 0.1 + frameOffset, uv.y);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    uniform sampler2D map;
+    uniform sampler2D normalMap;
+    uniform vec3 sunLocal, sunColor, skyColor, bounce;
+    varying vec2 vUv;
+    float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
+    void main() {
+      vec4 albedo = texture2D(map, vUv);
+      if (albedo.a < 0.5) discard;
+      vec3 n = normalize(texture2D(normalMap, vUv).rgb * 2.0 - 1.0);
+      vec3 l = sunColor * band(max(0.0, dot(n, sunLocal)));
+      l += skyColor * (0.35 + 0.35 * n.y);
+      l += bounce * band(max(0.0, 0.15 - 0.8 * n.y)) * 0.55;
+      l += 0.06;
+      float m = max(max(l.r, l.g), max(l.b, 1e-3));
+      l *= band(min(1.25, m)) / m;
+      gl_FragColor = vec4(min(albedo.rgb * l * 1.15, 1.0), 1.0);
+    }`,
+  side: THREE.DoubleSide,
+});
+const skierMesh = new THREE.Mesh(new THREE.PlaneGeometry(SPRITE_W, SPRITE_H).translate(0, SPRITE_H / 2 - 0.04, 0), skierMat);
 scene.add(skierMesh);
+// Snow bounce: the light landing on the snow (sun plus sky) times the snow's color.
+// There are no shadows on this slope yet, so the skier always stands in sun.
+skierMat.uniforms.bounce.value.copy(SUN_COLOR).multiplyScalar(Math.max(0, SUN_DIR.y))
+  .addScaledVector(SKY_COLOR, 0.6).multiply(SNOW_ALBEDO);
 const shadow = (() => {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -931,11 +975,15 @@ function render(alpha, dt) {
 
   // Sprite: turn to face the camera around the vertical axis only.
   skierMesh.position.copy(p);
-  skierMesh.rotation.y = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
+  const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
+  skierMesh.rotation.y = yaw;
+  // Sun in the sprite's space: x along the sprite's right, z toward the camera.
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  skierMat.uniforms.sunLocal.value.set(SUN_DIR.x * cy - SUN_DIR.z * sy, SUN_DIR.y, SUN_DIR.x * sy + SUN_DIR.z * cy);
   tmpA.set(camera.position.x - p.x, 0, camera.position.z - p.z).normalize();
   const facing = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
   const frame = pickFrame(facing > 0.35);
-  if (frame !== sk.frame && skierTex) { skierTex.offset.x = frame / 10; sk.frame = frame; }
+  if (frame !== sk.frame) { skierMat.uniforms.frameOffset.value = frame / 10; sk.frame = frame; }
 
   const s = sample(p.x, p.z);
   normalFrom(s, tmpN);
@@ -980,16 +1028,22 @@ async function boot() {
   } catch { /* fall back to Arial Black */ }
   addGate(COURSE.startD, 'START', 7, 6);
   addGate(COURSE.finishD, 'FINISH', halfWidth(COURSE.finishD) + 1.5, 8);
-  skierTex = await new THREE.TextureLoader().loadAsync(new URL('assets/goldie.png', import.meta.url).href);
-  skierTex.colorSpace = THREE.SRGBColorSpace;
-  skierTex.magFilter = THREE.NearestFilter;
-  skierTex.minFilter = THREE.NearestFilter;
-  skierTex.generateMipmaps = false;
-  skierTex.repeat.set(0.1, 1);
-  skierTex.offset.x = 0;
+  // Both sheets are read as raw values: the Snowlight math works on the sprite's own
+  // colors, exactly as on the cast page, and writes them straight to the screen.
+  const loader = new THREE.TextureLoader();
+  const [colorSheet, normalSheet] = await Promise.all([
+    loader.loadAsync(new URL('assets/goldie.png', import.meta.url).href),
+    loader.loadAsync(new URL('assets/goldie_n.png', import.meta.url).href),
+  ]);
+  for (const t of [colorSheet, normalSheet]) {
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+  }
+  skierMat.uniforms.map.value = colorSheet;
+  skierMat.uniforms.normalMap.value = normalSheet;
   sk.frame = FRAMES.stand;
-  skierMesh.material.map = skierTex;
-  skierMesh.material.needsUpdate = true;
+  skierMat.uniforms.frameOffset.value = FRAMES.stand / 10;
   resetRun();
   requestAnimationFrame(frame);
 }
