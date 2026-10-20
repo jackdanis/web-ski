@@ -963,17 +963,17 @@ function updateCamera(p, dt) {
   tmpC.normalize();
   if (cameraSnap) camDir.copy(tmpC);
   else camDir.lerp(tmpC, 1 - Math.exp(-2.5 * dt)).normalize();
-  const back = 6 + speed * 0.1, up = 2.6 + speed * 0.025;
+  const back = 4.0 + speed * 0.025, up = 1.85 + speed * 0.01;
   camPos.copy(p).addScaledVector(camDir, -back);
   camPos.y = p.y + up;
   camPos.y = Math.max(camPos.y, groundY(camPos.x, camPos.z) + 1.5);
   if (cameraSnap) camera.position.copy(camPos);
   else camera.position.lerp(camPos, 1 - Math.exp(-7 * dt));
   camera.position.y = Math.max(camera.position.y, groundY(camera.position.x, camera.position.z) + 1.2);
-  look.copy(p).addScaledVector(camDir, 5);
-  look.y = p.y + 1.1;
+  look.copy(p).addScaledVector(camDir, 4);
+  look.y = p.y + 1.0;
   camera.lookAt(look);
-  const fov = Math.min(74, 62 + speed * 0.4) * (camera.aspect < 1 ? 1.2 : 1);
+  const fov = Math.min(66, 60 + speed * 0.22) * (camera.aspect < 1 ? 1.15 : 1);
   if (cameraSnap) { camera.fov = fov; camera.updateProjectionMatrix(); }
   else if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
   cameraSnap = false;
