@@ -1000,11 +1000,15 @@ function rasterLine(P, pts, reach, fn) {
     for (let j = j0; j <= j1; j++) {
       for (let a = i0; a <= i1; a++) {
         const px = P.x0 + a * PCELL - ax, pz = P.z0 + j * PCELL - az, t = (px * dx + pz * dz) / (len * len);
-        let over = 0;
-        if (t < 0) { if (i > 0) continue; over = -t * len; }
-        if (t > 1) { if (i < pts.length - 2) continue; over = (t - 1) * len; }
-        const tc = clamp(t, 0, 1), u = (px * dz - pz * dx) / len;
-        fn(j * P.nx + a, u, s0 + tc * len, over, Math.hypot(px - dx * tc, pz - dz * tc));
+        // past a segment's end at a corner of the line, measure to that corner instead of skipping the node,
+        // or nodes in the sliver between two segments get no surface at all (a hole in the patch)
+        let over = 0, corner = false;
+        if (t < 0) { if (i > 0) corner = true; else over = -t * len; }
+        if (t > 1) { if (i < pts.length - 2) corner = true; else over = (t - 1) * len; }
+        const tc = clamp(t, 0, 1), d = Math.hypot(px - dx * tc, pz - dz * tc);
+        let u = (px * dz - pz * dx) / len;
+        if (corner) u = u < 0 ? -d : d;
+        fn(j * P.nx + a, u, s0 + tc * len, over, d);
       }
     }
     s0 += len;
