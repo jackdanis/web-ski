@@ -1,0 +1,80 @@
+:root {
+  --navy: #13244d;
+  --navy-hi: #2c4785;
+  --gold: #ffcf3a;
+  --gold-hi: #fff4bf;
+  --gold-lo: #c47c00;
+  --gold-deep: #6b3a00;
+  --display: "Bowlby One", "Arial Black", Impact, sans-serif;
+}
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #8fbbe8;
+  color: #fff;
+  color-scheme: light;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#stage, #stage canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+.panel {
+  background: linear-gradient(180deg, var(--navy-hi), var(--navy) 55%);
+  border: 2px solid var(--gold);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), inset 0 -2px 0 rgba(0, 0, 0, .35), 0 3px 0 rgba(0, 0, 0, .35);
+}
+.chrome {
+  font-family: var(--display);
+  font-weight: 400;
+  font-style: italic;
+  background: linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 42%, var(--gold-lo) 52%, var(--gold) 74%, var(--gold-hi) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--gold-deep);
+}
+#timer {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 18px 6px;
+  pointer-events: none;
+  transition: top .35s ease, padding .35s ease;
+}
+#time {
+  display: block;
+  font-size: 30px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  transition: font-size .35s ease;
+}
+/* After the finish the time and Retry sit in the open snow below the skier, clear of the FINISH banner. */
+#timer.done { top: min(62%, calc(100% - 176px - env(safe-area-inset-bottom))); padding: 8px 26px 10px; }
+#timer.done #time { font-size: 54px; }
+#retry {
+  position: fixed;
+  top: min(calc(62% + 104px), calc(100% - 72px - env(safe-area-inset-bottom)));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 26px 10px;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+#retry .chrome { display: block; font-size: 24px; line-height: 1.1; }
+#retry:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+#retry[hidden] { display: none; }
