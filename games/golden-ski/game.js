@@ -3,40 +3,57 @@
 // "d" is distance down the run (d = -z): the start line is at d = 0, the finish at COURSE.finishD.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
-// ---------- Tuning (design book, chapter 05) ----------
+// ---------- Tuning: momentum physics ----------
+// One velocity carries everything. Gravity, edges, poles, pops and spins only add to it or bend it,
+// and nothing holds the skis to the fall line, so you can carve uphill until your speed runs out.
+// The assist layer (ASSIST) is the arcade half: a little extra grip, a soft speed cap, slightly heavier
+// air, skis that settle in line for landings, and kinder landings.
 const STEP = 1 / 60;            // fixed physics step
 const G = 9.81;
-const AIR_G = 1.3;              // extra gravity in the air so jumps feel snappy
 const SNOW = {
   groomed: { friction: 0.04, grip: 1.15 },
   powder: { friction: 0.13, grip: 0.75 },
 };
-const DRAG = 0.006;             // air drag per (m/s)^2
-const TUCK_DRAG = 0.5;          // tucking halves drag...
-const TUCK_TURN = 0.55;         // ...and turns wider: the skis turn slower
+const DRAG = 0.0045;            // air drag per (m/s)^2 standing up (half rho Cd A / m for a 75 kg skier)
+const TUCK_DRAG = 0.0024;       // ...and tucked
+const TUCK_TURN = 0.55;         // tucked, the skis pivot slower...
 const TUCK_GRIP = 0.6;          // ...and hold less edge
-const SPEED_CAP = 26;           // soft cap, about 94 km/h
-const CAP_DRAG = 0.6;
+const PIVOT = 2.4;              // rad/s the skis pivot at full steer when standing still...
+const PIVOT_FALL = 14;          // ...divided by (1 + speed / 14): heavier the faster you go
+const EDGE_IN = 5;              // how quickly you roll onto an edge (1/s): weight takes a moment to move
+const EDGE_GRIP = 0.6;          // grip at full lean is (1 + 0.6) times the snow's grip
 const SKID = 0.55;              // speed lost to sideways slip, as a share of the normal force
 const BRAKE = 8.5;              // hockey stop deceleration
-const TURN_RATE = 1.9;          // rad/s the skis turn at full steer
-const AIR_TURN = 1.2;           // rad/s in the air, to line up the landing
-const MAX_HEADING = 1.85;       // how far from the fall line the skis can point (about 106 degrees)
-const POP = 3.4;                // jump impulse along the slope normal
+const POLE = 1.7;               // m/s each double-pole push adds from a standstill...
+const POLE_MAX = 5.5;           // ...fading to nothing at this speed (20 km/h). Faster than this, Up brakes
+const POLE_EVERY = 0.55;        // seconds between pushes while held
+const OLLIE_MIN = 3.0;          // pop from a tap (m/s)...
+const OLLIE_MAX = 5.5;          // ...up to this after loading for OLLIE_CHARGE seconds
+const OLLIE_CHARGE = 0.5;
+const OLLIE_UP = 0.4;           // share of the pop that goes straight up rather than off the slope
 const POP_COOLDOWN = 0.35;
+const SPIN_IN = 7;              // rad/s^2: in the air, steering is torque on the spin you took off with
+const SPIN_TUCK = 1.6;          // tucking spins you faster
+const SPIN_DAMP = 0.4;          // spin lost per second with no steer held
 const PUSH = 3.5;               // push out of the start, and after a reset
 const TAKEOFF_MARGIN = 0.0005;  // extra gap (m per step) before a crest launches you
 const REAL_AIR = 0.22;          // air shorter than this is a bump, not a jump
-const CLEAN_LAND = 20 * Math.PI / 180;
-const SLOPPY_LAND = 45 * Math.PI / 180;
-const SLOPPY_KEEP = 0.7;        // share of speed kept on a sloppy landing
 const HARD_IMPACT = 11;         // m/s into the snow that makes a landing sloppy
-const CRASH_IMPACT = 17;        // ...or a wipeout
-const CRASH_DECEL = 7;
+const CRASH_MU = 0.6;           // a wipeout slides with friction (plus a base drag), so it goes further on steep ground
+const CRASH_BASE = 2;
+const CRASH_MAX = 5;            // seconds before you self-arrest whatever the slope
 const CRASH_HIT_SPEED = 7;      // hitting a tree faster than this is a wipeout
 const SKIER_R = 0.35;
 const OUT_OF_BOUNDS = 46;       // meters past the groomed edge before you're reset
 const STUCK_TIME = 3;           // seconds stuck by the edge (powder or a tree) before you're reset
+const ASSIST = {
+  grip: 1.2,                    // extra edge grip
+  cap: 34, capDrag: 0.25,       // soft cap about 122 km/h
+  airG: 1.15,                   // gravity in the air
+  align: 2.5,                   // rad/s the skis settle toward your travel in the air with nothing held
+  clean: 25, sloppy: 55,        // landing angles (degrees) between skis and travel
+  crash: 20,                    // m/s into the snow that's a wipeout
+};
 
 // ---------- Small helpers ----------
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -544,8 +561,9 @@ const sprayPoints = (() => {
 })();
 
 // ---------- Input ----------
-// Keyboard: arrows or A/D steer, Down or S tucks, Up or W brakes, Space jumps.
-// Touch or mouse: drag sideways to steer, hold still to tuck, swipe up to brake, tap to jump.
+// Keyboard: arrows or A/D steer, Down or S tucks, Up or W poles when slow and brakes when fast,
+// Space loads a jump while held and pops on release.
+// Touch or mouse: drag sideways to steer, hold still to tuck, swipe up to pole or brake, tap to jump.
 // The newest finger down steers; lifting it hands steering back to any finger still down.
 const input = { steer: 0, tuck: false, brake: false, jump: false };
 const keys = new Set();
@@ -562,9 +580,13 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(k);
   if (phase === 'ready') wake();
-  else if (k === 'jump') input.jump = true;
 });
-window.addEventListener('keyup', (e) => { const k = KEYMAP[e.code]; if (k) keys.delete(k); });
+window.addEventListener('keyup', (e) => {
+  const k = KEYMAP[e.code];
+  if (!k) return;
+  keys.delete(k);
+  if (k === 'jump' && phase === 'skiing') input.jump = true;
+});
 window.addEventListener('blur', () => { keys.clear(); touches.clear(); ptr.id = null; ptr.steer = 0; hockeyStop = false; });
 const canvas = renderer.domElement;
 function anchor(id, x, y, handedOver) {
@@ -650,6 +672,7 @@ const sk = {
   heading: 0, grounded: true, airTime: 0, airMax: 0, popCD: 0,
   crashed: false, crashT: 0, landT: 0, landQ: '', skid: 0, tuck: false, brake: false, steer: 0, frame: FRAMES.stand,
   stuckT: 0, stuckX: 0, stuckZ: 0,
+  edge: 0, spin: 0, yawRate: 0, charge: 0, poleCD: 0, poleT: 0, upMode: '',
 };
 let phase = 'ready';            // ready -> skiing -> finished
 let simTime = 0, runStart = null, runTime = 0, finishTime = null, finishAt = 0;
@@ -671,6 +694,7 @@ function placeSkier(d, speed) {
   sk.grounded = true; sk.airTime = 0; sk.airMax = 0; sk.popCD = 0;
   sk.crashed = false; sk.crashT = 0; sk.landT = 0; sk.skid = 0;
   sk.stuckT = 0; sk.stuckX = x; sk.stuckZ = z;
+  sk.edge = 0; sk.spin = 0; sk.yawRate = 0; sk.charge = 0; sk.poleCD = 0; sk.poleT = 0;
   cameraSnap = true;
 }
 function resetRun() {
@@ -699,20 +723,19 @@ function skiDir(n, out) {
   return out.normalize();
 }
 
+const travelYaw = () => Math.atan2(sk.vel.x, -sk.vel.z);
+
 function groundStep(dt) {
   const s0 = sample(sk.pos.x, sk.pos.z);
   const n = normalFrom(s0, tmpN);
   const surf = surfaceAt(sk.pos.x, sk.pos.z);
   const nAcc = G * n.y;
+  let speed = sk.vel.length();
+  const yaw0 = travelYaw();
 
-  // Steering turns the skis; the snow decides how much of that the skier's path follows.
-  sk.heading += sk.steer * TURN_RATE * (sk.tuck ? TUCK_TURN : 1) * dt;
-  const slope = Math.hypot(s0.gx, s0.gz);
-  if (slope > 0.03) {
-    const fall = Math.atan2(-s0.gx, s0.gz);
-    sk.heading = fall + clamp(wrapAngle(sk.heading - fall), -MAX_HEADING, MAX_HEADING);
-  }
-  sk.heading = wrapAngle(sk.heading);
+  // Rolling onto an edge takes a moment, and the skis pivot slower the faster you're going.
+  sk.edge += (Math.abs(sk.steer) - sk.edge) * Math.min(1, EDGE_IN * dt);
+  sk.heading = wrapAngle(sk.heading + sk.steer * (PIVOT / (1 + speed / PIVOT_FALL)) * (sk.tuck ? TUCK_TURN : 1) * dt);
   const f = skiDir(n, tmpF);
 
   // Gravity along the slope.
@@ -721,7 +744,7 @@ function groundStep(dt) {
   sk.vel.z += nAcc * n.z * dt;
   sk.vel.addScaledVector(n, -sk.vel.dot(n));
 
-  let speed = sk.vel.length();
+  speed = sk.vel.length();
   sk.skid = 0;
   if (speed < 0.3) {
     // Nearly stopped: skis don't slide sideways, and you can't slide backwards.
@@ -729,37 +752,49 @@ function groundStep(dt) {
     sk.vel.copy(f).multiplyScalar(Math.max(0, along));
     speed = sk.vel.length();
   } else {
-    // Edge grip bends the velocity toward the skis. Within the grip limit that's a carve;
-    // whatever is left over is a skid that bleeds speed.
+    // The edge can only push sideways so hard: grip times the snow holding you up, more the further
+    // you lean. That push is what bends your momentum; ask for more and the rest is a skid that bleeds speed.
     tmpA.copy(sk.vel).divideScalar(speed);
-    const cosA = tmpA.dot(f);
-    const sinA = tmpB.crossVectors(tmpA, f).dot(n);
-    const alpha = Math.atan2(sinA, cosA);
-    const omega = (surf.grip * (sk.tuck ? TUCK_GRIP : 1) * nAcc) / Math.max(speed, 1.5);
+    const alpha = Math.atan2(tmpB.crossVectors(tmpA, f).dot(n), tmpA.dot(f));
+    const grip = surf.grip * ASSIST.grip * (1 + EDGE_GRIP * sk.edge) * (sk.tuck ? TUCK_GRIP : 1);
+    const omega = (grip * nAcc) / Math.max(speed, 1.5);
     const turn = clamp(alpha, -omega * dt, omega * dt);
-    const c = Math.cos(turn), sn = Math.sin(turn);
     tmpB.crossVectors(n, sk.vel);
-    sk.vel.multiplyScalar(c).addScaledVector(tmpB, sn);
+    sk.vel.multiplyScalar(Math.cos(turn)).addScaledVector(tmpB, Math.sin(turn));
     const rest = Math.abs(alpha - turn);
     sk.skid = rest > Math.PI / 2 ? 1 : Math.sin(rest);
   }
 
   if (speed > 0) {
-    const drag = DRAG * (sk.tuck ? TUCK_DRAG : 1) * speed * speed + (speed > SPEED_CAP ? CAP_DRAG * (speed - SPEED_CAP) ** 2 : 0);
+    const drag = (sk.tuck ? TUCK_DRAG : DRAG) * speed * speed + (speed > ASSIST.cap ? ASSIST.capDrag * (speed - ASSIST.cap) ** 2 : 0);
     let fric = surf.friction * nAcc;
     // Nearly stopped, friction never quite beats the slope, so pointing downhill always gets you going.
     if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
     const decel = fric + drag + SKID * sk.skid * nAcc + (sk.brake ? BRAKE : 0);
     const next = Math.max(0, speed - decel * dt);
     sk.vel.multiplyScalar(next / speed);
+    speed = next;
   }
 
-  // Jump: pop off the snow along the slope normal.
+  // Poles: a double-pole push adds speed along the skis. Strong from a standstill, nothing once you're moving.
+  sk.poleCD = Math.max(0, sk.poleCD - dt);
+  if (sk.upMode === 'pole' && sk.poleCD === 0 && speed < POLE_MAX) {
+    sk.vel.addScaledVector(f, POLE * (1 - speed / POLE_MAX));
+    sk.poleCD = POLE_EVERY;
+    sk.poleT = 0.22;
+  }
+
+  // How fast your path is turning right now: carried into the air as spin.
+  sk.yawRate += (wrapAngle(travelYaw() - yaw0) / dt - sk.yawRate) * 0.3;
+
+  // Jump: load by holding, pop on release, partly off the slope and partly straight up.
   sk.popCD = Math.max(0, sk.popCD - dt);
   let popped = false;
   if (input.jump && sk.popCD === 0) {
-    sk.vel.addScaledVector(n, POP);
+    const pop = OLLIE_MIN + (OLLIE_MAX - OLLIE_MIN) * clamp(sk.charge / OLLIE_CHARGE, 0, 1);
+    sk.vel.addScaledVector(n, pop * (1 - OLLIE_UP)).addScaledVector(UP, pop * OLLIE_UP);
     sk.popCD = POP_COOLDOWN;
+    sk.charge = 0;
     popped = true;
   }
 
@@ -771,6 +806,7 @@ function groundStep(dt) {
     sk.grounded = false;
     sk.airTime = 0;
     sk.airMax = Math.max(0, gap);
+    sk.spin = sk.yawRate;
     return;
   }
   sk.pos.y = s1.h;
@@ -782,10 +818,20 @@ function groundStep(dt) {
 }
 
 function airStep(dt) {
-  sk.heading = wrapAngle(sk.heading + sk.steer * AIR_TURN * dt);
+  // Steering in the air is torque on the spin you took off with; let go and the spin carries on.
+  if (sk.steer) sk.spin += sk.steer * SPIN_IN * dt;
+  else {
+    sk.spin *= Math.max(0, 1 - SPIN_DAMP * dt);
+    // Assist: with nothing held and no big spin going, the skis settle in line with your travel.
+    if (Math.abs(sk.spin) < 2) {
+      sk.spin *= Math.max(0, 1 - 3 * dt);
+      sk.heading += clamp(wrapAngle(travelYaw() - sk.heading), -ASSIST.align * dt, ASSIST.align * dt);
+    }
+  }
+  sk.heading = wrapAngle(sk.heading + sk.spin * (sk.tuck ? SPIN_TUCK : 1) * dt);
   const speed = sk.vel.length();
-  sk.vel.y -= G * AIR_G * dt;
-  if (speed > 0) sk.vel.multiplyScalar(Math.max(0, 1 - DRAG * speed * dt));
+  sk.vel.y -= G * ASSIST.airG * dt;
+  if (speed > 0) sk.vel.multiplyScalar(Math.max(0, 1 - (sk.tuck ? TUCK_DRAG : DRAG) * speed * dt));
   sk.pos.addScaledVector(sk.vel, dt);
   sk.airTime += dt;
   const s = sample(sk.pos.x, sk.pos.z);
@@ -793,6 +839,8 @@ function airStep(dt) {
   if (sk.pos.y <= s.h) land(s);
 }
 
+// Landing keeps all the momentum along the slope; only the part going into the snow is absorbed.
+// Land on a steep downslope and you keep your speed; land flat from high up and the impact gets you.
 function land(s) {
   const n = normalFrom(s, tmpN);
   sk.pos.y = s.h;
@@ -800,16 +848,18 @@ function land(s) {
   const impact = Math.max(0, -vn);
   sk.vel.addScaledVector(n, -vn);
   sk.grounded = true;
+  sk.spin = 0;
   const real = sk.airTime > REAL_AIR || sk.airMax > 0.5;
   sk.airTime = 0; sk.airMax = 0;
   if (!real) return;
   const f = skiDir(n, tmpF);
   const speed = sk.vel.length();
   const miss = speed > 2 ? Math.acos(clamp(sk.vel.dot(f) / speed, -1, 1)) : 0;
-  if (miss > SLOPPY_LAND || impact > CRASH_IMPACT) {
+  if (miss > ASSIST.sloppy * Math.PI / 180 || impact > ASSIST.crash) {
     crash();
-  } else if (miss > CLEAN_LAND || impact > HARD_IMPACT) {
-    sk.vel.multiplyScalar(SLOPPY_KEEP);
+  } else if (miss > ASSIST.clean * Math.PI / 180 || impact > HARD_IMPACT) {
+    // The skis scrub off the part of your speed that isn't along them.
+    sk.vel.multiplyScalar(Math.max(0.4, Math.cos(miss)));
     sk.landT = 0.45; sk.landQ = 'sloppy';
   } else {
     sk.landT = 0.25; sk.landQ = 'clean';
@@ -833,10 +883,10 @@ function crashStep(dt) {
   sk.vel.z += nAcc * n.z * dt;
   sk.vel.addScaledVector(n, -sk.vel.dot(n));
   const speed = sk.vel.length();
-  if (speed > 0) sk.vel.multiplyScalar(Math.max(0, speed - CRASH_DECEL * dt) / speed);
+  if (speed > 0) sk.vel.multiplyScalar(Math.max(0, speed - (CRASH_MU * nAcc + CRASH_BASE) * dt) / speed);
   sk.pos.addScaledVector(sk.vel, dt);
   sk.pos.y = groundY(sk.pos.x, sk.pos.z);
-  if (sk.crashT > 1.6 && speed < 0.8) {
+  if ((sk.crashT > 1.6 && speed < 0.8) || sk.crashT > CRASH_MAX) {
     if (phase === 'finished') { sk.crashed = false; sk.vel.set(0, 0, 0); } // run's over: get up where you stopped
     else respawn(-sk.pos.z - 10);
   }
@@ -894,6 +944,14 @@ function step() {
   sk.steer = finished ? 0 : input.steer;
   sk.tuck = finished ? false : input.tuck;
   sk.brake = finished ? pastFinish : input.brake;
+  // Up means pole when you're slow and stop when you're fast, decided the moment you press it.
+  if (!sk.brake) sk.upMode = '';
+  else if (!sk.upMode) sk.upMode = !finished && sk.vel.length() < POLE_MAX ? 'pole' : 'brake';
+  if (sk.upMode === 'pole') sk.brake = false;
+  sk.poleT = Math.max(0, sk.poleT - dt);
+  // Holding jump crouches and loads the pop.
+  if (!finished && keys.has('jump') && sk.grounded && !sk.crashed) { sk.charge += dt; sk.tuck = true; }
+  else if (!jumpPressed) sk.charge = 0;
   input.jump = !finished && jumpPressed && sk.grounded && !sk.crashed;
 
   sk.prev.copy(sk.pos);
@@ -903,12 +961,13 @@ function step() {
   else airStep(dt);
   input.jump = false;
   if (hockeyStop && (sk.vel.length() < 1 || sk.crashed || !sk.grounded || phase !== 'skiing')) hockeyStop = false;
+  if (hockeyStop && sk.upMode === 'pole' && sk.poleT > 0) hockeyStop = false;   // a swipe up when slow is one push
   sk.landT = Math.max(0, sk.landT - dt);
   treeCollide();
   if (!sk.crashed && edgeDistance(sk.pos.x, sk.pos.z) > OUT_OF_BOUNDS) respawn(-sk.pos.z);
   // Never a dead end: stuck by the edge (deep powder, a trunk) for a few seconds puts you
-  // back on the run, and the clock keeps going. Holding the brake is a choice, so it doesn't count.
-  if (phase === 'skiing' && !sk.crashed && !sk.brake && edgeDistance(sk.pos.x, sk.pos.z) > -1) {
+  // back on the run, and the clock keeps going. Holding the brake or poling is a choice, so it doesn't count.
+  if (phase === 'skiing' && !sk.crashed && !sk.brake && sk.upMode !== 'pole' && edgeDistance(sk.pos.x, sk.pos.z) > -1) {
     if (Math.hypot(sk.pos.x - sk.stuckX, sk.pos.z - sk.stuckZ) > 1.5) { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
     else if ((sk.stuckT += dt) > STUCK_TIME) respawn(-sk.pos.z - 5);
   } else { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
@@ -1114,12 +1173,13 @@ boot();
 
 // ---------- Test hooks ----------
 window.__golden = {
-  sk, input, COURSE, sample, centerX, halfWidth, edgeDistance, trees,
+  sk, input, keys, COURSE, sample, centerX, halfWidth, edgeDistance, trees,
   get phase() { return phase; },
   get runTime() { return runTime; },
   get finishTime() { return finishTime; },
   setManual(on) { manual = on; },
-  // run n fixed steps; `hold` overrides input each step: { steer, tuck, brake, jump }
+  // run n fixed steps; `hold` overrides input each step: { steer, tuck, brake, jump }.
+  // A jump in `hold` is a tap; add 'jump' to `keys` for a few steps first to load it.
   step(n, hold) {
     testHold = hold || null;
     for (let k = 0; k < n; k++) {
