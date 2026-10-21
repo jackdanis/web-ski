@@ -1,15 +1,15 @@
 # Golden Ski: Snowmass (playable mockup)
 
-True-size Snowmass with Momentum physics plus carve turns, the 18 real lifts, real run lines, and 2 m detailed runs on
-Sunnyside, Max Park, Powderhorn and every groomed run on the Elk Camp side (Elk Camp to Two Creeks, the test ground for
-junctions and cat tracks). The 2 m runs are built ahead of time (`patch.js`) and drawn at 2 m within 250 m of the camera
-and 4 m out to 800 m. The rest of the mountain gets coarser with distance, and past about 300 m the forest is drawn
-as clumps of trees instead of single trees. FreePlay starts at the Village Express top, facing down Sunnyside.
+True-size Snowmass with Momentum physics plus carve turns, the 18 real lifts, and every run on the mountain rebuilt
+from traced outlines. Each run is shaped on a 2 m grid: groomed runs are trimmed and graded so they ski cleanly, and
+expert runs keep the natural unshaped snow. The run tiles are built ahead of time and load by distance as you ski. The
+rest of the mountain gets coarser with distance, and past about 300 m the forest is drawn as clumps of trees instead
+of single trees. FreePlay starts at the Village Express top, facing down Sunnyside.
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
   On phones, drag to steer, swipe down to pole, swipe up to brake.
 - Tab menu (three-finger tap on phones): Freecam, Momentum or Classic physics, Assists, Carve turns, Weight,
-  Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs, Noon / Golden hour / Night / Storm,
+  Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm,
   and a start at Sunnyside, Powderhorn or the top of any lift.
 - The Speed readout also shows the frame rate.
 - Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
@@ -18,9 +18,15 @@ as clumps of trees instead of single trees. FreePlay starts at the Village Expre
 - The Elk Camp Gondola and Sky Cab have their own terminals (a glass hall with a barrel roof), galvanized towers and
   black Snowmass cabins. At the Elk Camp Gondola top there's the restaurant (with three après posters on its wall) and a
   maintenance building; all of them are solid.
-- No build step. `data.js` holds the terrain, forest, runs and lifts; `patch.js` holds the detailed runs built ahead of time
-  (rebuild with `bake.mjs` in the kit when the runs change; the page builds them itself if patch.js is out of date).
-  Three.js loads from jsDelivr.
+- Run edges are lined with trees from a 1 m canopy height map at real forest density. Within about 150 m of you the
+  gaps are packed in so the forest is tight but you can still ski between the trees; farther out only the mapped trees
+  and clumps are drawn. Every tree is solid.
+- Each named run has one trail sign where it begins, with the run's name and its difficulty symbol.
+- Buildings near the runs are plain stand-in blocks on their real footprints until the real buildings are made.
+- No build step. `data.js` holds the terrain, forest and lifts. `runs.js` holds the run index, the run-edge trees,
+  the signs and the stand-in blocks, and `runs/` holds the 2 m run tiles in 512 m chunks that the game fetches as you
+  get near them. Both are built ahead of time from the run outlines. Three.js loads from jsDelivr.
 
 Data: elevation from USGS 3DEP (public domain). Forest and runs contain modified Copernicus Sentinel data 2025.
-Lift and run lines from OpenStreetMap contributors (ODbL) via Overture Maps.
+Trees along the runs from the Meta and WRI high resolution canopy height maps (CC BY 4.0). Lift and run lines and
+building outlines from OpenStreetMap contributors (ODbL) via Overture Maps.
