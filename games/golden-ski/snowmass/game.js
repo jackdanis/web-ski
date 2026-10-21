@@ -6,6 +6,7 @@
 // The mountain is USGS 3DEP elevation at 10 m; trees and runs come from a Sentinel-2 photo (26 March 2025).
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from './data.js';
+import { PATCH_DATA } from './patch.js';
 
 // ---------- Tuning (design book, chapter 05; unchanged from milestone 1) ----------
 const STEP = 1 / 60;            // fixed physics step
@@ -165,6 +166,7 @@ const rowV = [0, 0, 0, 0], rowD = [0, 0, 0, 0];
 // Height and gradient (dh/dx, dh/dz) at any point, on a smooth surface through the grid points:
 // the 10 m mountain, or the 2 m grid of the detailed runs where there is one (built further down).
 let PATCH = null, patchOn = true;
+const BAKE = new URLSearchParams(location.search).has('bake');
 function sampleGrid(g, nx, nz, x0, z0, cell, x, z, out) {
   const fx = clamp((x - x0) / cell, 0, nx - 1.001), fz = clamp((z - z0) / cell, 0, nz - 1.001);
   const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
@@ -978,9 +980,12 @@ const PCELL = 2, BLEND = 18, CROWN = 0.12, BERM = 0.35, BERM_W = 1.6, SIDE_KEEP 
 // Cat tracks (the narrow runs) are a bench cut across the slope: nearly level from side to side.
 const TRACK_W = 14, TRACK_KEEP = 0.1;
 // The 2 m grid is kept in tiles of 64 x 64 points (128 m), only where a detailed run reaches, and drawn as
-// meshes of 4 x 4 tiles (512 m). A mesh shows only within PATCH_FAR of the camera; past that the 10 m ground
-// draws the runs, cut by the same edges. The physics always uses the 2 m grid.
-const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 4, PATCH_FAR = 800;
+// meshes of 2 x 2 tiles (256 m): 2 m cells within PATCH_NEAR of the camera, 4 m cells out to PATCH_FAR, and past
+// that the 10 m ground draws the runs, cut by the same edges. The physics always uses the 2 m grid.
+// The grid is built ahead of time (bake.mjs writes patch.js); ?bake builds it in the page instead.
+const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 2, PATCH_NEAR = 250, PATCH_FAR = 800;
+// what the baked tiles store and in what unit (millimeters, centimeters)
+const BAKED = [['hp', 1000], ['hr', 1000], ['edge', 100]];
 // meters outside a run's groomed edge (negative inside); past either end of the line, the end is square
 const edgeOf = (u, hw, over) => (over > 0 ? Math.max(Math.abs(u) - hw, over) : Math.abs(u) - hw);
 const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -1059,6 +1064,13 @@ function meshY(x, z) {
 }
 {
   const detail = RUNS.filter(isDetailRun);
+  // what the baked tiles were built from: the runs, the shaping numbers and a sample of the 10 m mountain
+  let sig = `v1|${PCELL},${BLEND},${CROWN},${BERM},${BERM_W},${SIDE_KEEP},${TAPER},${TRACK_W},${TRACK_KEEP},${MIN_GRADE},${TILE}|`;
+  for (const r of detail) sig += `${r.name}:${r.width}:${r.points.length}:${r.points[0]}:${r.points[r.points.length - 1]}|`;
+  for (let k = 0; k < H.length; k += 997) sig += Math.round(H[k] * 10) + ',';
+  let hash = 2166136261;
+  for (let i = 0; i < sig.length; i++) hash = Math.imul(hash ^ sig.charCodeAt(i), 16777619);
+  const key = (hash >>> 0).toString(16);
   for (const r of detail) {
     // a groomed profile must run downhill: turn round any line drawn from the bottom up
     if (groundY(...r.points[0]) < groundY(...r.points[r.points.length - 1])) r.points = r.points.slice().reverse();
@@ -1094,7 +1106,7 @@ function meshY(x, z) {
         }
       }
     }
-    const P = { x0, z0, cell: PCELL, nx: tx * TILE, nz: tz * TILE, tiles };
+    const P = { x0, z0, cell: PCELL, nx: tx * TILE, nz: tz * TILE, tiles, key };
     // a grid point's slot in the kept tiles, or -1
     P.at = (a, j) => {
       if (a < 0 || j < 0 || a >= P.nx || j >= P.nz) return -1;
@@ -1102,69 +1114,10 @@ function meshY(x, z) {
       return t < 0 ? -1 : t * TT + ((j & (TILE - 1)) << TILE_BITS) + (a & (TILE - 1));
     };
     const N = tiles.length * TT;
-    // signed distance to the nearest groomed edge from the groomed runs that aren't detailed
-    const others = new Float32Array(N).fill(60);
-    for (const r of RUNS) {
-      if (r.kind !== 'groomed' || r.area || r.points.length < 2 || r.detail) continue;
-      rasterLine(P, r.points, r.width / 2 + 40, (c, u, s, over, d) => { const e = d - r.width / 2; if (e < others[c]) others[c] = e; });
-    }
-    // each detailed run in turn: the nearest piece of its line at every point it reaches
-    const best = new Float32Array(N).fill(1e9), U = new Float32Array(N), SS = new Float32Array(N), OV = new Float32Array(N), touched = [];
-    const nearest = (r) => {
-      touched.length = 0;
-      rasterLine(P, r.points, reach, (c, u, s, over, d) => {
-        if (best[c] === 1e9) touched.push(c);
-        if (d < best[c]) { best[c] = d; U[c] = u; SS[c] = s; OV[c] = over; }
-      });
-    };
-    const forget = () => { for (const c of touched) best[c] = 1e9; };
-    // the nearest and second nearest detailed run's edge at every point (the windrow stays off another run's snow)
-    const e1 = new Float32Array(N).fill(60), e2 = new Float32Array(N).fill(60), r1 = new Int16Array(N).fill(-1);
-    detail.forEach((r, ri) => {
-      nearest(r);
-      for (const c of touched) {
-        const e = edgeOf(U[c], r.detail.hw, OV[c]);
-        if (e < e1[c]) { e2[c] = e1[c]; e1[c] = e; r1[c] = ri; } else if (e < e2[c]) e2[c] = e;
-      }
-      forget();
-    });
-    const edge = new Float32Array(N);
-    for (let c = 0; c < N; c++) edge[c] = Math.min(e1[c], others[c]);
-    // each detailed run's surface and blend weight at every point it reaches, averaged where runs overlap
-    const sum = new Float32Array(N), wsum = new Float32Array(N), wmin = new Float32Array(N).fill(1);
-    detail.forEach((r, ri) => {
-      nearest(r);
-      const D = r.detail, hw = D.hw;
-      for (const c of touched) {
-        const u = U[c], s = SS[c], e = edgeOf(u, hw, OV[c]);
-        // station values at s
-        let lo = 0, hi = D.S.length - 1;
-        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (D.S[m] <= s) lo = m; else hi = m; }
-        const f = clamp((s - D.S[lo]) / ((D.S[hi] - D.S[lo]) || 1), 0, 1);
-        const g = D.G[lo] + (D.G[hi] - D.G[lo]) * f, kk = D.K[lo] + (D.K[hi] - D.K[lo]) * f;
-        let h = g + kk * clamp(u, -hw - BLEND, hw + BLEND);
-        if (Math.abs(u) < hw) h += CROWN * (1 - (u / hw) * (u / hw));
-        // the windrow, except where it would sit on another groomed run's snow
-        const away = Math.min(r1[c] === ri ? e2[c] : e1[c], others[c]);
-        if (e > 0 && e < BERM_W) h += BERM * Math.sin(Math.PI * e / BERM_W) * clamp(away / 2, 0, 1);
-        // back to the 10 m mountain past the edge, and over the last stretch where the run ends
-        const w = Math.max(smoothstep(BERM_W, BLEND, e), smoothstep(D.len - TAPER, D.len - 5, s));
-        const a = 1 - w + 1e-4;
-        sum[c] += h * a; wsum[c] += a; wmin[c] = Math.min(wmin[c], w);
-      }
-      forget();
-    });
-    // one height grid for the physics (blending into the smooth 10 m surface) and one for the mesh
-    // (blending into the 10 m triangles, so the seam with the ground around it is exact)
-    const hp = new Float32Array(N), hr = new Float32Array(N);
-    tiles.forEach((tl, t) => {
-      for (let q = 0; q < TT; q++) {
-        const c = t * TT + q, x = x0 + (tl.a0 + (q & (TILE - 1))) * PCELL, z = z0 + (tl.j0 + (q >> TILE_BITS)) * PCELL, w = wmin[c];
-        const s = wsum[c] ? sum[c] / wsum[c] : 0;
-        hp[c] = s * (1 - w) + groundY(x, z) * w;
-        hr[c] = s * (1 - w) + meshY(x, z) * w;
-      }
-    });
+    const baked = !BAKE && PATCH_DATA && PATCH_DATA.key === key && PATCH_DATA.tiles === tiles.length;
+    if (PATCH_DATA && !baked && !BAKE) console.warn('Golden Ski: the baked run tiles are out of date, building them now (run bake.mjs)');
+    Object.assign(P, baked ? await unbakePatch(PATCH_DATA, N, tiles.length) : buildPatch(P, detail, reach, N));
+    const { wmin } = P;
     // The 10 m ground is cut away in 4 m blocks wherever the fine mesh covers the whole block.
     const mw = P.nx / 2, mh = P.nz / 2, mask = new Uint8Array(mw * mh);
     const covered = (a, j) => { const c = P.at(a, j); return c >= 0 && wmin[c] < 1; };
@@ -1177,60 +1130,21 @@ function meshY(x, z) {
         }
       }
     }
-    // the fine mesh: every 2 m cell the runs touch, one mesh per 4 x 4 tiles
-    const mat = new THREE.ShaderMaterial({
+    // the fine mesh, one per 2 x 2 tiles, built when the camera first comes near (updatePatch)
+    P.mat = new THREE.ShaderMaterial({
       uniforms: terrainMat.uniforms, vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
       defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
     });
     const groups = new Map();
     for (const tl of tiles) {
-      const key = Math.floor(tl.a0 / (TILE * MESH_TILES)) * 10000 + Math.floor(tl.j0 / (TILE * MESH_TILES));
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(tl);
-    }
-    P.meshes = [];
-    let tris = 0;
-    for (const group of groups.values()) {
-      const vert = new Map(), pos = [], cov = [], idx = [];
-      const v = (c, a, j) => {
-        let n = vert.get(c);
-        if (n === undefined) {
-          const x = x0 + a * PCELL, z = z0 + j * PCELL, k = cellAt(x, z);
-          n = pos.length / 3;
-          vert.set(c, n);
-          pos.push(x, hr[c], z);
-          cov.push(edge[c], isRock(k) && edge[c] > 3 ? 1 : 0, conifer(k), aspen(k));
-        }
-        return n;
-      };
-      let gx0 = Infinity, gz0 = Infinity, gx1 = -Infinity, gz1 = -Infinity;
-      for (const tl of group) {
-        for (let q = 0; q < TT; q++) {
-          const a = tl.a0 + (q & (TILE - 1)), j = tl.j0 + (q >> TILE_BITS);
-          const c00 = P.at(a, j), c10 = P.at(a + 1, j), c01 = P.at(a, j + 1), c11 = P.at(a + 1, j + 1);
-          if (c10 < 0 || c01 < 0 || c11 < 0) continue;
-          if (Math.min(wmin[c00], wmin[c10], wmin[c01], wmin[c11]) >= 1) continue;
-          const k00 = v(c00, a, j), k10 = v(c10, a + 1, j), k01 = v(c01, a, j + 1), k11 = v(c11, a + 1, j + 1);
-          if ((a + j) & 1) idx.push(k00, k01, k10, k10, k01, k11);
-          else idx.push(k00, k01, k11, k00, k11, k10);
-        }
-        gx0 = Math.min(gx0, x0 + tl.a0 * PCELL); gz0 = Math.min(gz0, z0 + tl.j0 * PCELL);
-        gx1 = Math.max(gx1, x0 + (tl.a0 + TILE) * PCELL); gz1 = Math.max(gz1, z0 + (tl.j0 + TILE) * PCELL);
+      const ga = Math.floor(tl.a0 / (TILE * MESH_TILES)), gj = Math.floor(tl.j0 / (TILE * MESH_TILES));
+      if (!groups.has(ga * 10000 + gj)) {
+        const a0 = ga * TILE * MESH_TILES, j0 = gj * TILE * MESH_TILES, side = TILE * MESH_TILES * PCELL;
+        groups.set(ga * 10000 + gj, { tiles: [], a0, j0, x0: x0 + a0 * PCELL, z0: z0 + j0 * PCELL, x1: x0 + a0 * PCELL + side, z1: z0 + j0 * PCELL + side, meshes: [null, null], level: -1 });
       }
-      if (!idx.length) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-      geo.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(cov), 4));
-      geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(pos.length), 3));
-      geo.setIndex(idx);
-      geo.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.matrixAutoUpdate = false;
-      mesh.visible = false;
-      scene.add(mesh);
-      P.meshes.push({ mesh, x0: gx0, z0: gz0, x1: gx1, z1: gz1, tris: idx.length / 3 });
-      tris += idx.length / 3;
+      groups.get(ga * 10000 + gj).tiles.push(tl);
     }
+    P.groups = [...groups.values()];
     const tex = new THREE.DataTexture(mask, mw, mh, THREE.RedFormat, THREE.UnsignedByteType);
     tex.magFilter = tex.minFilter = THREE.NearestFilter;
     tex.needsUpdate = true;
@@ -1239,7 +1153,7 @@ function meshY(x, z) {
     terrainMat.uniforms.uPSize.value.set(mw * 2 * PCELL, mh * 2 * PCELL);
     terrainMat.uniforms.uPFar.value = PATCH_FAR;
     terrainMat.uniforms.uPOn.value = 1;
-    Object.assign(P, { hp, edge, wmin, tris, nodes: N });
+    Object.assign(P, { nodes: N, baked });
     PATCH = P;
     // the 10 m ground beyond PATCH_FAR draws the runs with the same edges
     const i0 = Math.max(0, Math.floor((x0 - X0) / CELL)), i1 = Math.min(NX - 1, Math.ceil((x0 + P.nx * PCELL - X0) / CELL));
@@ -1255,6 +1169,182 @@ function meshY(x, z) {
     }
   }
 }
+// Build the detailed runs' surface on the kept tiles: heights for the physics (hp) and the mesh (hr), the signed
+// distance to the nearest groomed edge (edge) and how far each point has blended back into the mountain (wmin).
+// bake.mjs runs this ahead of time and stores the result in patch.js, so a normal page load only unpacks it.
+function buildPatch(P, detail, reach, N) {
+  const { x0, z0, tiles } = P;
+  // signed distance to the nearest groomed edge from the groomed runs that aren't detailed
+  const others = new Float32Array(N).fill(60);
+  for (const r of RUNS) {
+    if (r.kind !== 'groomed' || r.area || r.points.length < 2 || r.detail) continue;
+    rasterLine(P, r.points, r.width / 2 + 40, (c, u, s, over, d) => { const e = d - r.width / 2; if (e < others[c]) others[c] = e; });
+  }
+  // each detailed run in turn: the nearest piece of its line at every point it reaches
+  const best = new Float32Array(N).fill(1e9), U = new Float32Array(N), SS = new Float32Array(N), OV = new Float32Array(N), touched = [];
+  const nearest = (r) => {
+    touched.length = 0;
+    rasterLine(P, r.points, reach, (c, u, s, over, d) => {
+      if (best[c] === 1e9) touched.push(c);
+      if (d < best[c]) { best[c] = d; U[c] = u; SS[c] = s; OV[c] = over; }
+    });
+  };
+  const forget = () => { for (const c of touched) best[c] = 1e9; };
+  // the nearest and second nearest detailed run's edge at every point (the windrow stays off another run's snow)
+  const e1 = new Float32Array(N).fill(60), e2 = new Float32Array(N).fill(60), r1 = new Int16Array(N).fill(-1);
+  detail.forEach((r, ri) => {
+    nearest(r);
+    for (const c of touched) {
+      const e = edgeOf(U[c], r.detail.hw, OV[c]);
+      if (e < e1[c]) { e2[c] = e1[c]; e1[c] = e; r1[c] = ri; } else if (e < e2[c]) e2[c] = e;
+    }
+    forget();
+  });
+  const edge = new Float32Array(N);
+  for (let c = 0; c < N; c++) edge[c] = Math.min(e1[c], others[c]);
+  // each detailed run's surface and blend weight at every point it reaches, averaged where runs overlap
+  const sum = new Float32Array(N), wsum = new Float32Array(N), wmin = new Float32Array(N).fill(1);
+  detail.forEach((r, ri) => {
+    nearest(r);
+    const D = r.detail, hw = D.hw;
+    for (const c of touched) {
+      const u = U[c], s = SS[c], e = edgeOf(u, hw, OV[c]);
+      // station values at s
+      let lo = 0, hi = D.S.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (D.S[m] <= s) lo = m; else hi = m; }
+      const f = clamp((s - D.S[lo]) / ((D.S[hi] - D.S[lo]) || 1), 0, 1);
+      const g = D.G[lo] + (D.G[hi] - D.G[lo]) * f, kk = D.K[lo] + (D.K[hi] - D.K[lo]) * f;
+      let h = g + kk * clamp(u, -hw - BLEND, hw + BLEND);
+      if (Math.abs(u) < hw) h += CROWN * (1 - (u / hw) * (u / hw));
+      // the windrow, except where it would sit on another groomed run's snow
+      const away = Math.min(r1[c] === ri ? e2[c] : e1[c], others[c]);
+      if (e > 0 && e < BERM_W) h += BERM * Math.sin(Math.PI * e / BERM_W) * clamp(away / 2, 0, 1);
+      // back to the 10 m mountain past the edge, and over the last stretch where the run ends
+      const w = Math.max(smoothstep(BERM_W, BLEND, e), smoothstep(D.len - TAPER, D.len - 5, s));
+      const a = 1 - w + 1e-4;
+      sum[c] += h * a; wsum[c] += a; wmin[c] = Math.min(wmin[c], w);
+    }
+    forget();
+  });
+  // one height grid for the physics (blending into the smooth 10 m surface) and one for the mesh
+  // (blending into the 10 m triangles, so the seam with the ground around it is exact)
+  const hp = new Float32Array(N), hr = new Float32Array(N);
+  tiles.forEach((tl, t) => {
+    for (let q = 0; q < TT; q++) {
+      const c = t * TT + q, x = x0 + (tl.a0 + (q & (TILE - 1))) * PCELL, z = z0 + (tl.j0 + (q >> TILE_BITS)) * PCELL, w = wmin[c];
+      const s = wsum[c] ? sum[c] / wsum[c] : 0;
+      hp[c] = s * (1 - w) + groundY(x, z) * w;
+      hr[c] = s * (1 - w) + meshY(x, z) * w;
+    }
+  });
+  return { hp, hr, edge, wmin };
+}
+// The baked form, per tile: both heights in millimeters and the edge in centimeters, each as a 32-bit start and
+// then, along every row, the change in slope from the last two points (the first column: the change from the
+// point above; the second: the change from the point to the left), which is near zero on smooth snow and packs
+// small. The blend weight is in 255ths (255 only where a point is fully back on the mountain). Deflated, base64.
+async function bakePatch(P) {
+  const nt = P.tiles.length, N = nt * TT, F = BAKED.length;
+  const buf = new ArrayBuffer(nt * F * 4 + N * F * 2 + N), start = new Int32Array(buf, 0, nt * F);
+  BAKED.forEach(([name, unit], k) => {
+    const h = P[name], out = new Int16Array(buf, nt * F * 4 + N * 2 * k, N);
+    for (let t = 0; t < nt; t++) {
+      const q = (i) => clamp(Math.round(h[t * TT + i] * unit), -2e9, 2e9);
+      start[t * F + k] = q(0);
+      for (let j = 0; j < TILE; j++) for (let a = 0; a < TILE; a++) {
+        const i = j * TILE + a;
+        out[t * TT + i] = clamp(i === 0 ? 0 : a === 0 ? q(i) - q(i - TILE) : a === 1 ? q(i) - q(i - 1) : q(i) - 2 * q(i - 1) + q(i - 2), -32768, 32767);
+      }
+    }
+  });
+  const wb = new Uint8Array(buf, nt * F * 4 + N * F * 2, N);
+  for (let c = 0; c < N; c++) wb[c] = P.wmin[c] >= 1 ? 255 : Math.min(254, Math.round(P.wmin[c] * 255));
+  const z = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+  let s = '';
+  for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
+  return { key: P.key, tiles: nt, data: btoa(s) };
+}
+async function unbakePatch(B, N, nt) {
+  const bytes = await inflate(B.data), buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length), F = BAKED.length;
+  const start = new Int32Array(buf, 0, nt * F), res = {};
+  BAKED.forEach(([name, unit], k) => {
+    const d = new Int16Array(buf, nt * F * 4 + N * 2 * k, N), out = new Float32Array(N);
+    for (let t = 0; t < nt; t++) {
+      let row = start[t * F + k];
+      for (let j = 0; j < TILE; j++) {
+        const o = t * TT + j * TILE;
+        if (j) row += d[o];
+        let v2 = row, v1 = row + d[o + 1];
+        out[o] = v2 / unit; out[o + 1] = v1 / unit;
+        for (let a = 2; a < TILE; a++) { const v = 2 * v1 - v2 + d[o + a]; out[o + a] = v / unit; v2 = v1; v1 = v; }
+      }
+    }
+    res[name] = out;
+  });
+  const wb = new Uint8Array(buf, nt * F * 4 + N * F * 2, N), wmin = new Float32Array(N);
+  for (let c = 0; c < N; c++) wmin[c] = wb[c] / 255;
+  return Object.assign(res, { wmin });
+}
+// A mesh for one group of tiles: 2 m cells (level 0) or 4 m cells (level 1), each cell kept where the runs
+// touch it, with a short skirt hanging off the group's border so a neighbor at the other level shows no crack.
+function buildGroupMesh(P, g, level) {
+  const s = level ? 2 : 1, side = TILE * MESH_TILES, { hr, edge, wmin } = P;
+  const vert = new Map(), pos = [], cov = [], nrm = [], idx = [];
+  const h = (a, j) => { const c = P.at(a, j); return c < 0 ? null : hr[c]; };
+  const v = (a, j, drop) => {
+    const key = (j * P.nx + a) * 3 + (drop === undefined ? 0 : drop ? 2 : 1);   // surface, skirt top, skirt foot
+    let n = vert.get(key);
+    if (n === undefined) {
+      const c = P.at(a, j), x = P.x0 + a * PCELL, z = P.z0 + j * PCELL, k = cellAt(x, z);
+      n = pos.length / 3;
+      vert.set(key, n);
+      pos.push(x, hr[c] - (drop ? 1.5 * s : 0), z);
+      cov.push(edge[c], isRock(k) && edge[c] > 3 ? 1 : 0, conifer(k), aspen(k));
+      if (drop === undefined) nrm.push(0, 0, 0);
+      else {
+        // skirt vertices carry the ground's normal, so a crack's sliver is lit like the run beside it
+        const hl = h(a - 1, j) ?? hr[c], hx = h(a + 1, j) ?? hr[c], hu = h(a, j - 1) ?? hr[c], hd = h(a, j + 1) ?? hr[c];
+        nrm.push(-(hx - hl) / (2 * PCELL), 1, -(hd - hu) / (2 * PCELL));
+      }
+    }
+    return n;
+  };
+  const skirt = (a1, j1, a2, j2) => {
+    const p = v(a1, j1, false), q = v(a2, j2, false), p2 = v(a1, j1, true), q2 = v(a2, j2, true);
+    idx.push(p, p2, q, q, p2, q2, p, q, p2, q, q2, p2);   // both windings, so it shows from either side
+  };
+  for (const tl of g.tiles) {
+    for (let j = tl.j0; j < tl.j0 + TILE; j += s) {
+      for (let a = tl.a0; a < tl.a0 + TILE; a += s) {
+        let any = false, ok = true;
+        for (let jj = j; jj <= j + s && ok; jj++) for (let aa = a; aa <= a + s && ok; aa++) {
+          const c = P.at(aa, jj);
+          if (c < 0) ok = false; else if (wmin[c] < 1) any = true;
+        }
+        if (!ok || !any) continue;
+        const k00 = v(a, j), k10 = v(a + s, j), k01 = v(a, j + s), k11 = v(a + s, j + s);
+        if (((a + j) / s) & 1) idx.push(k00, k01, k10, k10, k01, k11);
+        else idx.push(k00, k01, k11, k00, k11, k10);
+        if (a === g.a0) skirt(a, j, a, j + s);
+        if (a + s === g.a0 + side) skirt(a + s, j, a + s, j + s);
+        if (j === g.j0) skirt(a, j, a + s, j);
+        if (j + s === g.j0 + side) skirt(a, j + s, a + s, j + s);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(cov), 4));
+  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  geo.setIndex(idx);
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, P.mat);
+  mesh.matrixAutoUpdate = false;
+  mesh.visible = false;
+  mesh.userData.tris = idx.length / 3;
+  scene.add(mesh);
+  return mesh;
+}
 // signed meters to the nearest groomed edge where the detailed runs are, undefined elsewhere
 function patchEdge(x, z) {
   const P = PATCH;
@@ -1264,13 +1354,19 @@ function patchEdge(x, z) {
   if (c00 < 0 || c10 < 0 || c01 < 0 || c11 < 0) return undefined;
   return (E[c00] * (1 - tx) + E[c10] * tx) * (1 - tz) + (E[c01] * (1 - tx) + E[c11] * tx) * tz;
 }
-// show the fine meshes near the camera only (the shaders cut both sides at exactly PATCH_FAR)
+// 2 m cells near the camera, 4 m out to PATCH_FAR, none past it (the shaders cut both sides at exactly
+// PATCH_FAR). A group's 2 m mesh is let go once it is out past PATCH_FAR.
 function updatePatch() {
   if (!PATCH) return;
   const cx = camera.position.x, cz = camera.position.z;
-  for (const m of PATCH.meshes) {
-    const dx = Math.max(m.x0 - cx, 0, cx - m.x1), dz = Math.max(m.z0 - cz, 0, cz - m.z1);
-    m.mesh.visible = patchOn && Math.hypot(dx, dz) < PATCH_FAR;
+  for (const g of PATCH.groups) {
+    const d = Math.hypot(Math.max(g.x0 - cx, 0, cx - g.x1), Math.max(g.z0 - cz, 0, cz - g.z1));
+    const level = !patchOn || d >= PATCH_FAR ? -1 : d < PATCH_NEAR ? 0 : 1;
+    if (level === g.level) continue;
+    if (level >= 0 && !g.meshes[level]) g.meshes[level] = buildGroupMesh(PATCH, g, level);
+    g.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
+    if (level < 0 && g.meshes[0]) { scene.remove(g.meshes[0]); g.meshes[0].geometry.dispose(); g.meshes[0] = null; }
+    g.level = level;
   }
 }
 function setPatch(on) {
@@ -2690,7 +2786,7 @@ function render(alpha, dt) {
   shadow.scale.setScalar(1 + lift * 0.08);
 
   updateSpray(p, dt);
-  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 3.6)} km/h · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g`;
+  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 3.6)} km/h · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps`;
   updateWorld(dt);
   skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
   renderer.render(scene, camera);
@@ -2713,8 +2809,11 @@ window.addEventListener('resize', resize);
 
 // ---------- Main loop ----------
 let manual = false, acc = 0, last = performance.now();
+let fps = 0, fpsN = 0, fpsT = 0;             // frames a second, counted over half a second for the speed readout
 function frame(now) {
   requestAnimationFrame(frame);
+  fpsN++; fpsT += now - last;
+  if (fpsT >= 500) { fps = Math.round(fpsN * 1000 / fpsT); fpsN = 0; fpsT = 0; }
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (!manual && !free.on) {
@@ -2733,7 +2832,7 @@ requestAnimationFrame(frame);
 
 // ---------- Test hooks ----------
 window.__golden = {
-  sk, input, META, physics, MO, ASSIST, CV, keys, sample, surfaceAt, renderer, camera, pages,
+  sk, input, META, physics, MO, ASSIST, CV, keys, sample, surfaceAt, renderer, camera, pages, scene,
   cover: (x, z) => { const k = cellAt(x, z); return { conifer: conifer(k), aspen: aspen(k), rock: isRock(k), powder: POWDER[k], h: H[k] }; },
   get phase() { return phase; },
   get trips() { return trips; },
@@ -2759,5 +2858,6 @@ window.__golden = {
   time(k) { applyTime(k); },
   pixel(on) { setPixelLook(on); },
   lifts: liftPaths, carriers, runs: RUNS, signs: signSpots,
-  get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS,
+  get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
+  bakePatch: () => bakePatch(PATCH),
 };
