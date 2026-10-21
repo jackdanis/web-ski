@@ -99,7 +99,23 @@ const CV = {
                                 // from 1.2x the snow's figure standing still down toward 0.6x at speed
   LEAN_T: 0.22,                 // s: body lean chases the stick with this lag (about 0.5 s to get most of the way over)
 };
-const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false, loadDrag: true };
+const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false, loadDrag: true, shapes: false };
+// ---------- Collision shapes and Steep-style bails (Jack picked concept 1, 2026-10-21) ----------
+// Skiing or in the air, Goldie is a pill (capsule) standing on a thin ski plate: the pill leans with her
+// and is what hits walls and boxes; the plate is what meets the snow. Only big mistakes bail her
+// (Steep-style): a square hit on a wall or trunk, landing badly sideways, or a huge drop. A bail swaps
+// both shapes for one flat box, Goldie spread-eagled with her skis on, which tumbles on the snow
+// until it settles, then she gets up. Bails are off by default for testing (Tab: Crashes).
+const BODY = { R: 0.35, H: 1.7, PLATE_L: 1.7, PLATE_W: 0.3 };
+const BAIL = {
+  HIT: 9,                       // m/s straight into a wall or trunk (about 32 km/h) that bails; softer hits slide
+  MISS: 70,                     // degrees between skis and travel on landing that bails (sloppy below)
+  IMPACT: 16,                   // m/s into the snow on landing that bails (about a 13 m drop to flat)
+  L: 1.8, W: 0.6, T: 0.25,      // the flat body box: head to feet, hand to hand, front to back
+  MU: 0.7,                      // snow friction on her jacket
+  E: 0.15,                      // bounce
+  MAX: 6,                       // seconds before she gets up whatever the slope
+};
 const assist = () => (physics.assists ? ASSIST.on : ASSIST.off);
 
 // ---------- The mountain ----------
@@ -223,12 +239,26 @@ function stationH(st, x, z) {
   const t = Math.min(1, deckDist(st, x, z) / st.A), e = t * t * (3 - 2 * t);
   return st.y * (1 - e) + sampleBase(x, z, stB).h * e;
 }
+// Solid boxes (walls, huts): {x, y, z} centre, half sizes hx, hy, hz, yaw as c, s.
+const SOLIDS = [];
+let solidY = null;              // while the skier steps, her height: a box top is ground only from above
+function solidTop(x, z, out) {
+  for (const b of SOLIDS) {
+    const dx = x - b.x, dz = z - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz;
+    if (Math.abs(u) > b.hx || Math.abs(v) > b.hz) continue;
+    const top = b.y + b.hy;
+    if (top > out.h && solidY >= top - 0.4) { out.h = top; out.gx = 0; out.gz = 0; }
+  }
+  return out;
+}
 function sample(x, z, out = samp) {
   const st = STATIONS.length ? stationAt(x, z) : null;
-  if (!st) return sampleBase(x, z, out);
-  const h = stationH(st, x, z), E = 0.3;
-  out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
-  return out;
+  if (!st) sampleBase(x, z, out);
+  else {
+    const h = stationH(st, x, z), E = 0.3;
+    out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
+  }
+  return solidY !== null && SOLIDS.length ? solidTop(x, z, out) : out;
 }
 const groundY = (x, z) => sample(x, z, { h: 0, gx: 0, gz: 0 }).h;
 function normalFrom(s, out) {
@@ -1257,10 +1287,13 @@ for (const lift of LIFTS) {
       STATIONS.push(sd);
       // the post, the four legs and the hut stop you; the deck and apron are snow you ride on
       const L = 7, toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
-      for (const [u, v, r] of [[0, 0, 0.6], [-(arm + 1.55), 1.2, 0.2], [arm + 1.55, 1.2, 0.2], [-(arm + 1.55), -L + 0.9, 0.2], [arm + 1.55, -L + 0.9, 0.2], [arm + 3.4, -L + 3.2, 1.7]]) {
+      for (const [u, v, r] of [[0, 0, 0.6], [-(arm + 1.55), 1.2, 0.2], [arm + 1.55, 1.2, 0.2], [-(arm + 1.55), -L + 0.9, 0.2], [arm + 1.55, -L + 0.9, 0.2]]) {
         const [x, z] = toW(u, v);
         addObstacle({ x, z, y: sd.y, r, height: hh });
       }
+      // the hut is a solid box (3 x 3 m, 2.6 m tall on the deck): slide along its walls, bail off it fast, land on its roof
+      const [hutX, hutZ] = toW(arm + 3.4, -L + 3.2);
+      SOLIDS.push({ x: hutX, z: hutZ, y: sd.y + 1.0, hx: 1.5, hy: 1.6, hz: 1.5, c: sd.c, s: sd.s });
       // no trees on the station or its apron
       for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
         for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
@@ -2382,7 +2415,8 @@ const DEBUG_ITEMS = [
   { name: 'Carve turns', get: () => physics.carve, set: (on) => { physics.carve = on; } },
   { name: 'Weight: lean drives the turn', get: () => physics.weight, set: (on) => { physics.weight = on; } },
   { name: 'Realistic carve cost', get: () => physics.loadDrag, set: (on) => { physics.loadDrag = on; } },
-  { name: 'Crashes', get: () => physics.crashes, set: (on) => { physics.crashes = on; } },
+  { name: 'Crashes: Steep-style bails', get: () => physics.crashes, set: (on) => { physics.crashes = on; } },
+  { name: 'Show collision shapes', get: () => physics.shapes, set: (on) => { physics.shapes = on; } },
   { name: 'Motion feel: camera tilt + lean', get: () => physics.feel, set: (on) => { physics.feel = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },
@@ -2919,8 +2953,8 @@ function landM(s) {
   const f = skiDir(n, tmpF);
   const speed = sk.vel.length();
   const miss = speed > 2 ? Math.acos(clamp(sk.vel.dot(f) / speed, -1, 1)) : 0;
-  if (physics.crashes && (miss > A.sloppy * Math.PI / 180 || impact > A.crash)) {
-    crash();
+  if (physics.crashes && (miss > BAIL.MISS * Math.PI / 180 || impact > BAIL.IMPACT)) {
+    startBail(null, impact);
   } else if (miss > A.clean * Math.PI / 180 || impact > HARD_IMPACT) {
     // The skis scrub off the part of your speed that isn't along them.
     sk.vel.multiplyScalar(Math.max(0.4, Math.cos(miss)));
@@ -2952,9 +2986,175 @@ function crashStepM(dt) {
 
 function crash() {
   if (!physics.crashes) return;
-  sk.crashed = true;
-  sk.crashT = 0;
-  sk.landT = 0;
+  startBail(null, 0);
+}
+
+// ---------- The pill, the plate and the bail box ----------
+const bail = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(), w: new THREE.Vector3(), still: 0 };
+const BAIL_I = new THREE.Vector3((BAIL.T ** 2 + BAIL.L ** 2) / 12, (BAIL.W ** 2 + BAIL.L ** 2) / 12, (BAIL.W ** 2 + BAIL.T ** 2) / 12);
+const BOX_C = [];
+for (const a of [-1, 1]) for (const b of [-1, 1]) for (const c of [-1, 1]) BOX_C.push(new THREE.Vector3(a * BAIL.W / 2, b * BAIL.T / 2, c * BAIL.L / 2));
+const bodyAxis = new THREE.Vector3(), bodyHit = new THREE.Vector3(), bodyP = new THREE.Vector3(), bodyN = new THREE.Vector3();
+const bqi = new THREE.Quaternion(), bQ = new THREE.Quaternion(), bR = new THREE.Vector3(), bP = new THREE.Vector3(), bV = new THREE.Vector3();
+const bN = new THREE.Vector3(), bT = new THREE.Vector3(), bA = new THREE.Vector3(), bJ = new THREE.Vector3(), bM = new THREE.Vector3();
+const bS = { h: 0, gx: 0, gz: 0 }, bMat = new THREE.Matrix4();
+// the pill's up axis: tipped into the turn by her lean
+function leanAxis(out) {
+  const L = sk.grounded ? (sk.lean || sk.edgeA) : 0;
+  return out.set(Math.cos(sk.heading) * Math.sin(L), Math.cos(L), Math.sin(sk.heading) * Math.sin(L));
+}
+// deepest overlap of a ball with any solid box: the depth (0 for none), and the push-out direction in n
+function ballVsSolids(px, py, pz, r, n) {
+  let best = 0;
+  for (const b of SOLIDS) {
+    const dx = px - b.x, dz = pz - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz, y = py - b.y;
+    let eu = u - clamp(u, -b.hx, b.hx), ey = y - clamp(y, -b.hy, b.hy), ev = v - clamp(v, -b.hz, b.hz), depth;
+    const d = Math.hypot(eu, ey, ev);
+    if (d > 1e-6) {
+      if (d >= r) continue;
+      depth = r - d; eu /= d; ey /= d; ev /= d;
+    } else {                    // centre inside the box: out through the nearest face
+      const fu = b.hx - Math.abs(u), fy = b.hy - Math.abs(y), fv = b.hz - Math.abs(v);
+      eu = ey = ev = 0;
+      if (fu <= fy && fu <= fv) { eu = Math.sign(u) || 1; depth = fu + r; }
+      else if (fy <= fv) { ey = Math.sign(y) || 1; depth = fy + r; }
+      else { ev = Math.sign(v) || 1; depth = fv + r; }
+    }
+    if (depth > best) { best = depth; n.set(b.c * eu + b.s * ev, ey, -b.s * eu + b.c * ev); }
+  }
+  return best;
+}
+// The pill against walls and boxes, swept along this step's path so a fast skier can't pass through.
+// Glancing hits slide her along the face; only a square, fast hit bails.
+function solidCollide() {
+  if (!SOLIDS.length || sk.crashed) return;
+  leanAxis(bodyAxis);
+  const n = Math.max(1, Math.ceil(sk.prev.distanceTo(sk.pos) / 0.15));
+  for (let k = 1; k <= n; k++) {
+    bodyP.lerpVectors(sk.prev, sk.pos, k / n);
+    let depth = 0;
+    for (let t = 0; t <= 1; t += 0.5) {
+      const h = BODY.R + t * (BODY.H - 2 * BODY.R);
+      const d = ballVsSolids(bodyP.x + bodyAxis.x * h, bodyP.y + bodyAxis.y * h, bodyP.z + bodyAxis.z * h, BODY.R, bodyN);
+      if (d > depth && Math.abs(bodyN.y) < 0.7) { depth = d; bodyHit.copy(bodyN); }
+    }
+    if (!depth) continue;
+    bodyHit.y = 0;
+    if (bodyHit.lengthSq() < 0.09) return;
+    bodyHit.normalize();
+    sk.pos.copy(bodyP).addScaledVector(bodyHit, depth);
+    if (sk.grounded) sk.pos.y = groundY(sk.pos.x, sk.pos.z);
+    const into = sk.vel.dot(bodyHit);
+    if (into >= 0) return;
+    if (physics.crashes && -into > BAIL.HIT) { startBail(bodyHit, -into); return; }
+    sk.vel.addScaledVector(bodyHit, -into);
+    const along = sk.vel.length();
+    sk.vel.multiplyScalar(1 - 0.5 * (-into / (along - into)));   // square hits scrub more than glancing ones
+    // stopped against it on a slope, ease along it on the downhill side so she's never pinned
+    if (sk.grounded && Math.hypot(sk.vel.x, sk.vel.z) < 1) {
+      const s = sample(sk.pos.x, sk.pos.z);
+      const side = (-bodyHit.z * -s.gx + bodyHit.x * -s.gz) >= 0 ? 1 : -1;
+      sk.vel.x = -bodyHit.z * side * 1.2;
+      sk.vel.z = bodyHit.x * side * 1.2;
+    }
+    return;
+  }
+}
+// Knocked down: the pill and plate become one flat box where she stood, keeping her speed.
+// A hit (n = the face's outward direction) bounces her off it and flips her backward, away from it;
+// a bad landing pitches her forward over her skis and rolls her toward the side she was sliding.
+function startBail(n, hit) {
+  leanAxis(bodyAxis);
+  bA.set(Math.cos(sk.heading), 0, Math.sin(sk.heading));
+  bA.addScaledVector(bodyAxis, -bA.dot(bodyAxis)).normalize();
+  bJ.crossVectors(bodyAxis, bA);
+  bail.q.setFromRotationMatrix(bMat.makeBasis(bA, bJ, bodyAxis));
+  bail.pos.copy(sk.pos).addScaledVector(bodyAxis, BAIL.L / 2 + 0.05);
+  bail.vel.copy(sk.vel);
+  const speed = Math.hypot(sk.vel.x, sk.vel.z);
+  if (n) {
+    bail.vel.addScaledVector(n, -1.25 * bail.vel.dot(n)).multiplyScalar(0.6);
+    bail.w.crossVectors(UP, n).multiplyScalar(clamp(hit * 0.45, 2, 9));
+  } else {
+    bM.set(sk.vel.x, 0, sk.vel.z).normalize();
+    bail.w.crossVectors(UP, bM).multiplyScalar(clamp(speed * 0.35, 2, 8));
+    const side = Math.sign(bM.x * Math.cos(sk.heading) + bM.z * Math.sin(sk.heading)) || 1;
+    bail.w.addScaledVector(bM, -side * clamp(speed * 0.2, 0.5, 5));
+  }
+  bail.w.y += (Math.random() - 0.5) * 2;
+  bail.still = 0;
+  sk.crashed = true; sk.crashT = 0; sk.landT = 0; sk.grounded = false;
+  sk.pos.copy(bail.pos); sk.vel.copy(bail.vel);
+}
+function invInertia(v, out) {
+  out.copy(v).applyQuaternion(bqi);
+  out.set(out.x / BAIL_I.x, out.y / BAIL_I.y, out.z / BAIL_I.z);
+  return out.applyQuaternion(bail.q);
+}
+// how much an impulse along d at r (from the centre) changes the point's speed along d
+function pointMass(r, d) {
+  invInertia(bA.crossVectors(r, d), bA);
+  return 1 + d.dot(bA.cross(r));
+}
+function push(r, J) {
+  bail.vel.add(J);
+  bail.w.add(invInertia(bA.crossVectors(r, J), bA));
+}
+// The flat box tumbling: a rigid body whose eight corners hit the snow (and box tops) with bounce and friction.
+function bailStep(dt) {
+  sk.crashT += dt;
+  const SUB = 3, h = dt / SUB;
+  let contact = false;
+  for (let k = 0; k < SUB; k++) {
+    bail.vel.y -= G * h;
+    bail.pos.addScaledVector(bail.vel, h);
+    const wl = bail.w.length();
+    if (wl > 1e-6) bail.q.premultiply(bQ.setFromAxisAngle(bA.copy(bail.w).divideScalar(wl), wl * h)).normalize();
+    bail.w.multiplyScalar(1 - 0.3 * h);
+    bqi.copy(bail.q).invert();
+    let deep = 0;
+    for (let it = 0; it < 2; it++) {
+      for (const c of BOX_C) {
+        bR.copy(c).applyQuaternion(bail.q);
+        bP.copy(bail.pos).add(bR);
+        solidY = bP.y + 0.3;
+        sample(bP.x, bP.z, bS);
+        const pen = bS.h - bP.y;
+        if (pen <= 0) continue;
+        contact = true;
+        normalFrom(bS, bN);
+        if (it === 0 && pen > deep) { deep = pen; bM.copy(bN); }
+        bV.crossVectors(bail.w, bR).add(bail.vel);
+        const vn = bV.dot(bN);
+        if (vn >= 0) continue;
+        const jn = -(1 + (it === 0 ? BAIL.E : 0)) * vn / pointMass(bR, bN);
+        push(bR, bJ.copy(bN).multiplyScalar(jn));
+        bV.crossVectors(bail.w, bR).add(bail.vel);
+        bT.copy(bV).addScaledVector(bN, -bV.dot(bN));
+        const vt = bT.length();
+        if (vt > 1e-4) {
+          bT.divideScalar(vt);
+          push(bR, bJ.copy(bT).multiplyScalar(-Math.min(vt / pointMass(bR, bT), BAIL.MU * jn)));
+        }
+      }
+    }
+    if (deep > 0) bail.pos.addScaledVector(bM, deep * 0.8);
+    // walls and the sides of boxes
+    const d = ballVsSolids(bail.pos.x, bail.pos.y, bail.pos.z, 0.35, bN);
+    if (d) {
+      bail.pos.addScaledVector(bN, d);
+      const vn = bail.vel.dot(bN);
+      if (vn < 0) bail.vel.addScaledVector(bN, -1.2 * vn);
+    }
+  }
+  if (contact) bail.w.multiplyScalar(1 - 1.2 * dt);
+  sk.pos.copy(bail.pos); sk.vel.copy(bail.vel);
+  bail.still = contact && bail.vel.length() < 0.6 && bail.w.length() < 1 ? bail.still + dt : 0;
+  if ((bail.still > 0.5 && sk.crashT > 1) || sk.crashT > BAIL.MAX) {
+    solidY = bail.pos.y;
+    const s = sample(bail.pos.x, bail.pos.z);
+    placeSkier(bail.pos.x, bail.pos.z, Math.atan2(-s.gx, s.gz), PUSH);
+  }
 }
 
 function crashStep(dt) {
@@ -2997,9 +3197,8 @@ function treeCollide() {
         if (sk.grounded) sk.pos.y = groundY(sk.pos.x, sk.pos.z);
         const into = sk.vel.x * nx + sk.vel.z * nz;
         if (into >= 0) continue;
-        if (!sk.crashed && physics.crashes && -into > CRASH_HIT_SPEED) {
-          crash();
-          sk.vel.multiplyScalar(0.35);
+        if (!sk.crashed && physics.crashes && -into > BAIL.HIT) {
+          startBail(tmpB.set(nx, 0, nz), -into);
         } else {
           // Brushing a trunk: lose the part of your speed going into it and slide round it.
           // A real knock is still a hard stop.
@@ -3053,7 +3252,8 @@ function step() {
   input.jump = jumpPressed && sk.grounded && !sk.crashed;
 
   sk.prev.copy(sk.pos);
-  if (sk.crashed) crashStep(dt);
+  solidY = sk.pos.y;
+  if (sk.crashed) bailStep(dt);
   else if (sk.grounded) groundStep(dt);
   else airStep(dt);
   input.jump = false;
@@ -3062,7 +3262,10 @@ function step() {
   if (poleSwipe && (sk.poleT > 0 || sk.crashed || !sk.grounded || !physics.momentum)) poleSwipe = false;
   sk.landT = Math.max(0, sk.landT - dt);
   ensureTreesNear(sk.pos.x, sk.pos.z);
+  solidY = sk.pos.y;
   treeCollide();
+  if (sk.crashed) { bail.pos.x = sk.pos.x; bail.pos.z = sk.pos.z; bail.vel.copy(sk.vel); }
+  solidCollide();
   // FreePlay never dead-ends: stalling on flat ground for a few seconds (the base, a flat cat track)
   // or skiing off the edge of the map takes you back to the summit. Stopped on a slope, you can always
   // point downhill and go, so that never counts.
@@ -3070,6 +3273,7 @@ function step() {
   if (!sk.crashed && sk.grounded && sk.vel.length() < 1.5 && Math.hypot(under.gx, under.gz) < FLAT && !sk.pole) sk.stopT += dt;
   else sk.stopT = 0;
   if (sk.stopT > STOP_TIME || offMap(sk.pos.x, sk.pos.z)) sendBack();
+  solidY = null;
 }
 
 // ---------- Rendering ----------
@@ -3194,6 +3398,14 @@ function render(alpha, dt) {
   const facing = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
   const frame = pickFrame(facing > 0.35);
   if (frame !== sk.frame) { skierMat.uniforms.frameOffset.value = frame / 10; sk.frame = frame; }
+  if (sk.crashed) {
+    // the wipeout frame turned so her body lies along the box (the drawing's body leans 58 deg left), centred on it
+    bA.set(0, 0, 1).applyQuaternion(bail.q).transformDirection(camera.matrixWorldInverse);
+    const th = Math.atan2(-bA.x, bA.y) - 58 * Math.PI / 180, c = SPRITE_H / 2 - 0.04;
+    skierMesh.rotation.z = th;
+    skierMesh.position.set(p.x + c * Math.sin(th) * cy, p.y - c * Math.cos(th), p.z - c * Math.sin(th) * sy);
+  }
+  updateShapes(p);
 
   const s = sample(p.x, p.z);
   normalFrom(s, tmpN);
@@ -3208,6 +3420,38 @@ function render(alpha, dt) {
   updateWorld(dt);
   skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
   renderer.render(scene, camera);
+}
+
+// The collision shapes as wireframes (Tab menu: Show collision shapes)
+const wire = (geo, color) => {
+  const m = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1), new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
+  m.renderOrder = 10; m.frustumCulled = false; m.visible = false; scene.add(m);
+  return m;
+};
+const pillWire = new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.CapsuleGeometry(BODY.R, BODY.H - 2 * BODY.R, 3, 10)),
+  new THREE.LineBasicMaterial({ color: 0x4fe3ff, depthTest: false, transparent: true, opacity: 0.8 }));
+pillWire.renderOrder = 10; pillWire.frustumCulled = false; scene.add(pillWire);
+const plateWire = wire(new THREE.BoxGeometry(BODY.PLATE_W, 0.04, BODY.PLATE_L), 0xffd23f);
+const boxWire = wire(new THREE.BoxGeometry(BAIL.W, BAIL.T, BAIL.L), 0xff4d4d);
+const shapeF = new THREE.Vector3(), shapeR = new THREE.Vector3(), shapeU = new THREE.Vector3();
+function updateShapes(p) {
+  const on = physics.shapes;
+  pillWire.visible = plateWire.visible = on && !sk.crashed;
+  boxWire.visible = on && sk.crashed;
+  if (!on) return;
+  if (sk.crashed) { boxWire.position.copy(p); boxWire.quaternion.copy(bail.q); return; }
+  leanAxis(shapeU);
+  pillWire.position.copy(p).addScaledVector(shapeU, BODY.H / 2);
+  pillWire.quaternion.setFromUnitVectors(UP, shapeU);
+  // the plate lies on the snow along her skis, rolled onto its edge as she leans
+  normalFrom(sample(p.x, p.z), shapeU);
+  skiDir(shapeU, shapeF);
+  shapeR.crossVectors(shapeF, shapeU).normalize();
+  const e = sk.grounded ? (sk.lean || sk.edgeA) : 0;
+  shapeU.multiplyScalar(Math.cos(e)).addScaledVector(shapeR, Math.sin(e));
+  shapeR.crossVectors(shapeF, shapeU).normalize();
+  plateWire.quaternion.setFromRotationMatrix(bMat.makeBasis(shapeR, shapeU, shapeF.negate()));
+  plateWire.position.copy(p).addScaledVector(shapeU, 0.03);
 }
 
 function resize() {
@@ -3279,4 +3523,5 @@ window.__golden = {
   lifts: liftPaths, carriers, runs: RUNS, signs: signSpots,
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   bakePatch: () => bakePatch(PATCH),
+  solids: SOLIDS, bail, BAIL,
 };
