@@ -41,7 +41,7 @@ html, body {
   font: 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 #debug[hidden] { display: none; }
-#debug ul { list-style: none; margin: 0; padding: 4px 0; }
+#debug ul { list-style: none; margin: 0; padding: 4px 0; max-height: calc(100vh - 26px); overflow-y: auto; }
 #debug li { display: flex; align-items: center; gap: 8px; padding: 7px 16px 7px 10px; cursor: pointer; }
 #debug li.sel, #debug li:hover { background: rgba(255, 255, 255, 0.1); }
 #debug .box { width: 9px; height: 9px; border: 1.5px solid rgba(255, 255, 255, 0.8); border-radius: 2px; }
