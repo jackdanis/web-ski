@@ -241,6 +241,10 @@ function stationH(st, x, z) {
 }
 // Solid boxes (walls, huts): {x, y, z} centre, half sizes hx, hy, hz, yaw as c, s.
 const SOLIDS = [];
+// is (x, z) within pad meters of a solid box's footprint (starts keep clear of buildings)
+function nearSolid(x, z, pad) {
+  return SOLIDS.some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
+}
 let solidY = null;              // while the skier steps, her height: a box top is ground only from above
 function solidTop(x, z, out) {
   for (const b of SOLIDS) {
@@ -908,8 +912,12 @@ function updateTrees(force) {
 // Parts can carry a tile of the station atlas (aT: u, v in tiles, tile + 1; 0 = plain color). A textured part's
 // color is its vertex color times the tile's, and the tile's normal map bends the face normal, so seams, plank
 // gaps and battens catch the four Snowlight bands. Up close only: past ~300 m it fades to the tile's average.
-const TILES = { hood: 0, deck: 1, siding: 2, window: 3, roofSnow: 4, concrete: 5 };
-const TILE_AVG = [[0.14, 0.276, 0.588], [0.365, 0.279, 0.204], [0.469, 0.337, 0.225], [0.294, 0.303, 0.351], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541], [1, 1, 1], [1, 1, 1]];
+const TILES = { hood: 0, deck: 1, siding: 2, window: 3, roofSnow: 4, concrete: 5, cabin: 6, steel: 7, pad: 8, metalRoof: 9,
+  darkPanel: 10, cedar: 11, stone: 12, curtain: 13, posterA: 14, posterB: 15, posterC: 16 };
+const TILE_AVG = [[0.14, 0.276, 0.588], [0.365, 0.279, 0.204], [0.469, 0.337, 0.225], [0.294, 0.303, 0.351], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541],
+  [0.135, 0.152, 0.181], [0.638, 0.658, 0.686], [0.745, 0.115, 0.096], [0.271, 0.281, 0.301], [0.148, 0.153, 0.167], [0.591, 0.387, 0.219],
+  [0.399, 0.378, 0.352], [0.247, 0.307, 0.38], [0.541, 0.573, 0.616], [0.389, 0.325, 0.326], [0.614, 0.505, 0.493]];
+while (TILE_AVG.length < 32) TILE_AVG.push([1, 1, 1]);
 const modelMat = new THREE.ShaderMaterial({
   vertexColors: true,
   uniforms: Object.assign({ uAtlas: { value: stationT }, uAtlasN: { value: stationN },
@@ -932,7 +940,7 @@ const modelMat = new THREE.ShaderMaterial({
     }`,
   fragmentShader: /* glsl */ `
     ${LIGHT_GLSL}
-    uniform sampler2D uAtlas, uAtlasN; uniform vec3 uAvg[8];
+    uniform sampler2D uAtlas, uAtlasN; uniform vec3 uAvg[32];
     varying vec3 vC; varying vec3 vP; varying float vD; varying float vH; varying vec3 vT;
     void main() {
       vec3 n = normalize(cross(dFdx(vP), dFdy(vP)));
@@ -940,8 +948,8 @@ const modelMat = new THREE.ShaderMaterial({
       if (vT.z > 0.5) {
         int t = int(vT.z - 0.5);
         float tf = float(t);
-        vec2 cell = vec2(mod(tf, 4.0), 1.0 - floor(tf / 4.0));   // the image's top row is the texture's upper half
-        vec2 auv = (cell + (fract(vT.xy) * 62.0 + 1.0) / 64.0) / vec2(4.0, 2.0);
+        vec2 cell = vec2(mod(tf, 8.0), 3.0 - floor(tf / 8.0));   // the image's top row is the texture's upper half
+        vec2 auv = (cell + (fract(vT.xy) * 62.0 + 1.0) / 64.0) / vec2(8.0, 4.0);
         vec3 tc = texture2D(uAtlas, auv).rgb, tn = texture2D(uAtlasN, auv).rgb * 2.0 - 1.0;
         // bend the face normal along the tile's own axes, found from how the tile coordinates run across the screen
         vec3 q0 = dFdx(vP), q1 = dFdy(vP); vec2 s0 = dFdx(vT.xy), s1 = dFdy(vT.xy);
@@ -951,7 +959,7 @@ const modelMat = new THREE.ShaderMaterial({
         vec3 pn = normalize(T * (tn.x * sc) + B * (tn.y * sc) + n * tn.z);
         float near = 1.0 - smoothstep(120.0, 320.0, vD);
         vec3 avg = uAvg[0];
-        for (int k = 1; k < 8; k++) if (k == t) avg = uAvg[k];
+        for (int k = 1; k < 32; k++) if (k == t) avg = uAvg[k];
         alb = vC * mix(avg, tc, near);
         n = normalize(mix(n, pn, near));
       }
@@ -985,6 +993,18 @@ function part(g, col, m, tile = -1) {
   }
   g.setAttribute('aT', new THREE.BufferAttribute(t, 3));
   if (m) g.applyMatrix4(m);
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  g.setAttribute('aH', new THREE.BufferAttribute(h, 1));
+  return g;
+}
+function partUV(g, col, tile, u0 = 0, u1 = 1, v0 = 0, v1 = 1) {
+  g = g.index ? g.toNonIndexed() : g;
+  const n = g.attributes.position.count, uv = g.attributes.uv, c = new Float32Array(n * 3), h = new Float32Array(n), t = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    c.set(col, i * 3); h[i] = g.attributes.position.getY(i);
+    t.set([clamp(u0 + uv.getX(i) * (u1 - u0), 0.002, 0.998), clamp(v0 + uv.getY(i) * (v1 - v0), 0.002, 0.998), tile + 1], i * 3);
+  }
+  g.setAttribute('aT', new THREE.BufferAttribute(t, 3));
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   g.setAttribute('aH', new THREE.BufferAttribute(h, 1));
   return g;
@@ -1135,8 +1155,9 @@ function apron(sd, base) {
   return g;
 }
 // the deck's footprint in the station's frame: [u0, u1] across, [v0, v1] along (the line off toward -v)
-const deckRect = (arm) => [-(arm + 2.0), arm + 5.0, -7.5, 1.5];
-function chairTerminal(H = 5, arm = 3, foot = 3) {
+// side: which side of the line the hut stands (+1 = +x); it moves to the other side when another lift's station is in the way
+const deckRect = (arm, side = 1) => side > 0 ? [-(arm + 2.0), arm + 5.0, -7.5, 1.5] : [-(arm + 5.0), arm + 2.0, -7.5, 1.5];
+function chairTerminal(H = 5, arm = 3, foot = 3, side = 1) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile)), W = [1, 1, 1];
   const R = arm + 1.0, L = 7, top = H - 0.35;
   // the wheel's own post: footing, tapered column, the drive box the wheel turns on
@@ -1151,21 +1172,189 @@ function chairTerminal(H = 5, arm = 3, foot = 3) {
     add(new THREE.BoxGeometry(0.2, h, 0.2).translate(x, 0.5 + h / 2, z), TCOL.STEEL);
   }
   // the deck: a wooden platform under the hood where the chairs come round, flush with the snow around it
-  const [xl, xr, d0, d1] = deckRect(arm);
+  const [xl, xr, d0, d1] = deckRect(arm, side);
   add(new THREE.BoxGeometry(xr - xl, 0.5, d1 - d0).translate((xl + xr) / 2, 0.25, (d0 + d1) / 2), W, TILES.deck);
   add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate((xl + xr) / 2, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);   // footing, down to the snow
   // the operator hut on the deck, beside the chairs, windows all round so the operator sees the loading
-  const hx = arm + 3.4, hz = -L + 3.2, hb = 0.5;
+  const hx = side * (arm + 3.4), hz = -L + 3.2, hb = 0.5;
   add(new THREE.BoxGeometry(3.0, 2.6, 3.0).translate(hx, hb + 1.3, hz), W, TILES.siding);
   add(new THREE.BoxGeometry(3.06, 0.9, 2.4).translate(hx, hb + 1.75, hz), W, TILES.window);
   add(new THREE.BoxGeometry(2.4, 0.9, 3.06).translate(hx, hb + 1.75, hz), W, TILES.window);
   // a gable roof under snow, running along the line
   const roof = gable(3.8, 3.8, 1.0).translate(hx, hb + 2.6, hz);
   add(roof, W, TILES.roofSnow);
-  add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(hx - 1.6, hb + 2.2, hz - 1.6), TCOL.DARK);   // lamp post
+  add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(hx - side * 1.6, hb + 2.2, hz - 1.6), TCOL.DARK);   // lamp post
   return P;
 }
 
+// Gondola terminal (Jack 2026-10-21, from the Snowmass photos): a long hall the cabins run into, glass sides between
+// dark steel bands, a barrel roof under snow, open at the line end. Same frame as the chairlift: wheel at the origin,
+// the line off toward -z, the floor (deck) top at y = 0.5.
+const gondolaDeck = (arm) => [-(arm + 4.0), arm + 4.0, -20.0, 5.0];
+const GW = (arm) => arm + 3.6;                       // the side walls, either side of the wheel
+const W = [1, 1, 1];
+function barrel(w, l, z0, y0, rise, seg = 8) {
+  // a barrel vault across x, length l along z from z0 toward -z; outer shell and a dark underside
+  const pos = [], under = [], arc = [];
+  for (let k = 0; k <= seg; k++) { const a = Math.PI * (1 - k / seg); arc.push([Math.cos(a) * w / 2, y0 + Math.sin(a) * rise]); }
+  const quad = (out, A, B, C, D) => out.push(...A, ...B, ...C, ...A, ...C, ...D);
+  const parts = [[], []];
+  for (let k = 0; k < seg; k++) {
+    const [xa, ya] = arc[k], [xb, yb] = arc[k + 1], top = k > 1 && k < seg - 2 ? 0 : 1;
+    quad(parts[top], [xa, ya, z0], [xb, yb, z0], [xb, yb, z0 - l], [xa, ya, z0 - l]);
+    quad(under, [xa, ya - 0.05, z0], [xa, ya - 0.05, z0 - l], [xb, yb - 0.05, z0 - l], [xb, yb - 0.05, z0]);
+  }
+  const ends = [[], []];                             // the arched ends: 0 at the line end, 1 at the back
+  for (let k = 0; k < seg; k++) {
+    const [xa, ya] = arc[k], [xb, yb] = arc[k + 1];
+    ends[0].push(0, y0, z0 - l + 0.3, xb, yb, z0 - l + 0.3, xa, ya, z0 - l + 0.3);
+    ends[1].push(0, y0, z0 - 0.3, xa, ya, z0 - 0.3, xb, yb, z0 - 0.3);
+  }
+  const geo = (a) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(a, 3)); return g; };
+  return { snow: geo(parts[0]), metal: geo(parts[1]), under: geo(under), front: geo(ends[0]), back: geo(ends[1]) };
+}
+function gondolaTerminal(H, arm, foot) {
+  const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
+  const [xl, xr, d0, d1] = gondolaDeck(arm), wx = GW(arm), zf = -19.0, zb = 4.5, eave = 6.0;
+  // floor and its footing down to the snow
+  add(new THREE.BoxGeometry(xr - xl, 0.5, d1 - d0).translate(0, 0.25, (d0 + d1) / 2), W, TILES.concrete);
+  add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate(0, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);
+  // the wheel on its post, inside at the back
+  add(new THREE.CylinderGeometry(0.5, 0.7, H - 0.9, 8).translate(0, 0.5 + (H - 0.9) / 2, 0), TCOL.STEEL);
+  add(new THREE.CylinderGeometry(arm, arm, 0.3, 16).translate(0, H + 0.1, 0), TCOL.DARK);
+  // side walls: a dark band at the floor, glass, a dark band at the eaves; the back wall all dark
+  for (const sx of [-1, 1]) {
+    const x = sx * wx, len = zb - zf, zc = (zb + zf) / 2;
+    add(new THREE.BoxGeometry(0.3, 1.0, len).translate(x, 1.0, zc), W, TILES.darkPanel);
+    add(new THREE.BoxGeometry(0.24, 3.8, len).translate(x, 3.4, zc), W, TILES.curtain);
+    add(new THREE.BoxGeometry(0.3, 0.7, len).translate(x, 5.65, zc), W, TILES.darkPanel);
+  }
+  add(new THREE.BoxGeometry(2 * wx, eave - 0.5, 0.3).translate(0, 0.5 + (eave - 0.5) / 2, zb), W, TILES.darkPanel);
+  add(new THREE.BoxGeometry(2 * wx + 0.3, 0.6, 0.4).translate(0, eave - 0.3, zf), W, TILES.darkPanel);   // header over the opening
+  // the barrel roof, snow along its crown, standing-seam metal down its sides, overhanging both ends
+  const r = barrel(2 * wx + 1.4, zb - zf + 1.6, zb + 0.8, eave, 2.6);
+  add(r.snow, W, TILES.roofSnow); add(r.metal, W, TILES.metalRoof); add(r.under, TCOL.UNDER);
+  add(r.front, W, TILES.curtain); add(r.back, W, TILES.darkPanel);
+  add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(wx + 1.2, 2.7, zf - 0.6), TCOL.DARK);   // lamp post
+  return P;
+}
+// The Elk Camp Gondola top (Jack's summer photo): the terminal in the middle, the Elk Camp restaurant on one side,
+// level with the terminal floor and standing on a stone foundation built into the slope, with a sun deck facing
+// down the line; a smaller wood maintenance and hosting building on the other side. The restaurant wall that faces
+// the terminal carries the three après posters. Footprints in the terminal's frame: [x0, x1, z0, z1].
+const ELK_REST = (arm) => [-(GW(arm) + 22.0), -(GW(arm) + 6.0), -15.0, 9.0];
+const ELK_REST_DECK = 5.0;                           // the sun deck, out from the restaurant's line-end side
+const ELK_SHOP = (arm) => [GW(arm) + 6.0, GW(arm) + 17.0, -12.0, 3.0];
+function elkCampTop(arm, lowRest, lowShop) {
+  const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
+  // restaurant
+  {
+    const [x0, x1, z0, z1] = ELK_REST(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0, dz0 = z0 - ELK_REST_DECK;
+    const fd = 0.5 - lowRest + 0.4;                  // the foundation, from the floor down past the lowest snow
+    add(new THREE.BoxGeometry(w + 0.4, fd, z1 - dz0 + 0.4).translate(xc, 0.5 - fd / 2, (z1 + dz0) / 2), W, TILES.stone);
+    add(new THREE.BoxGeometry(w, 0.4, ELK_REST_DECK).translate(xc, 0.3, z0 - ELK_REST_DECK / 2), W, TILES.deck);
+    // the hall: dark steel panels, a cedar band at the floor, glass along the line end and the far side
+    add(new THREE.BoxGeometry(w, 4.5, l).translate(xc, 0.5 + 2.25, zc), W, TILES.darkPanel);
+    add(new THREE.BoxGeometry(w + 0.1, 1.0, l + 0.1).translate(xc, 1.0, zc), W, TILES.cedar);
+    add(new THREE.BoxGeometry(w - 1.0, 3.2, 0.2).translate(xc, 3.1, z0 - 0.05), W, TILES.curtain);
+    add(new THREE.BoxGeometry(0.2, 3.2, l - 6.0).translate(x0 - 0.05, 3.1, zc - 1.0), W, TILES.curtain);
+    // a flat roof slab overhanging all round and out over the deck, a cedar soffit under it, snow on top
+    const rx = w + 5.0, rz = l + ELK_REST_DECK + 3.0, rzc = (z1 + 1.5 + dz0 - 0.5) / 2 + 0.5;
+    add(new THREE.BoxGeometry(rx, 0.6, rz).translate(xc, 5.3, rzc), W, TILES.darkPanel);
+    add(new THREE.BoxGeometry(rx - 0.3, 0.06, rz - 0.3).translate(xc, 4.98, rzc), W, TILES.cedar);
+    add(new THREE.BoxGeometry(rx - 0.6, 0.45, rz - 0.6).translate(xc, 5.8, rzc), W, TILES.roofSnow);
+    for (const x of [x0 + 0.6, xc, x1 - 0.6]) add(new THREE.BoxGeometry(0.3, 4.4, 0.3).translate(x, 2.7, dz0 + 0.4), TCOL.DARK);
+    // the deck's glass rail
+    add(new THREE.BoxGeometry(w, 1.0, 0.06).translate(xc, 1.0, dz0 + 0.1), TCOL.GLASS);
+    add(new THREE.BoxGeometry(w, 0.08, 0.12).translate(xc, 1.52, dz0 + 0.1), TCOL.DARK);
+    for (const x of [x0 + 0.05, x1 - 0.05]) {
+      add(new THREE.BoxGeometry(0.06, 1.0, ELK_REST_DECK).translate(x, 1.0, z0 - ELK_REST_DECK / 2), TCOL.GLASS);
+      add(new THREE.BoxGeometry(0.12, 0.08, ELK_REST_DECK).translate(x, 1.52, z0 - ELK_REST_DECK / 2), TCOL.DARK);
+    }
+    // the posters, on the wall that faces the terminal: about 1 x 1.5 m each, a little apart
+    [TILES.posterA, TILES.posterB, TILES.posterC].forEach((t, k) => {
+      const g = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 + 0.03, 2.4, zc - 2.4 + k * 2.4);
+      P.push(partUV(g, W, t, 11 / 64, 53 / 64, 0, 1));
+    });
+  }
+  // maintenance and hosting building: wood siding, a band of windows, a garage door, a low snowy gable roof
+  {
+    const [x0, x1, z0, z1] = ELK_SHOP(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0;
+    const fd = 0.5 - lowShop + 0.4;
+    add(new THREE.BoxGeometry(w + 0.3, fd, l + 0.3).translate(xc, 0.5 - fd / 2, zc), W, TILES.concrete);
+    add(new THREE.BoxGeometry(w, 3.6, l).translate(xc, 0.5 + 1.8, zc), W, TILES.siding);
+    add(new THREE.BoxGeometry(w - 4.5, 0.9, 0.12).translate(xc + 1.8, 2.7, z0 - 0.04), W, TILES.window);
+    add(new THREE.BoxGeometry(3.2, 3.0, 0.12).translate(x0 + 2.2, 2.0, z0 - 0.04), W, TILES.darkPanel);
+    add(gable(w + 1.4, l + 1.4, 1.6).translate(xc, 4.1, zc), W, TILES.roofSnow);
+  }
+  return P;
+}
+// A gondola tower (Jack's Snowmass photo): a tall round galvanized column with a ladder up it, a wide crossarm
+// with a railed walkway, and a train of sheaves under the cable at each end. Base at y = 0, the line along z.
+function gondolaTower(th, arm) {
+  const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile)), wide = arm * 2 + 2.6;
+  add(new THREE.BoxGeometry(2.6, 1.2, 2.6).translate(0, 0.3, 0), W, TILES.concrete);
+  add(new THREE.CylinderGeometry(0.5, 0.62, th, 8).translate(0, th / 2, 0), W, TILES.steel);
+  add(new THREE.CylinderGeometry(1.05, 1.05, 2.6, 8).translate(0, 1.9, 0), W, TILES.pad);
+  add(new THREE.BoxGeometry(0.42, th - 3.4, 0.06).translate(0, 3.0 + (th - 3.4) / 2, 0.62), TCOL.STEEL);   // the ladder
+  add(new THREE.BoxGeometry(wide, 0.6, 0.7).translate(0, th, 0), W, TILES.steel);
+  add(new THREE.BoxGeometry(wide, 0.08, 2.0).translate(0, th + 0.34, 0), TCOL.STEEL);                     // walkway
+  for (const z of [-1.0, 1.0]) add(new THREE.BoxGeometry(wide, 0.06, 0.06).translate(0, th + 1.35, z), TCOL.STEEL);
+  for (const x of [-wide / 2 + 0.1, 0, wide / 2 - 0.1]) for (const z of [-1.0, 1.0])
+    add(new THREE.BoxGeometry(0.06, 1.0, 0.06).translate(x, th + 0.85, z), TCOL.STEEL);
+  for (const sx of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.36, 0.5, 4.2).translate(sx * arm, th + 0.15, 0), TCOL.DARK);
+  }
+  return P;
+}
+// A gondola station: the hall on its deck and apron, its walls solid, trees cleared; at the Elk Camp Gondola top
+// the restaurant and the maintenance building beside it, standing on foundations down to the snow.
+function gondolaStation(sd, arm, hh, base, m, elkTop) {
+  apronGeos.push(apron(sd, base));
+  STATIONS.push(sd);
+  const toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
+  const box = (u0, u1, v0, v1, y0, y1) => {
+    const [x, z] = toW((u0 + u1) / 2, (v0 + v1) / 2);
+    SOLIDS.push({ x, z, y: (y0 + y1) / 2, hx: (u1 - u0) / 2, hy: (y1 - y0) / 2, hz: (v1 - v0) / 2, c: sd.c, s: sd.s });
+  };
+  const wx = GW(arm), y = sd.y;
+  box(-wx - 0.2, -wx + 0.2, -19.0, 4.5, y - 0.5, y + 5.5);
+  box(wx - 0.2, wx + 0.2, -19.0, 4.5, y - 0.5, y + 5.5);
+  box(-wx, wx, 4.3, 4.7, y - 0.5, y + 5.5);
+  { const [x, z] = toW(0, 0); addObstacle({ x, z, y, r: 0.7, height: hh }); }
+  const cut = (u0, u1, v0, v1, pad) => {
+    const cs = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]].map(([u, v]) => toW(u, v));
+    const xs = cs.map((q) => q[0]), zs = cs.map((q) => q[1]);
+    for (let jj = Math.floor((Math.min(...zs) - pad - Z0) / CELL); jj <= Math.ceil((Math.max(...zs) + pad - Z0) / CELL); jj++)
+      for (let ii = Math.floor((Math.min(...xs) - pad - X0) / CELL); ii <= Math.ceil((Math.max(...xs) + pad - X0) / CELL); ii++) {
+        if (ii < 0 || jj < 0 || ii >= NX || jj >= NZ) continue;
+        const dx = X0 + ii * CELL - sd.x, dz = Z0 + jj * CELL - sd.z, u = sd.c * dx - sd.s * dz, v = sd.s * dx + sd.c * dz;
+        if (u > u0 - pad && u < u1 + pad && v > v0 - pad && v < v1 + pad) LIFT_CUT[jj * NX + ii] = 1;
+      }
+  };
+  for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
+    for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
+      if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
+  casters.push({ x: sd.x, z: sd.z, h: 7, w: wx }, { ...(([x, z]) => ({ x, z }))(toW(0, -12)), h: 7, w: wx });
+  if (!elkTop) return;
+  // the lowest snow under each building, in the station's frame (floor top at 0.5)
+  const low = ([u0, u1, v0, v1]) => {
+    let lo = 1e9;
+    for (let v = v0; v <= v1 + 0.01; v += 2) for (let u = u0; u <= u1 + 0.01; u += 2) { const [x, z] = toW(u, v); lo = Math.min(lo, groundY(x, z)); }
+    return Math.min(0, lo - base);
+  };
+  const R = ELK_REST(arm), S = ELK_SHOP(arm);
+  const lowR = low([R[0], R[1], R[2] - ELK_REST_DECK, R[3]]), lowS = low(S);
+  liftParts.push(...placed(elkCampTop(arm, lowR, lowS), m));
+  box(R[0], R[1], R[2], R[3], base + lowR - 0.5, y + 5.6);
+  box(R[0], R[1], R[2] - ELK_REST_DECK, R[2], base + lowR - 0.5, y + 1.55);
+  box(S[0], S[1], S[2], S[3], base + lowS - 0.5, y + 5.0);
+  cut(R[0] - 2.5, R[1] + 2.5, R[2] - ELK_REST_DECK - 1.5, R[3] + 1.5, 4);
+  cut(S[0], S[1], S[2], S[3], 4);
+  for (const [u, v, w] of [[(R[0] + R[1]) / 2, R[2] + 4, 9], [(R[0] + R[1]) / 2, R[3] - 6, 9], [(S[0] + S[1]) / 2, (S[2] + S[3]) / 2, 6]]) {
+    const [x, z] = toW(u, v); casters.push({ x, z, h: 6, w });
+  }
+}
 // ---------- Chairlifts on the real lift lines (OpenStreetMap, in lifts.json) ----------
 // The kit's towers, cable and chairs. OSM's points along a line are its towers where mapped; long gaps
 // get towers about every 110 m. Each tower is as tall as it needs to be for the chairs to clear the snow.
@@ -1182,6 +1371,7 @@ const LIFT_CUT = new Uint8Array(NX * NZ);
 const liftParts = [], cablePts = [], casters = [], lampList = [], apronGeos = [];
 const carriers = { chair: [], cabin: [], bar: [] };
 const liftPaths = [];
+const LIFT_ENDS = LIFTS.flatMap((l) => [l.points[0], l.points[l.points.length - 1]].map((p) => ({ lift: l, x: p[0], z: p[1] })));
 for (const lift of LIFTS) {
   const st = LIFT_STYLE[lift.kind] || LIFT_STYLE.chair_lift;
   // stations: terminals at the ends, towers between; drop points bunched up near a terminal
@@ -1204,10 +1394,13 @@ for (const lift of LIFTS) {
   // chairlift stations: the deck sits at the highest snow under it, the apron eases the ground to it,
   // and the cable runs 3.15 m over the deck so the seats pass about half a meter above it
   const stn = {};
-  if (lift.kind === 'chair_lift' || !LIFT_STYLE[lift.kind]) for (const i of [0, N - 1]) {
+  const isGondola = lift.kind === 'gondola';
+  if (lift.kind === 'chair_lift' || isGondola || !LIFT_STYLE[lift.kind]) for (const i of [0, N - 1]) {
     const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N - 1, i + 1)];
     const yaw = Math.atan2(b[0] - a[0], b[1] - a[1]) + (i === 0 ? Math.PI : 0), cs = Math.cos(yaw), sn = Math.sin(yaw);
-    const [u0, u1, v0, v1] = deckRect(st.arm);
+    // the hut goes on the side away from any other lift's end within 20 m
+    const hut = LIFT_ENDS.some((q) => q.lift !== lift && Math.hypot(q.x - pts[i][0], q.z - pts[i][1]) < 20 && cs * (q.x - pts[i][0]) - sn * (q.z - pts[i][1]) > 0) ? -1 : 1;
+    const [u0, u1, v0, v1] = isGondola ? gondolaDeck(st.arm) : deckRect(st.arm, hut);
     let hi = -1e9, lo = 1e9;
     for (let v = v0; v <= v1 + 0.01; v += 1.5) for (let u = u0; u <= u1 + 0.01; u += 1.5) {
       const h = groundY(pts[i][0] + cs * u + sn * v, pts[i][1] - sn * u + cs * v);
@@ -1215,10 +1408,10 @@ for (const lift of LIFTS) {
     }
     const y = hi + 0.1, A = clamp((y - lo) * 3 + 4, 6, 18);
     const R = Math.hypot(Math.max(-u0, u1), Math.max(-v0, v1)) + A;
-    const sd = { x: pts[i][0], z: pts[i][1], c: cs, s: sn, yaw, u0, u1, v0, v1, y, lo, A,
+    const sd = { x: pts[i][0], z: pts[i][1], c: cs, s: sn, yaw, u0, u1, v0, v1, y, lo, A, hut,
       bx0: pts[i][0] - R, bx1: pts[i][0] + R, bz0: pts[i][1] - R, bz1: pts[i][1] + R };
     stn[i] = sd;
-    c[i] = y + 3.15;
+    c[i] = y + (isGondola ? 4.45 : 3.15);
   }
   const sagOf = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) * 0.012;
   const cableAt = (i, f) => c[i] + (c[i + 1] - c[i]) * f - sagOf(i) * Math.sin(Math.PI * f);
@@ -1251,11 +1444,11 @@ for (const lift of LIFTS) {
   // towers
   for (let i = 1; i < N - 1; i++) {
     const th = c[i] - g[i] - 0.55, arm = st.arm, yaw = dirAt(i);
-    const parts = [
-      part(new THREE.BoxGeometry(2.2, 1.2, 2.2).translate(0, 0.3, 0), CONC),
-      part(new THREE.CylinderGeometry(0.4, 0.68, th, 6).translate(0, th / 2, 0), STEEL),
-      part(new THREE.CylinderGeometry(1.0, 1.0, 2.6, 8).translate(0, 1.9, 0), PAD),
-      part(new THREE.BoxGeometry(arm * 2 + 1.4, 0.45, 0.5).translate(0, th, 0), STEEL),
+    const parts = isGondola ? gondolaTower(th, arm) : [
+      part(new THREE.BoxGeometry(2.2, 1.2, 2.2).translate(0, 0.3, 0), W, null, TILES.concrete),
+      part(new THREE.CylinderGeometry(0.4, 0.68, th, 6).translate(0, th / 2, 0), W, null, TILES.steel),
+      part(new THREE.CylinderGeometry(1.0, 1.0, 2.6, 8).translate(0, 1.9, 0), W, null, TILES.pad),
+      part(new THREE.BoxGeometry(arm * 2 + 1.4, 0.45, 0.5).translate(0, th, 0), W, null, TILES.steel),
       part(new THREE.BoxGeometry(1.2, 0.35, 2.4).translate(-arm, th + 0.35, 0), DARK),
       part(new THREE.BoxGeometry(1.2, 0.35, 2.4).translate(arm, th + 0.35, 0), DARK),
       part(new THREE.BoxGeometry(0.22, th - 2, 0.22).translate(0.55, th / 2, 0.3), DARK),
@@ -1269,7 +1462,7 @@ for (const lift of LIFTS) {
     const sd = stn[i], yaw = sd ? sd.yaw : dirAt(i) + (i === 0 ? Math.PI : 0), arm = st.arm;
     const base = sd ? sd.y - 0.5 : g[i] - 0.3, hh = c[i] - base;
     const neu = !!sd;
-    const parts = neu ? chairTerminal(hh, arm, sd.y - sd.lo + 0.6) : [
+    const parts = neu && isGondola ? gondolaTerminal(hh, arm, sd.y - sd.lo + 0.6) : neu ? chairTerminal(hh, arm, sd.y - sd.lo + 0.6, sd.hut) : [
       part(new THREE.BoxGeometry(arm * 2 + 4, 0.6, 9).translate(0, 0.0, 1.5), CONC),
       part(new THREE.BoxGeometry(0.7, hh - 0.6, 0.7).translate(-1.2, (hh - 0.6) / 2, 0), STEEL),
       part(new THREE.BoxGeometry(0.7, hh - 0.6, 0.7).translate(1.2, (hh - 0.6) / 2, 0), STEEL),
@@ -1282,7 +1475,8 @@ for (const lift of LIFTS) {
     ];
     const m = placeM(pts[i][0], base, pts[i][1], yaw);
     liftParts.push(...placed(parts, m));
-    if (sd) {
+    if (sd && isGondola) gondolaStation(sd, arm, hh, base, m, lift.name === 'Elk Camp Gondola' && g[i] >= Math.max(g[0], g[N - 1]));
+    else if (sd) {
       apronGeos.push(apron(sd, base));
       STATIONS.push(sd);
       // the post, the four legs and the hut stop you; the deck and apron are snow you ride on
@@ -1292,15 +1486,15 @@ for (const lift of LIFTS) {
         addObstacle({ x, z, y: sd.y, r, height: hh });
       }
       // the hut is a solid box (3 x 3 m, 2.6 m tall on the deck): slide along its walls, bail off it fast, land on its roof
-      const [hutX, hutZ] = toW(arm + 3.4, -L + 3.2);
+      const [hutX, hutZ] = toW(sd.hut * (arm + 3.4), -L + 3.2);
       SOLIDS.push({ x: hutX, z: hutZ, y: sd.y + 1.0, hx: 1.5, hy: 1.6, hz: 1.5, c: sd.c, s: sd.s });
       // no trees on the station or its apron
       for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
         for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
           if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
     }
-    casters.push({ x: pts[i][0], z: pts[i][1], h: hh, w: arm + 1 });
-    lampList.push((neu ? new THREE.Vector3(arm + 3.4 - 1.6, 4.9, -7 + 3.2 - 1.6) : new THREE.Vector3(arm + 1.6, 5.6, -1.2)).applyMatrix4(m));
+    if (!isGondola) casters.push({ x: pts[i][0], z: pts[i][1], h: hh, w: arm + 1 });
+    lampList.push((neu && isGondola ? new THREE.Vector3(GW(arm) + 1.2, 4.9, -19.6) : neu ? new THREE.Vector3(sd.hut * (arm + 3.4 - 1.6), 4.9, -7 + 3.2 - 1.6) : new THREE.Vector3(arm + 1.6, 5.6, -1.2)).applyMatrix4(m));
   }
   // the cable: a dense path along the tower tops with sag, plus its length along the way
   const path = [];
@@ -1992,7 +2186,9 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
     if (best < 70 && s0 < 120 && (!run || best < run.best)) run = { L, s0, best };
   }
   if (run) {
-    const a = lineAt(run.L, run.s0 + 12), b = lineAt(run.L, run.s0 + 45);
+    let o = 12;                                     // clear of station buildings
+    while (o < 120 && nearSolid(...lineAt(run.L, run.s0 + o), 5)) o += 6;
+    const a = lineAt(run.L, run.s0 + o), b = lineAt(run.L, run.s0 + o + 33);
     STARTS.push({ label: `Start: ${lift.name} top`, x: a[0], z: a[1], heading: Math.atan2(b[0] - a[0], -(b[1] - a[1])) });
     continue;
   }
@@ -2000,7 +2196,7 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
   let pick = null;
   for (const side of [1, -1]) for (const along of [-10, 5, 20]) for (const lat of [25, 40]) {
     const x = top[0] + ux * along - uz * lat * side, z = top[1] + uz * along + ux * lat * side;
-    if (offMap(x, z)) continue;
+    if (offMap(x, z) || nearSolid(x, z, 5)) continue;
     const f = fallAt(x, z, 10), k = cellAt(x, z), tx = top[0] - x, tz = top[1] - z, tl = Math.hypot(tx, tz);
     if ((-f.gx * tx - f.gz * tz) / (f.slope * tl || 1) > 0.7) continue;     // not facing the terminal
     let ahead = 0;                                                         // and not straight into the forest
@@ -2030,20 +2226,72 @@ function tube(a, b, r, col) {
 // The chair (Jack's photo, a detachable quad): grip, hanger and a galvanized frame bowing down to both ends of
 // the seat, four dark cushions, a back, armrests and the safety bar raised. Faces +z; the cable is at y = 0.
 const FRAME = [0.62, 0.64, 0.68], CUSH = [0.17, 0.18, 0.21];
-const CHAIR_NEAR = 350, CHAIR_FAR = 2500;           // m: the full chair, then a plain one, then none at all
+const CHAIR_NEAR = 200, CHAIR_FAR = 2500;           // m: the full chair or cabin, then a plain one, then none at all
+// the frame's side: down from the top bar's rounded corner, bowing out, to the seat's end and under it to the back
+const chairSide = (sx) => [
+  tube([sx * 0.98, -1.2, -0.34], [sx * 1.16, -1.3, -0.34], 0.09, FRAME),
+  tube([sx * 1.16, -1.3, -0.34], [sx * 1.25, -1.75, -0.36], 0.08, FRAME),
+  tube([sx * 1.25, -1.75, -0.36], [sx * 1.24, -2.25, -0.34], 0.08, FRAME),
+  tube([sx * 1.24, -2.25, -0.34], [sx * 1.2, -2.66, -0.1], 0.08, FRAME),
+  tube([sx * 1.22, -2.3, -0.2], [sx * 1.22, -2.3, 0.38], 0.06, FRAME),                 // armrest
+  tube([sx * 1.16, -1.3, -0.34], [sx * 1.14, -1.42, 0.3], 0.06, FRAME),                 // restraint bar arm, raised
+];
+// the Snowmass cabin (Jack's photos): rounded, black below the belt and tinted glass above, the white swoosh and
+// SNOWMASS on both sides, a grey sill under the floor, hung from a curved hanger. Faces +z; cable at y = 0.
+function roundRing(a, b, r, y, seg = 3) {
+  const out = [];
+  for (const [cx, cz, t0] of [[a - r, b - r, 0], [-(a - r), b - r, 0.5], [-(a - r), -(b - r), 1], [a - r, -(b - r), 1.5]])
+    for (let k = 0; k <= seg; k++) { const t = (t0 + 0.5 * k / seg) * Math.PI; out.push([cx + r * Math.cos(t), y, cz + r * Math.sin(t)]); }
+  return out;
+}
+function cabinGeo() {
+  const rings = [[0.86, 0.8, 0.35, -3.95], [1.0, 0.93, 0.45, -3.7], [1.06, 0.99, 0.5, -2.95], [1.0, 0.93, 0.45, -2.0], [0.86, 0.8, 0.38, -1.8], [0.6, 0.55, 0.3, -1.68]]
+    .map(([a, b, r, y]) => roundRing(a, b, r, y));
+  const pos = [], col = [], tt = [], BODY = [0.06, 0.065, 0.075], TINT = [0.1, 0.13, 0.18], yF = -3.95, yT = -1.85;
+  const tri = (A, B, C) => {
+    const n = new THREE.Vector3(...B).sub(new THREE.Vector3(...A)).cross(new THREE.Vector3(...C).sub(new THREE.Vector3(...A))).normalize();
+    const yc = (A[1] + B[1] + C[1]) / 3, side = Math.abs(n.x) > 0.75 && yc < -1.9;
+    for (const P of [A, B, C]) {
+      pos.push(...P);
+      if (side) {   // the logo side: the tile once across the side, its top at the roof line
+        col.push(1, 1, 1);
+        tt.push(clamp(0.5 - Math.sign(n.x) * P[2] / 2.0, 0.002, 0.998), clamp((P[1] - yF) / (yT - yF), 0.002, 0.998), TILES.cabin + 1);
+      } else { col.push(...(yc > -2.95 && yc < -1.95 ? TINT : BODY)); tt.push(0, 0, 0); }
+    }
+  };
+  for (let r = 0; r < rings.length - 1; r++) {
+    const A = rings[r], B = rings[r + 1], n = A.length;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; tri(A[i], B[j], A[j]); tri(A[i], B[i], B[j]); }
+  }
+  for (const [Rg, up] of [[rings[rings.length - 1], true], [rings[0], false]]) {
+    const f = THREE.ShapeUtils.triangulateShape(Rg.map((v) => new THREE.Vector2(v[0], v[2])), []);
+    for (const [a, b, c] of f) up ? tri(Rg[a], Rg[c], Rg[b]) : tri(Rg[a], Rg[b], Rg[c]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('aH', new THREE.Float32BufferAttribute(pos.filter((_, k) => k % 3 === 1), 1));
+  g.setAttribute('aT', new THREE.Float32BufferAttribute(tt, 3));
+  return merge([
+    g,
+    part(new THREE.BoxGeometry(0.28, 0.32, 0.62).translate(0, -0.12, 0), DARK),                   // grip
+    tube([0, -0.28, 0], [0.42, -0.75, 0], 0.1, FRAME), tube([0.42, -0.75, 0], [0.38, -1.35, 0], 0.1, FRAME),
+    tube([0.38, -1.35, 0], [0, -1.66, 0], 0.1, FRAME),                                            // hanger, round to the roof
+    part(new THREE.BoxGeometry(1.5, 0.12, 1.4).translate(0, -4.02, 0), [0.42, 0.43, 0.46]),        // sill
+  ]);
+}
 const CARRIER_GEO = {
   chair: merge([
     part(new THREE.BoxGeometry(0.26, 0.3, 0.5).translate(0, -0.15, 0), DARK),
     tube([0, -0.3, 0], [0, -1.15, -0.32], 0.11, FRAME),
-    tube([-1.18, -1.2, -0.34], [1.18, -1.2, -0.34], 0.09, FRAME),
-    tube([-1.18, -1.2, -0.34], [-1.24, -2.0, -0.36], 0.08, FRAME), tube([-1.24, -2.0, -0.36], [-1.2, -2.66, -0.1], 0.08, FRAME),
-    tube([1.18, -1.2, -0.34], [1.24, -2.0, -0.36], 0.08, FRAME), tube([1.24, -2.0, -0.36], [1.2, -2.66, -0.1], 0.08, FRAME),
+    tube([-0.98, -1.2, -0.34], [0.98, -1.2, -0.34], 0.09, FRAME),
+    ...chairSide(-1), ...chairSide(1),
     part(new THREE.BoxGeometry(2.42, 0.07, 0.55).translate(0, -2.72, 0.1), FRAME),
     ...[-0.9, -0.3, 0.3, 0.9].map((x) => part(new THREE.BoxGeometry(0.56, 0.13, 0.52).translate(x, -2.62, 0.12), CUSH)),
     part(new THREE.BoxGeometry(2.3, 0.5, 0.11).rotateX(-0.18).translate(0, -2.26, -0.24), CUSH),
-    tube([-1.22, -2.3, -0.2], [-1.22, -2.3, 0.38], 0.06, FRAME), tube([1.22, -2.3, -0.2], [1.22, -2.3, 0.38], 0.06, FRAME),
-    tube([-1.18, -1.2, -0.34], [-1.16, -1.38, 0.32], 0.06, FRAME), tube([1.18, -1.2, -0.34], [1.16, -1.38, 0.32], 0.06, FRAME),
-    tube([-1.16, -1.38, 0.32], [1.16, -1.38, 0.32], 0.06, FRAME),
+    tube([-1.14, -1.42, 0.3], [1.14, -1.42, 0.3], 0.06, FRAME),                                  // the raised bar
+    tube([-0.35, -1.42, 0.3], [-0.38, -1.95, 0.5], 0.05, FRAME), tube([0.35, -1.42, 0.3], [0.38, -1.95, 0.5], 0.05, FRAME),
+    tube([-0.72, -1.95, 0.5], [0.72, -1.95, 0.5], 0.06, FRAME),                                  // its footrest
   ]),
   // past CHAIR_NEAR: hanger, seat and back only
   chairFar: merge([
@@ -2051,20 +2299,22 @@ const CARRIER_GEO = {
     part(new THREE.BoxGeometry(2.4, 0.2, 0.55).translate(0, -2.64, 0.12), CUSH),
     part(new THREE.BoxGeometry(2.3, 0.5, 0.12).translate(0, -2.26, -0.24), CUSH),
   ]),
-  cabin: merge([
-    part(new THREE.BoxGeometry(0.14, 1.6, 0.14).translate(0, -0.8, 0), DARK),
-    part(new THREE.BoxGeometry(2.0, 2.1, 2.0).translate(0, -2.7, 0), CABIN),
-    part(new THREE.BoxGeometry(2.04, 0.8, 1.6).translate(0, -2.3, 0), GLASS),
-    part(new THREE.BoxGeometry(1.6, 0.3, 1.6).translate(0, -1.55, 0), STEEL),
+  cabin: cabinGeo(),
+  cabinFar: merge([
+    part(new THREE.BoxGeometry(0.14, 1.7, 0.14).translate(0, -0.85, 0), FRAME),
+    part(new THREE.BoxGeometry(2.0, 1.2, 1.86).translate(0, -3.4, 0), [0.06, 0.065, 0.075]),
+    part(new THREE.BoxGeometry(1.9, 1.0, 1.76).translate(0, -2.3, 0), [0.1, 0.13, 0.18]),
   ]),
   bar: merge([
     part(new THREE.BoxGeometry(0.1, 3.6, 0.1).translate(0, -1.8, 0), STEEL),
     part(new THREE.BoxGeometry(1.1, 0.12, 0.12).translate(0, -3.6, 0), DARK),
   ]),
 };
+const FAR_OF = { chair: 'chairFar', cabin: 'cabinFar' };
 const carrierMeshes = {};
-for (const k of [...Object.keys(carriers), 'chairFar']) {
-  const m = new THREE.InstancedMesh(CARRIER_GEO[k], modelMat, Math.max(1, carriers[k === 'chairFar' ? 'chair' : k].length));
+for (const k of [...Object.keys(carriers), ...Object.values(FAR_OF)]) {
+  const own = Object.keys(FAR_OF).find((n) => FAR_OF[n] === k) || k;
+  const m = new THREE.InstancedMesh(CARRIER_GEO[k], modelMat, Math.max(1, carriers[own].length));
   m.frustumCulled = false;
   scene.add(m);
   carrierMeshes[k] = m;
@@ -2080,20 +2330,19 @@ function pathAt(lp, d, out) {
 }
 const cp = { x: 0, y: 0, z: 0, dx: 0, dz: 0 };
 function placeCarriers(t) {
-  const cx = camera.position.x, cz = camera.position.z, fe = carrierMeshes.chairFar.instanceMatrix.array;
-  let nFar = 0;
+  const cx = camera.position.x, cz = camera.position.z;
   for (const k of Object.keys(carriers)) {
-    const m = carrierMeshes[k], e = m.instanceMatrix.array;
-    let nNear = 0;
+    const m = carrierMeshes[k], e = m.instanceMatrix.array, fm = FAR_OF[k] && carrierMeshes[FAR_OF[k]], fe = fm && fm.instanceMatrix.array;
+    let nNear = 0, nFar = 0;
     carriers[k].forEach((c) => {
       const lp = c.lp, d = (c.s0 + t * lp.speed) % (2 * lp.L), up = d < lp.L;
       pathAt(lp, up ? d : 2 * lp.L - d, cp);
       const len = Math.hypot(cp.dx, cp.dz) || 1, ux = cp.dx / len, uz = cp.dz / len;
       const side = up ? 1 : -1, fx = ux * side, fz = uz * side;   // riders face the way they travel
       const x = cp.x + uz * lp.arm * side, z = cp.z - ux * lp.arm * side;
-      // chairs: the full model near, a plain one farther, none past CHAIR_FAR
+      // chairs and cabins: the full model near, a plain one farther, none past CHAIR_FAR
       let out = e, n = nNear;
-      if (k === 'chair') {
+      if (fm) {
         const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
         if (d2 > CHAIR_FAR * CHAIR_FAR) return;
         if (d2 > CHAIR_NEAR * CHAIR_NEAR) { out = fe; n = nFar++; } else nNear++;
@@ -2103,9 +2352,8 @@ function placeCarriers(t) {
     });
     m.count = nNear;
     m.instanceMatrix.needsUpdate = true;
+    if (fm) { fm.count = nFar; fm.instanceMatrix.needsUpdate = true; }
   }
-  carrierMeshes.chairFar.count = nFar;
-  carrierMeshes.chairFar.instanceMatrix.needsUpdate = true;
 }
 
 // ---------- Lamps: one on every terminal hut, lit at night ----------

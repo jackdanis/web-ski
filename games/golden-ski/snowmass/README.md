@@ -15,6 +15,9 @@ as clumps of trees instead of single trees. FreePlay starts at the Village Expre
 - Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
   siding and roof snow. The ground blends up to each deck so you can ski on and off, and the post, legs and hut are solid.
   Chairs are detailed close up, plain further out and hidden past 2.5 km.
+- The Elk Camp Gondola and Sky Cab have their own terminals (a glass hall with a barrel roof), galvanized towers and
+  black Snowmass cabins. At the Elk Camp Gondola top there's the restaurant (with three après posters on its wall) and a
+  maintenance building; all of them are solid.
 - No build step. `data.js` holds the terrain, forest, runs and lifts; `patch.js` holds the detailed runs built ahead of time
   (rebuild with `bake.mjs` in the kit when the runs change; the page builds them itself if patch.js is out of date).
   Three.js loads from jsDelivr.
