@@ -2099,7 +2099,8 @@ const FREE_SPEED = 30;          // m/s
 const FREE_FAST = 10;           // Shift multiplies speed by this
 const FREE_LOOK = 0.0022;       // radians per pixel of mouse movement
 const FREE_KEYS = { KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right', ShiftLeft: 'fast', ShiftRight: 'fast' };
-const speedEl = Object.assign(document.createElement('div'), { hidden: true });
+// on by default for now, for testing (Jack 2026-10-21); the Tab menu still turns it off
+const speedEl = Object.assign(document.createElement('div'), { hidden: false });
 speedEl.style.cssText = 'position:fixed;top:12px;right:14px;font:600 15px ui-monospace,Menlo,monospace;color:#fff;text-shadow:0 1px 2px #13244d;pointer-events:none';
 document.body.append(speedEl);
 const DEBUG_ITEMS = [
