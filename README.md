@@ -9,6 +9,7 @@ Quick skiing game prototypes that run in a desktop or mobile browser. Each game 
 | Endless Skier | [`games/endless-skier`](games/endless-skier) | Alto's Adventure / SkiFree style endless run, drawn like Line Rider. Jump, flip, dodge rocks, land clean. |
 | Downhill 3D | [`games/downhill-3d`](games/downhill-3d) | Third-person 3D endless run in Three.js. Carve through trees, hit kickers, spin and flip, stick the landing. |
 | Golden Ski | [`games/golden-ski`](games/golden-ski) | Real-time skiing with Golden Tee's art style: sprite skiers on a low-poly N64-style mountain. Milestone 1: ski feel on a test slope, against the clock. |
+| Golden Ski: Snowmass | [`games/golden-ski/snowmass`](games/golden-ski/snowmass) | Golden Ski's real mountain: true-size Snowmass with Momentum physics, real lifts and runs, and 2 m detailed runs. FreePlay from the Village Express top. |
 
 ## Running
 
