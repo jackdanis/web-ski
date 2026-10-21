@@ -98,7 +98,7 @@ const CV = {
                                 // from 1.2x the snow's figure standing still down toward 0.6x at speed
   LEAN_T: 0.22,                 // s: body lean chases the stick with this lag (about 0.5 s to get most of the way over)
 };
-const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false };
+const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false, loadDrag: true };
 const assist = () => (physics.assists ? ASSIST.on : ASSIST.off);
 
 // ---------- The mountain ----------
@@ -1704,6 +1704,7 @@ const DEBUG_ITEMS = [
   { name: 'Assists (Momentum only)', get: () => physics.assists, set: (on) => { physics.assists = on; } },
   { name: 'Carve turns', get: () => physics.carve, set: (on) => { physics.carve = on; } },
   { name: 'Weight: lean drives the turn', get: () => physics.weight, set: (on) => { physics.weight = on; } },
+  { name: 'Realistic carve cost', get: () => physics.loadDrag, set: (on) => { physics.loadDrag = on; } },
   { name: 'Crashes', get: () => physics.crashes, set: (on) => { physics.crashes = on; } },
   { name: 'Motion feel: camera tilt + lean', get: () => physics.feel, set: (on) => { physics.feel = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
@@ -2151,7 +2152,11 @@ function groundStepC(dt) {
     let fric = surf.friction * (0.6 + 0.6 / (1 + speed / CV.GLIDE)) * nAcc;
     if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
     const brake = sk.brake ? (skidTurn ? CV.SKID_BRAKE : BRAKE) : 0;
-    const decel = fric + drag + SKID * sk.skid * nAcc + brake + CV.CARVE_DRAG * Math.abs(sk.kappa) * speed * speed;
+    // A clean carve costs only the extra snow friction from the load: pulling 1.5 g presses the skis
+    // into the snow 1.8x as hard. Skidding (the SKID term) is what really scrubs speed.
+    const lat = Math.abs(sk.kappa) * speed * speed;
+    const carveCost = physics.loadDrag ? (fric / nAcc) * (Math.hypot(nAcc, lat) - nAcc) : CV.CARVE_DRAG * lat;
+    const decel = fric + drag + SKID * sk.skid * nAcc + brake + carveCost;
     const next = Math.max(0, speed - decel * dt);
     sk.vel.multiplyScalar(next / speed);
     speed = next;
