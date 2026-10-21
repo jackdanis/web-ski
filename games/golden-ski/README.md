@@ -12,8 +12,9 @@ Built with [Three.js](https://threejs.org/) 0.160 loaded as an ES module from js
 | --- | --- | --- |
 | Start | Any control key | Touch the screen |
 | Steer | ← → or A D | Drag left or right. How far you drag sets how hard you turn. The newest finger down steers |
-| Tuck (faster, turns wider) | ↓ or S | Hold your thumb still |
-| Pole (under 20 km/h) or brake (hockey stop, faster) | ↑ or W. Hold to keep poling | Swipe up quickly: one push when slow, a stop when fast. Pull your thumb back down to cancel a stop |
+| Tuck (faster, turns wider) | Shift | Hold your thumb still |
+| Push with the poles | ↑ or W. Hold to keep pushing | Swipe down quickly, one push per swipe |
+| Brake (hockey stop) | ↓ or S | Swipe up quickly. Pull your thumb back down to cancel |
 | Jump | Hold Space to load, release to pop | Tap, with any finger (a small pop) |
 | Retry after the finish | Enter | Retry button |
 
@@ -27,7 +28,7 @@ Momentum physics: one velocity carries everything, and gravity, edges, poles, ju
 - **Snow friction** is low on the groomed run and higher in the powder off the edges.
 - **Air drag** grows with speed squared, and tucking roughly halves it. The assist adds a soft cap around 122 km/h.
 - **Edges**: steering pivots the skis, slower the faster you go, and rolls you onto an edge over a moment. The edge's grip bends your momentum toward the skis, and leaning harder grips more. Within the grip limit that's a clean carve that keeps speed; ask for more and the rest is a skid that bleeds speed and sprays snow. Nothing holds the skis to the fall line, so you can carve uphill until your speed runs out.
-- **Poles**: below 20 km/h, Up pushes with both poles. Each push is strong from a standstill and does nothing near 20 km/h.
+- **Poles** push with both arms. Each push is strong from a standstill and fades to nothing by 20 km/h.
 - **Jumps**: hold to crouch and load, release to pop, partly off the slope and partly straight up. Any crest steep enough also launches you. The turn you're carving carries into the air as spin; steering in the air speeds the spin up or slows it down, and with nothing held the skis settle back in line for the landing.
 - **Landings** keep all the speed along the slope and absorb only the part going into the snow, so a steep landing is smooth and a flat one hurts. Within 25° of your travel is clean, 25 to 55° scrubs off speed, and worse, or hitting the snow faster than 20 m/s, is a wipeout.
 - **Wipeouts** slide with friction, so they go further on steep ground.
@@ -43,4 +44,4 @@ Physics runs at a fixed 60 steps a second. All the feel numbers are in the tunin
 
 ## Testing hooks
 
-`window.__golden` exposes the simulation for headless tests: `setManual(true)` stops the real-time loop, `start()` pushes off, and `step(n, { steer, tuck, brake, jump })` runs fixed steps with that input held. A `jump` there is a tap; add `'jump'` to `keys` for some steps first to load it.
+`window.__golden` exposes the simulation for headless tests: `setManual(true)` stops the real-time loop, `start()` pushes off, and `step(n, { steer, tuck, brake, pole, jump })` runs fixed steps with that input held. A `jump` there is a tap; add `'jump'` to `keys` for some steps first to load it.

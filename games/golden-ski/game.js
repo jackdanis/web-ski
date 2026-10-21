@@ -25,7 +25,7 @@ const EDGE_GRIP = 0.6;          // grip at full lean is (1 + 0.6) times the snow
 const SKID = 0.55;              // speed lost to sideways slip, as a share of the normal force
 const BRAKE = 8.5;              // hockey stop deceleration
 const POLE = 1.7;               // m/s each double-pole push adds from a standstill...
-const POLE_MAX = 5.5;           // ...fading to nothing at this speed (20 km/h). Faster than this, Up brakes
+const POLE_MAX = 5.5;           // ...fading to nothing at this speed (20 km/h)
 const POLE_EVERY = 0.55;        // seconds between pushes while held
 const OLLIE_MIN = 3.0;          // pop from a tap (m/s)...
 const OLLIE_MAX = 5.5;          // ...up to this after loading for OLLIE_CHARGE seconds
@@ -561,18 +561,20 @@ const sprayPoints = (() => {
 })();
 
 // ---------- Input ----------
-// Keyboard: arrows or A/D steer, Down or S tucks, Up or W poles when slow and brakes when fast,
+// Keyboard: Left/Right or A/D steer, Up or W pushes with the poles, Down or S brakes, Shift tucks,
 // Space loads a jump while held and pops on release.
-// Touch or mouse: drag sideways to steer, hold still to tuck, swipe up to pole or brake, tap to jump.
+// Touch or mouse: drag sideways to steer, hold still to tuck, swipe down to push with the poles,
+// swipe up to brake, tap to jump.
 // The newest finger down steers; lifting it hands steering back to any finger still down.
-const input = { steer: 0, tuck: false, brake: false, jump: false };
+const input = { steer: 0, tuck: false, brake: false, pole: false, jump: false };
 const keys = new Set();
 let keySteer = 0;
 const STEER_PX = 70;
 const ptr = { id: null, x0: 0, x: 0, y: 0, t0: 0, travel: 0, lastMove: 0, steer: 0, woke: false, hist: [], passive: false, topY: 0 };
 const touches = new Map();      // every finger down: id -> [x, y]
 let hockeyStop = false;         // a swipe up starts a stop that holds until you've stopped
-const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowDown: 'tuck', KeyS: 'tuck', ArrowUp: 'brake', KeyW: 'brake', Space: 'jump' };
+let poleSwipe = false;          // a swipe down asks for one push with the poles
+const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'pole', KeyW: 'pole', ArrowDown: 'brake', KeyS: 'brake', ShiftLeft: 'tuck', ShiftRight: 'tuck', Space: 'jump' };
 window.addEventListener('keydown', (e) => {
   const k = KEYMAP[e.code];
   if (!k) { if ((e.code === 'Enter') && phase === 'finished' && !retryEl.hidden) retry(); return; }
@@ -587,7 +589,7 @@ window.addEventListener('keyup', (e) => {
   keys.delete(k);
   if (k === 'jump' && phase === 'skiing') input.jump = true;
 });
-window.addEventListener('blur', () => { keys.clear(); touches.clear(); ptr.id = null; ptr.steer = 0; hockeyStop = false; });
+window.addEventListener('blur', () => { keys.clear(); touches.clear(); ptr.id = null; ptr.steer = 0; hockeyStop = false; poleSwipe = false; });
 const canvas = renderer.domElement;
 function anchor(id, x, y, handedOver) {
   ptr.id = id;
@@ -623,6 +625,9 @@ canvas.addEventListener('pointermove', (e) => {
   if (dy < 0 && up > 40 && up > 1.5 * side) { hockeyStop = true; ptr.topY = ptr.y; }
   ptr.topY = Math.min(ptr.topY, ptr.y);
   if (hockeyStop && ptr.y - ptr.topY > 20) hockeyStop = false;
+  // Poles: a quick, mostly downward flick, one push per flick.
+  const down = ptr.y - ptr.hist[0][2];
+  if (dy > 0 && down > 40 && down > 1.5 * side) { poleSwipe = true; ptr.hist = [[now, ptr.x, ptr.y]]; }
   // keep the anchor within one full steer of the thumb so reversing responds at once
   if (ptr.x - ptr.x0 > STEER_PX) ptr.x0 = ptr.x - STEER_PX;
   if (ptr.x0 - ptr.x > STEER_PX) ptr.x0 = ptr.x + STEER_PX;
@@ -653,6 +658,7 @@ function readInput(dt) {
     input.steer = clamp(testHold.steer || 0, -1, 1);
     input.tuck = !!testHold.tuck && !testHold.brake;
     input.brake = !!testHold.brake;
+    input.pole = !!testHold.pole;
     return;
   }
   const target = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
@@ -663,6 +669,7 @@ function readInput(dt) {
   const still = held && !ptr.passive && now - ptr.lastMove > 200 && now - ptr.t0 > 200 && Math.abs(ptr.steer) < 0.25;
   input.steer = clamp(keySteer + (held ? ptr.steer : 0), -1, 1);
   input.brake = keys.has('brake') || hockeyStop;
+  input.pole = keys.has('pole') || poleSwipe;
   input.tuck = !input.brake && (keys.has('tuck') || still);
 }
 
@@ -672,7 +679,7 @@ const sk = {
   heading: 0, grounded: true, airTime: 0, airMax: 0, popCD: 0,
   crashed: false, crashT: 0, landT: 0, landQ: '', skid: 0, tuck: false, brake: false, steer: 0, frame: FRAMES.stand,
   stuckT: 0, stuckX: 0, stuckZ: 0,
-  edge: 0, spin: 0, yawRate: 0, charge: 0, poleCD: 0, poleT: 0, upMode: '',
+  edge: 0, spin: 0, yawRate: 0, charge: 0, poleCD: 0, poleT: 0, pole: false,
 };
 let phase = 'ready';            // ready -> skiing -> finished
 let simTime = 0, runStart = null, runTime = 0, finishTime = null, finishAt = 0;
@@ -778,7 +785,7 @@ function groundStep(dt) {
 
   // Poles: a double-pole push adds speed along the skis. Strong from a standstill, nothing once you're moving.
   sk.poleCD = Math.max(0, sk.poleCD - dt);
-  if (sk.upMode === 'pole' && sk.poleCD === 0 && speed < POLE_MAX) {
+  if (sk.pole && sk.poleCD === 0 && speed < POLE_MAX) {
     sk.vel.addScaledVector(f, POLE * (1 - speed / POLE_MAX));
     sk.poleCD = POLE_EVERY;
     sk.poleT = 0.22;
@@ -944,10 +951,7 @@ function step() {
   sk.steer = finished ? 0 : input.steer;
   sk.tuck = finished ? false : input.tuck;
   sk.brake = finished ? pastFinish : input.brake;
-  // Up means pole when you're slow and stop when you're fast, decided the moment you press it.
-  if (!sk.brake) sk.upMode = '';
-  else if (!sk.upMode) sk.upMode = !finished && sk.vel.length() < POLE_MAX ? 'pole' : 'brake';
-  if (sk.upMode === 'pole') sk.brake = false;
+  sk.pole = !finished && input.pole && !sk.brake;
   sk.poleT = Math.max(0, sk.poleT - dt);
   // Holding jump crouches and loads the pop.
   if (!finished && keys.has('jump') && sk.grounded && !sk.crashed) { sk.charge += dt; sk.tuck = true; }
@@ -961,13 +965,14 @@ function step() {
   else airStep(dt);
   input.jump = false;
   if (hockeyStop && (sk.vel.length() < 1 || sk.crashed || !sk.grounded || phase !== 'skiing')) hockeyStop = false;
-  if (hockeyStop && sk.upMode === 'pole' && sk.poleT > 0) hockeyStop = false;   // a swipe up when slow is one push
+  // A swipe's push waits out the pole cooldown, but not a fall, a jump or the finish.
+  if (poleSwipe && (sk.poleT > 0 || sk.crashed || !sk.grounded || phase !== 'skiing')) poleSwipe = false;
   sk.landT = Math.max(0, sk.landT - dt);
   treeCollide();
   if (!sk.crashed && edgeDistance(sk.pos.x, sk.pos.z) > OUT_OF_BOUNDS) respawn(-sk.pos.z);
   // Never a dead end: stuck by the edge (deep powder, a trunk) for a few seconds puts you
   // back on the run, and the clock keeps going. Holding the brake or poling is a choice, so it doesn't count.
-  if (phase === 'skiing' && !sk.crashed && !sk.brake && sk.upMode !== 'pole' && edgeDistance(sk.pos.x, sk.pos.z) > -1) {
+  if (phase === 'skiing' && !sk.crashed && !sk.brake && !sk.pole && edgeDistance(sk.pos.x, sk.pos.z) > -1) {
     if (Math.hypot(sk.pos.x - sk.stuckX, sk.pos.z - sk.stuckZ) > 1.5) { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
     else if ((sk.stuckT += dt) > STUCK_TIME) respawn(-sk.pos.z - 5);
   } else { sk.stuckX = sk.pos.x; sk.stuckZ = sk.pos.z; sk.stuckT = 0; }
@@ -1178,7 +1183,7 @@ window.__golden = {
   get runTime() { return runTime; },
   get finishTime() { return finishTime; },
   setManual(on) { manual = on; },
-  // run n fixed steps; `hold` overrides input each step: { steer, tuck, brake, jump }.
+  // run n fixed steps; `hold` overrides input each step: { steer, tuck, brake, pole, jump }.
   // A jump in `hold` is a tap; add 'jump' to `keys` for a few steps first to load it.
   step(n, hold) {
     testHold = hold || null;
