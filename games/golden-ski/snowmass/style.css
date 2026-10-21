@@ -1,0 +1,49 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #13244d;
+  color: #fff;
+  color-scheme: light;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#stage, #stage canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+/* The trip back to the summit: a quick fade through navy, standing in for the lift cutscene. */
+#fade {
+  position: fixed;
+  inset: 0;
+  background: #13244d;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .4s ease;
+}
+#fade.on { opacity: 1; }
+/* Debug menu (Tab), for testing on a laptop: one list of settings, nothing else. */
+#debug {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  background: rgba(13, 22, 48, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  font: 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+#debug[hidden] { display: none; }
+#debug ul { list-style: none; margin: 0; padding: 4px 0; }
+#debug li { display: flex; align-items: center; gap: 8px; padding: 7px 16px 7px 10px; cursor: pointer; }
+#debug li.sel, #debug li:hover { background: rgba(255, 255, 255, 0.1); }
+#debug .box { width: 9px; height: 9px; border: 1.5px solid rgba(255, 255, 255, 0.8); border-radius: 2px; }
+#debug li[aria-checked="true"] .box { background: #f4c542; border-color: #f4c542; }
+#debug .box.dot { border-radius: 50%; }
