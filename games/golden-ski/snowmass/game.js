@@ -72,7 +72,33 @@ const ASSIST = {
   on: { grip: 1.2, cap: 34, capDrag: 0.25, airG: 1.15, align: 2.5, clean: 25, sloppy: 55, crash: 20 },
   off: { grip: 1.0, cap: Infinity, capDrag: 0, airG: 1.0, align: 0, clean: 15, sloppy: 45, crash: 17 },
 };
-const physics = { momentum: true, assists: true };
+// ---------- Carve physics (proposal, Powderhorn physics lab) ----------
+// Momentum with real turn mechanics. Steering asks for a share of the tightest turn you can hold right
+// now: a ski on edge can't carve tighter than about 7 m, and the snow can't hold more than about 1.6 g
+// sideways on a groomer, so the tightest clean turn gets wider with speed squared (radius = v^2 / grip).
+// Like a real skier, Goldie leans exactly enough to balance the turn, so full steer is a clean carve at
+// the grip limit, never a washout. Carving costs a little speed (the edge cuts the snow), more the harder
+// you pull. Slow, the skis pivot instead; steering with the brake held is a skidded speed-control turn.
+// Air is thinner up here (about 70% of sea level at 3,000 m), so drag is lower, and waxed skis glide
+// better once they're moving, so runouts and cat tracks keep you rolling.
+const CV = {
+  R_MIN: 7,                     // m: tightest carve a ski can make
+  LAT_GRIP: 1.4,                // sideways grip = snow grip x this: 1.6 g groomed, 1.05 g powder
+  CLEAN: 0.92,                  // full steer asks for this share of the grip, so there's a margin
+  EDGE_SWAP: 0.45,              // s to roll from a full turn one way to a full turn the other way
+  CARVE_DRAG: 0.08,             // speed lost per (m/s^2) of sideways pull
+  PIVOT: 2.4,                   // rad/s the skis pivot at full steer standing still...
+  PIVOT_V: 3,                   // ...divided by (1 + speed / 3): almost nothing at speed
+  SKID_TURN: 2.6,               // rad/s extra pivot when steering with the brake held (skidded turn)
+  SKID_BRAKE: 2.5,              // m/s^2 the brake adds in a skidded turn (a full hockey stop is BRAKE)
+  TUCK_TURN: 0.5,               // tucked, the tightest turn is twice as wide
+  DRAG: 0.0045, TUCK_DRAG: 0.0024, // sea-level drag (same as Momentum)...
+  AIR_SCALE: 8500,              // ...times exp(-altitude / 8500 m) for thinner air
+  GLIDE: 3,                     // m/s: waxed skis glide better once moving (a film of meltwater): friction runs
+                                // from 1.2x the snow's figure standing still down toward 0.6x at speed
+  LEAN_T: 0.22,                 // s: body lean chases the stick with this lag (about 0.5 s to get most of the way over)
+};
+const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false };
 const assist = () => (physics.assists ? ASSIST.on : ASSIST.off);
 
 // ---------- The mountain ----------
@@ -1309,6 +1335,7 @@ for (const [name, label] of [['Sunnyside', 'Start: Sunnyside'], ['Powderhorn', '
   STARTS.push({ label, x: p.x, z: p.z, heading: Math.atan2(q.x - p.x, -(q.z - p.z)) });
 }
 if (STARTS.length) Object.assign(META.start, STARTS[0], { name: 'Village Express, top' });
+// Physics lab: start on Powderhorn, the long test run.
 {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cablePts), 3));
@@ -1671,6 +1698,10 @@ const DEBUG_ITEMS = [
   { name: 'Freecam', get: () => free.on, set: (on) => setFreecam(on) },
   { name: 'Momentum physics (off = Classic)', get: () => physics.momentum, set: (on) => { physics.momentum = on; } },
   { name: 'Assists (Momentum only)', get: () => physics.assists, set: (on) => { physics.assists = on; } },
+  { name: 'Carve turns', get: () => physics.carve, set: (on) => { physics.carve = on; } },
+  { name: 'Weight: lean drives the turn', get: () => physics.weight, set: (on) => { physics.weight = on; } },
+  { name: 'Crashes', get: () => physics.crashes, set: (on) => { physics.crashes = on; } },
+  { name: 'Motion feel: camera tilt + lean', get: () => physics.feel, set: (on) => { physics.feel = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },
   { name: 'Detailed runs (2 m)', get: () => patchOn, set: (on) => setPatch(on) },
@@ -1781,6 +1812,7 @@ const sk = {
   crashed: false, crashT: 0, landT: 0, landQ: '', skid: 0, tuck: false, brake: false, steer: 0, frame: FRAMES.stand,
   stopT: 0,
   edge: 0, spin: 0, yawRate: 0, charge: 0, poleCD: 0, poleT: 0, pole: false,
+  edgeA: 0, latA: 0, roll: 0, kappa: 0, lean: 0,
 };
 let phase = 'ready';            // ready (standing at the summit) -> skiing -> back (fading to the summit)
 let simTime = 0, backT = 0, trips = 0;
@@ -1801,6 +1833,7 @@ function placeSkier(x, z, heading, speed) {
   sk.grounded = true; sk.airTime = 0; sk.airMax = 0; sk.popCD = 0;
   sk.crashed = false; sk.crashT = 0; sk.landT = 0; sk.skid = 0; sk.stopT = 0;
   sk.edge = 0; sk.spin = 0; sk.yawRate = 0; sk.charge = 0; sk.poleCD = 0;
+  sk.edgeA = 0; sk.latA = 0; sk.roll = 0; sk.kappa = 0; sk.lean = 0;
   cameraSnap = true;
 }
 function toSummit() {
@@ -1955,6 +1988,7 @@ function land(s) {
 const travelYaw = () => Math.atan2(sk.vel.x, -sk.vel.z);
 
 function groundStepM(dt) {
+  if (physics.carve) { groundStepC(dt); return; }
   const A = assist();
   const s0 = sample(sk.pos.x, sk.pos.z);
   const n = normalFrom(s0, tmpN);
@@ -2044,6 +2078,121 @@ function groundStepM(dt) {
   if (sp1 > 1e-6) sk.vel.multiplyScalar(sp / sp1);
 }
 
+// ---------- Carve model (proposal) ----------
+function groundStepC(dt) {
+  const A = assist();
+  const s0 = sample(sk.pos.x, sk.pos.z);
+  const n = normalFrom(s0, tmpN);
+  const surf = surfaceAt(sk.pos.x, sk.pos.z);
+  const nAcc = G * n.y;
+  let speed = sk.vel.length();
+  const yaw0 = travelYaw();
+
+  // Steering asks for a share of the tightest clean turn at this speed: 7 m slow, wider with v^2 fast.
+  const latMax = surf.grip * CV.LAT_GRIP * (A.grip > 1 ? 1.1 : 1) * (sk.tuck ? TUCK_GRIP : 1) * nAcc;
+  const kMax = Math.min(1 / CV.R_MIN, (CV.CLEAN * latMax) / Math.max(speed * speed, 1)) * (sk.tuck ? CV.TUCK_TURN : 1);
+  // Rolling from one edge to the other takes a moment.
+  if (physics.weight) {
+    // Weight: the stick sets how far she wants to lean; her body gets there over a split second.
+    // The lean, not the stick, bends the ski: radius = v^2 / (g tan lean). Hold a lean while the turn
+    // climbs uphill and bleeds speed, and the same lean bites tighter, so the turn finishes itself.
+    const leanMax = Math.atan2(kMax * speed * speed, nAcc);
+    sk.lean += (clamp(sk.steer, -1, 1) * leanMax - sk.lean) * (1 - Math.exp(-dt / CV.LEAN_T));
+    const kHold = Math.tan(sk.lean) * nAcc / Math.max(speed * speed, 1);
+    sk.kappa = clamp(kHold, -1.15 / CV.R_MIN, 1.15 / CV.R_MIN);
+  } else {
+    const kStep = (2 / CV.R_MIN / CV.EDGE_SWAP) * dt;
+    sk.kappa = clamp(sk.kappa + clamp(clamp(sk.steer, -1, 1) * kMax - sk.kappa, -kStep, kStep), -kMax * 1.15, kMax * 1.15);
+    sk.lean = Math.atan2(sk.kappa * speed * speed, nAcc);
+  }
+  let skiRate = sk.kappa * speed;
+  // Slow, the skis pivot under your feet instead; steering with the brake held throws them sideways.
+  skiRate += sk.steer * CV.PIVOT / (1 + speed / CV.PIVOT_V);
+  const skidTurn = sk.brake && Math.abs(sk.steer) > 0.2;
+  if (skidTurn) skiRate += sk.steer * CV.SKID_TURN;
+  sk.heading = wrapAngle(sk.heading + skiRate * dt);
+  // How far she's leaning: just enough to balance the turn (for the sprite and the camera).
+  sk.edgeA = Math.atan2(sk.kappa * speed * speed, nAcc);
+  sk.edge = Math.min(1, Math.abs(sk.edgeA) / 1.1);
+  const f = skiDir(n, tmpF);
+
+  // Gravity along the slope.
+  sk.vel.x += nAcc * n.x * dt;
+  sk.vel.y += (-G + nAcc * n.y) * dt;
+  sk.vel.z += nAcc * n.z * dt;
+  sk.vel.addScaledVector(n, -sk.vel.dot(n));
+
+  speed = sk.vel.length();
+  sk.skid = 0;
+  if (speed < 0.3) {
+    const along = sk.vel.dot(f);
+    sk.vel.copy(f).multiplyScalar(Math.max(0, along));
+    speed = sk.vel.length();
+  } else {
+    // The edge pushes sideways up to the snow's grip (about 1.6 g on a groomer). Within it your
+    // momentum follows the skis; past it the rest is a skid.
+    tmpA.copy(sk.vel).divideScalar(speed);
+    const alpha = Math.atan2(tmpB.crossVectors(tmpA, f).dot(n), tmpA.dot(f));
+    const omega = latMax / Math.max(speed, 1.5);
+    const turn = clamp(alpha, -omega * dt, omega * dt);
+    tmpB.crossVectors(n, sk.vel);
+    sk.vel.multiplyScalar(Math.cos(turn)).addScaledVector(tmpB, Math.sin(turn));
+    const rest = Math.abs(alpha - turn);
+    sk.skid = rest > Math.PI / 2 ? 1 : Math.sin(rest);
+  }
+
+  if (speed > 0) {
+    const air = Math.exp(-sk.pos.y / CV.AIR_SCALE);
+    const drag = (sk.tuck ? CV.TUCK_DRAG : CV.DRAG) * air * speed * speed + (speed > A.cap ? A.capDrag * (speed - A.cap) ** 2 : 0);
+    let fric = surf.friction * (0.6 + 0.6 / (1 + speed / CV.GLIDE)) * nAcc;
+    if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
+    const brake = sk.brake ? (skidTurn ? CV.SKID_BRAKE : BRAKE) : 0;
+    const decel = fric + drag + SKID * sk.skid * nAcc + brake + CV.CARVE_DRAG * Math.abs(sk.kappa) * speed * speed;
+    const next = Math.max(0, speed - decel * dt);
+    sk.vel.multiplyScalar(next / speed);
+    speed = next;
+  }
+
+  sk.poleCD = Math.max(0, sk.poleCD - dt);
+  if (sk.pole && sk.poleCD === 0 && speed < MO.POLE_MAX) {
+    sk.vel.addScaledVector(f, MO.POLE * (1 - speed / MO.POLE_MAX));
+    sk.poleCD = MO.POLE_EVERY;
+    sk.poleT = 0.22;
+  }
+
+  // How fast your path is turning, and the sideways g you're pulling: spin for jumps, bank for the camera.
+  sk.yawRate += (wrapAngle(travelYaw() - yaw0) / dt - sk.yawRate) * 0.3;
+  sk.latA = sk.yawRate * speed;
+
+  sk.popCD = Math.max(0, sk.popCD - dt);
+  let popped = false;
+  if (input.jump && sk.popCD === 0) {
+    const pop = MO.OLLIE_MIN + (MO.OLLIE_MAX - MO.OLLIE_MIN) * clamp(sk.charge / MO.OLLIE_CHARGE, 0, 1);
+    sk.vel.addScaledVector(n, pop * (1 - MO.OLLIE_UP)).addScaledVector(UP, pop * MO.OLLIE_UP);
+    sk.popCD = POP_COOLDOWN;
+    popped = true;
+    sk.charge = 0;
+  }
+
+  sk.pos.addScaledVector(sk.vel, dt);
+  const s1 = sample(sk.pos.x, sk.pos.z);
+  const gap = sk.pos.y - s1.h;
+  if (popped || gap > 0.5 * nAcc * dt * dt + TAKEOFF_MARGIN) {
+    sk.grounded = false;
+    sk.airTime = 0;
+    sk.airMax = Math.max(0, gap);
+    sk.spin = sk.yawRate;
+    sk.latA = 0;
+    return;
+  }
+  sk.pos.y = s1.h;
+  const n1 = normalFrom(s1, tmpN);
+  const sp = sk.vel.length();
+  sk.vel.addScaledVector(n1, -sk.vel.dot(n1));
+  const sp1 = sk.vel.length();
+  if (sp1 > 1e-6) sk.vel.multiplyScalar(sp / sp1);
+}
+
 function airStepM(dt) {
   const A = assist();
   // Steering in the air is torque on the spin you took off with; let go and the spin carries on.
@@ -2084,7 +2233,7 @@ function landM(s) {
   const f = skiDir(n, tmpF);
   const speed = sk.vel.length();
   const miss = speed > 2 ? Math.acos(clamp(sk.vel.dot(f) / speed, -1, 1)) : 0;
-  if (miss > A.sloppy * Math.PI / 180 || impact > A.crash) {
+  if (physics.crashes && (miss > A.sloppy * Math.PI / 180 || impact > A.crash)) {
     crash();
   } else if (miss > A.clean * Math.PI / 180 || impact > HARD_IMPACT) {
     // The skis scrub off the part of your speed that isn't along them.
@@ -2116,6 +2265,7 @@ function crashStepM(dt) {
 }
 
 function crash() {
+  if (!physics.crashes) return;
   sk.crashed = true;
   sk.crashT = 0;
   sk.landT = 0;
@@ -2161,7 +2311,7 @@ function treeCollide() {
         if (sk.grounded) sk.pos.y = groundY(sk.pos.x, sk.pos.z);
         const into = sk.vel.x * nx + sk.vel.z * nz;
         if (into >= 0) continue;
-        if (!sk.crashed && -into > CRASH_HIT_SPEED) {
+        if (!sk.crashed && physics.crashes && -into > CRASH_HIT_SPEED) {
           crash();
           sk.vel.multiplyScalar(0.35);
         } else {
@@ -2256,7 +2406,12 @@ function updateCamera(p, dt) {
   look.copy(p).addScaledVector(camDir, 4);
   look.y = p.y + 1.0;
   camera.lookAt(look);
-  const fov = Math.min(66, 60 + speed * 0.22) * (camera.aspect < 1 ? 1.15 : 1);
+  // Motion feel: the camera banks into the turn with the sideways g you're pulling.
+  // Motion feel: the camera tilts gently with her lean (up to 6 deg), easing in so it never jolts.
+  const bankTo = physics.feel && sk.grounded && !sk.crashed ? clamp((sk.lean || sk.edgeA) * 0.11, -0.105, 0.105) : 0;
+  sk.roll += (bankTo - sk.roll) * (cameraSnap ? 1 : 1 - Math.exp(-2 * dt));
+  camera.rotateZ(-sk.roll);
+  const fov = (physics.feel ? Math.min(78, 60 + speed * 0.4) : Math.min(66, 60 + speed * 0.22)) * (camera.aspect < 1 ? 1.15 : 1);
   if (cameraSnap) { camera.fov = fov; camera.updateProjectionMatrix(); }
   else if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
   cameraSnap = false;
@@ -2326,6 +2481,10 @@ function updateFreecam(dt) {
   if (Math.abs(near - camera.near) > 0.02 * camera.near) { camera.near = near; camera.updateProjectionMatrix(); }
 }
 
+function facingCam(p) {
+  const dx = camera.position.x - p.x, dz = camera.position.z - p.z, l = Math.hypot(dx, dz) || 1;
+  return (dx * Math.sin(sk.heading) - dz * Math.cos(sk.heading)) / l;
+}
 function render(alpha, dt) {
   const p = view.copy(sk.prev).lerp(sk.pos, alpha);
   const snap = cameraSnap;
@@ -2339,6 +2498,8 @@ function render(alpha, dt) {
   skierMesh.position.copy(p);
   const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
   skierMesh.rotation.y = yaw;
+  // Motion feel: Goldie leans into the turn as far as her skis are on edge (mirrored when seen from the front).
+  skierMesh.rotation.z = physics.feel && sk.grounded && !sk.crashed ? -sk.edgeA * 0.55 * (facingCam(p) > 0.35 ? -1 : 1) : 0;
   // Sun in the sprite's space: x along the sprite's right, z toward the camera.
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   skierMat.uniforms.sunLocal.value.set(SUN_DIR.x * cy - SUN_DIR.z * sy, SUN_DIR.y, SUN_DIR.x * sy + SUN_DIR.z * cy);
@@ -2356,7 +2517,7 @@ function render(alpha, dt) {
   shadow.scale.setScalar(1 + lift * 0.08);
 
   updateSpray(p, dt);
-  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 3.6)} km/h · ${physics.momentum ? (physics.assists ? 'Momentum' : 'Momentum, raw') : 'Classic'}`;
+  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 3.6)} km/h · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g`;
   updateWorld(dt);
   skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
   renderer.render(scene, camera);
@@ -2399,7 +2560,7 @@ requestAnimationFrame(frame);
 
 // ---------- Test hooks ----------
 window.__golden = {
-  sk, input, META, physics, MO, ASSIST, keys, sample, surfaceAt, renderer, camera, pages,
+  sk, input, META, physics, MO, ASSIST, CV, keys, sample, surfaceAt, renderer, camera, pages,
   cover: (x, z) => { const k = cellAt(x, z); return { conifer: conifer(k), aspen: aspen(k), rock: isRock(k), powder: POWDER[k], h: H[k] }; },
   get phase() { return phase; },
   get trips() { return trips; },
