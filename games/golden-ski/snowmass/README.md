@@ -12,6 +12,9 @@ as clumps of trees instead of single trees. FreePlay starts at the Village Expre
   Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs, Noon / Golden hour / Night / Storm,
   and a start at Sunnyside, Powderhorn or the top of any lift.
 - The Speed readout also shows the frame rate.
+- Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
+  siding and roof snow. The ground blends up to each deck so you can ski on and off, and the post, legs and hut are solid.
+  Chairs are detailed close up, plain further out and hidden past 2.5 km.
 - No build step. `data.js` holds the terrain, forest, runs and lifts; `patch.js` holds the detailed runs built ahead of time
   (rebuild with `bake.mjs` in the kit when the runs change; the page builds them itself if patch.js is out of date).
   Three.js loads from jsDelivr.
