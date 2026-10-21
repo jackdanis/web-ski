@@ -914,7 +914,7 @@ function updateTrees(force) {
 // gaps and battens catch the four Snowlight bands. Up close only: past ~300 m it fades to the tile's average.
 const TILES = { hood: 0, deck: 1, siding: 2, window: 3, roofSnow: 4, concrete: 5, cabin: 6, steel: 7, pad: 8, metalRoof: 9,
   darkPanel: 10, cedar: 11, stone: 12, curtain: 13, posterA: 14, posterB: 15, posterC: 16 };
-const TILE_AVG = [[0.14, 0.276, 0.588], [0.365, 0.279, 0.204], [0.469, 0.337, 0.225], [0.294, 0.303, 0.351], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541],
+const TILE_AVG = [[0.14, 0.276, 0.588], [0.448, 0.352, 0.271], [0.469, 0.337, 0.225], [0.297, 0.307, 0.353], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541],
   [0.135, 0.152, 0.181], [0.638, 0.658, 0.686], [0.745, 0.115, 0.096], [0.271, 0.281, 0.301], [0.148, 0.153, 0.167], [0.591, 0.387, 0.219],
   [0.399, 0.378, 0.352], [0.247, 0.307, 0.38], [0.541, 0.573, 0.616], [0.389, 0.325, 0.326], [0.614, 0.505, 0.493]];
 while (TILE_AVG.length < 32) TILE_AVG.push([1, 1, 1]);
