@@ -1,12 +1,12 @@
 // Golden Ski mockup: the World Kit on Snowmass. A copy of the Snowmass FreePlay mockup with the kit's
 // chairlifts on the real lift lines, rocks, painted shadows, lamps, the four times of day and the 320x180 look.
 // Physics: the approved Momentum model (PR #7, the physics thread), switchable in the Tab menu against the
-// milestone 1 model, "Classic". Sunnyside and Max Park are detailed 2 m runs.
+// milestone 1 model, "Classic". Every run is shaped on a 2 m grid (runs.js and runs/, loaded by distance).
 // World units are meters. x is east and z is south of the FreePlay start, y is meters above sea level.
 // The mountain is USGS 3DEP elevation at 10 m; trees and runs come from a Sentinel-2 photo (26 March 2025).
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from './data.js';
-import { PATCH_DATA } from './patch.js';
+import { RUN_DATA } from './runs.js';
 
 // ---------- Tuning (design book, chapter 05; unchanged from milestone 1) ----------
 const STEP = 1 / 60;            // fixed physics step
@@ -123,6 +123,7 @@ const TREELINE = 3560;          // no conifers above this (the satellite photo a
 const TREE_FAR = 900;           // trees are drawn within this distance; beyond it the forest is a tint on the ground
 const TREE_NEAR = [250, 350];    // single trees hand over to clump sprites across this distance
 const CLUMP = 32;               // m: past TREE_NEAR, the trees in each 32 m square are drawn as one clump
+const FILL_NEAR = [120, 160];   // the packed fill among the run-edge trees fades out across this; past it, the mapped trees
 const CHUNK = 32;               // terrain chunk: 32 cells of 10 m (320 m)
 const SUPER = 4;                // far away, 4 x 4 chunks are drawn as one piece (1.28 km)
 const LOD_STEPS = [1, 2, 4, 8, 16]; // triangle size in cells: 10, 20, 40, 80, 160 m
@@ -174,9 +175,15 @@ const aspen = (k) => ((COVER[k] >> 4) & 7) / 7;
 const isRock = (k) => COVER[k] >> 7;
 const gridH = (i, j) => H[clamp(j, 0, NZ - 1) * NX + clamp(i, 0, NX - 1)];
 const cellAt = (x, z) => clamp(Math.round((z - Z0) / CELL), 0, NZ - 1) * NX + clamp(Math.round((x - X0) / CELL), 0, NX - 1);
+// Signed meters to the nearest run of any kind (half meters, 10 m grid), from the traced outlines; null until unpacked.
+let RUN_AREA = null;
+const EDGE_TREES = 25;          // m: within this of a run the trees come from the 1 m tree-height map instead
 // Groomed on the real runs, powder everywhere else.
 const POWDER = new Uint8Array(NX * NZ);
 for (let k = 0; k < NX * NZ; k++) POWDER[k] = RUNF[k] < 0 ? 0 : 1;
+// How much the whole-mountain runs' shaping changes the snow, on the 10 m grid (cm): added to the 10 m ground wherever
+// no run tiles are loaded, so what is built as the page loads (lift towers, stations) stands on the shaped snow.
+const RUN_DH = RUN_DATA && RUN_DATA.dh ? await inflate(RUN_DATA.dh).then((b) => new Int16Array(b.buffer, b.byteOffset, b.length / 2)) : null;
 
 const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
 const crd = (p0, p1, p2, p3, t) => 0.5 * ((p2 - p0) + 2 * (2 * p0 - 5 * p1 + 4 * p2 - p3) * t + 3 * (3 * p1 - p0 - 3 * p2 + p3) * t * t);
@@ -185,7 +192,6 @@ const rowV = [0, 0, 0, 0], rowD = [0, 0, 0, 0];
 // Height and gradient (dh/dx, dh/dz) at any point, on a smooth surface through the grid points:
 // the 10 m mountain, or the 2 m grid of the detailed runs where there is one (built further down).
 let PATCH = null, patchOn = true;
-const BAKE = new URLSearchParams(location.search).has('bake');
 function sampleGrid(g, nx, nz, x0, z0, cell, x, z, out) {
   const fx = clamp((x - x0) / cell, 0, nx - 1.001), fz = clamp((z - z0) / cell, 0, nz - 1.001);
   const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
@@ -220,7 +226,16 @@ function samplePatch(P, x, z, out) {
 }
 function sampleBase(x, z, out) {
   if (patchOn && PATCH && samplePatch(PATCH, x, z, out)) return out;
-  return sampleGrid(H, NX, NZ, X0, Z0, CELL, x, z, out);
+  sampleGrid(H, NX, NZ, X0, Z0, CELL, x, z, out);
+  if (patchOn && RUN_DH) {
+    const fx = clamp((x - X0) / CELL, 0, NX - 1.001), fz = clamp((z - Z0) / CELL, 0, NZ - 1.001);
+    const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j, k = j * NX + i;
+    const a = RUN_DH[k], b = RUN_DH[k + 1], c = RUN_DH[k + NX], d = RUN_DH[k + NX + 1];
+    out.h += ((a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz) / 100;
+    out.gx += ((b - a) * (1 - tz) + (d - c) * tz) / (100 * CELL);
+    out.gz += ((c - a) * (1 - tx) + (d - b) * tx) / (100 * CELL);
+  }
+  return out;
 }
 // Chairlift stations sit on their own snow: flat on the deck, then easing back down (or up) to the natural
 // ground over the apron around it, so the slope flows into the station and you can ski onto the deck.
@@ -248,7 +263,9 @@ function nearSolid(x, z, pad) {
 let solidY = null;              // while the skier steps, her height: a box top is ground only from above
 function solidTop(x, z, out) {
   for (const b of SOLIDS) {
-    const dx = x - b.x, dz = z - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz;
+    const dx = x - b.x, dz = z - b.z;
+    if (Math.abs(dx) > b.hx + b.hz || Math.abs(dz) > b.hx + b.hz) continue;
+    const u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz;
     if (Math.abs(u) > b.hx || Math.abs(v) > b.hz) continue;
     const top = b.y + b.hy;
     if (top > out.h && solidY >= top - 0.4) { out.h = top; out.gx = 0; out.gz = 0; }
@@ -722,6 +739,7 @@ function makePage(pi, pj) {
       }
       const c = conifer(k), a = aspen(k);
       if (c + a < 0.05) continue;
+      if (RUN_AREA && RUN_AREA[k] < EDGE_TREES * 2) continue;   // near a run: the real trees stand there (edge trees)
       // up to two trees a cell: a second, set across the cell from the first, where the forest is thick.
       // Heights are real Colorado ones (spruce 15-24 m, fir 12-20 m, aspen 10-15 m), so the runs read at true size.
       for (let q = 0; q < 2; q++) {
@@ -755,14 +773,19 @@ function makePage(pi, pj) {
 // What the page draws. near: every tree, sorted into 4 x 4 squares of 80 m (sub[q] .. sub[q + 1] are square q's)
 // so only the squares near the camera are sent. far: one clump per 32 m square holding three or more trees, at
 // their middle, as tall as the tallest of the main kind there; squares with fewer keep their trees, as do props.
-function pageData(list, pi, pj) {
+function pageData(all, pi, pj) {
   const P = PAGE * CELL, px = X0 + pi * P, pz = Z0 + pj * P, SQ = P / 4;
   const inst = (t, r, aspect) => [t.x, t.y, t.z, t.height, r.u0, r.u1, aspect, r.v1];
   const sq = (t) => clamp(Math.floor((t.z - pz) / SQ), 0, 3) * 4 + clamp(Math.floor((t.x - px) / SQ), 0, 3);
-  const sorted = list.slice().sort((a, b) => sq(a) - sq(b));
-  const near = new Float32Array(sorted.length * 8), sub = new Int32Array(17);
-  sorted.forEach((t, n) => { near.set(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect), n * 8); sub[sq(t) + 1] = n + 1; });
-  for (let q = 1; q <= 16; q++) sub[q] = Math.max(sub[q], sub[q - 1]);
+  const squares = (ts) => {
+    const sorted = ts.slice().sort((a, b) => sq(a) - sq(b));
+    const near = new Float32Array(sorted.length * 8), sub = new Int32Array(17);
+    sorted.forEach((t, n) => { near.set(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect), n * 8); sub[sq(t) + 1] = n + 1; });
+    for (let q = 1; q <= 16; q++) sub[q] = Math.max(sub[q], sub[q - 1]);
+    return { near, sub };
+  };
+  // the packed fill among the run-edge trees is its own layer, drawn only within FILL_NEAR and never in a clump
+  const list = all.filter((t) => !t.fill), { near, sub } = squares(list), fill = squares(all.filter((t) => t.fill));
   const cells = new Map(), far = [];
   for (const t of list) {
     if (t.kind > KIND.snowghost) { far.push(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect)); continue; }
@@ -792,7 +815,7 @@ function pageData(list, pi, pj) {
     const spread = Math.max(x1 - x0, z1 - z0) + h * 0.4;
     far.push(inst({ x: x / ts.length, y, z: z / ts.length, height: h }, r, r.aspect * clamp(spread / (h * r.aspect), 0.85, 1.3)));
   }
-  return { near, sub, far: new Float32Array(far.flat()) };
+  return { near, sub, fnear: fill.near, fsub: fill.sub, far: new Float32Array(far.flat()) };
 }
 const TREE_MAX = 60000;
 // Two layers in one atlas: single trees near the camera, clumps past TREE_NEAR. Each fades out across TREE_NEAR
@@ -810,7 +833,7 @@ function treeLayer(layer) {
   geo.instanceCount = 0;
   return geo;
 }
-const treeGeo = treeLayer(0), clumpGeo = treeLayer(1);
+const treeGeo = treeLayer(0), clumpGeo = treeLayer(1), fillGeo = treeLayer(0);
 const treeShaders = {
   vertexShader: /* glsl */ `
     uniform vec3 uSun; uniform vec2 uNear; uniform float uLayer;
@@ -860,8 +883,12 @@ const treeMat = new THREE.ShaderMaterial(Object.assign({
 const clumpMat = new THREE.ShaderMaterial(Object.assign({
   uniforms: Object.assign({}, treeMat.uniforms, { uLayer: { value: 1 } }),
 }, treeShaders));
-const treeMesh = new THREE.Mesh(treeGeo, treeMat), clumpMesh = new THREE.Mesh(clumpGeo, clumpMat);
-for (const m of [treeMesh, clumpMesh]) { m.frustumCulled = false; scene.add(m); }
+// the fill layer: single trees like the near layer, faded out across FILL_NEAR instead
+const fillMat = new THREE.ShaderMaterial(Object.assign({
+  uniforms: Object.assign({}, treeMat.uniforms, { uNear: { value: new THREE.Vector2(...FILL_NEAR) } }),
+}, treeShaders));
+const treeMesh = new THREE.Mesh(treeGeo, treeMat), clumpMesh = new THREE.Mesh(clumpGeo, clumpMat), fillMesh = new THREE.Mesh(fillGeo, fillMat);
+for (const m of [treeMesh, clumpMesh, fillMesh]) { m.frustumCulled = false; scene.add(m); }
 let treePage = '', treeAt = null;
 const TREE_STEP = 48;   // m the camera moves before the near squares are picked again
 function updateTrees(force) {
@@ -873,8 +900,8 @@ function updateTrees(force) {
   treePage = id;
   const R = Math.ceil(TREE_FAR / P) + 1;
   const boxDist = (x0, z0, s) => Math.hypot(Math.max(0, x0 - cx, cx - x0 - s), Math.max(0, z0 - cz, cz - z0 - s));
-  const nb = treeGeo.attributes.iPos.data, fb = clumpGeo.attributes.iPos.data;
-  let n = 0, m = 0;
+  const nb = treeGeo.attributes.iPos.data, fb = clumpGeo.attributes.iPos.data, lb = fillGeo.attributes.iPos.data;
+  let n = 0, m = 0, l = 0;
   const inRange = [];
   for (let b = pj - R; b <= pj + R; b++) {
     for (let a = pi - R; a <= pi + R; a++) {
@@ -894,12 +921,20 @@ function updateTrees(force) {
           n += count;
         }
       }
+      if (d < FILL_NEAR[1] + TREE_STEP + 20) {
+        for (let q = 0; q < 16; q++) {
+          if (boxDist(x0 + (q % 4) * P / 4, z0 + Math.floor(q / 4) * P / 4, P / 4) > FILL_NEAR[1] + TREE_STEP + 20) continue;
+          const count = Math.min(pg.fsub[q + 1] - pg.fsub[q], TREE_MAX - l);
+          lb.array.set(pg.fnear.subarray(pg.fsub[q] * 8, (pg.fsub[q] + count) * 8), l * 8);
+          l += count;
+        }
+      }
       const count = Math.min(pg.far.length / 8, TREE_MAX - m);
       fb.array.set(pg.far.subarray(0, count * 8), m * 8);
       m += count;
     }
   }
-  for (const [geo, buf, k] of [[treeGeo, nb, n], [clumpGeo, fb, m]]) {
+  for (const [geo, buf, k] of [[treeGeo, nb, n], [clumpGeo, fb, m], [fillGeo, lb, l]]) {
     buf.addUpdateRange(0, k * 8);
     buf.needsUpdate = true;
     geo.instanceCount = k;
@@ -1546,10 +1581,10 @@ if (apronGeos.length) {
   scene.add(new THREE.Mesh(geo, mat));
 }
 // ---------- Run art pass: trail signs, rope lines and a fence on the real runs ----------
-// Every named run gets a trail sign at its top. Sunnyside and Max Park, which start together at the top of
+// Every named run gets a trail sign where it begins. Sunnyside and Max Park, which start together at the top of
 // Village Express, get rope lines down both edges of their first stretch, and the top terminal gets a rail fence.
 const RUNS = MAP.runs || [];
-const PROPS = new Map();                       // tree page -> props (rope poles), merged into that page's trees
+const PROPS = new Map();                       // tree page -> props (run-edge trees, rope poles), merged into that page's trees
 function addProp(t) {
   const P = PAGE * CELL, key = Math.floor((t.x - X0) / P) * 1000 + Math.floor((t.z - Z0) / P);
   if (!PROPS.has(key)) PROPS.set(key, []);
@@ -1568,99 +1603,17 @@ function alongRun(run, dist) {
     left -= len;
   }
 }
-// ---------- Detailed runs on a 2 m grid ----------
-// The 10 m mountain is too coarse for a groomed run: no crisp edge, no windrow, every 10 m bump shows.
-// Each detailed run gets a smoothed line and a groomed cross-section: a smoothed long profile, a gentler
-// side slope than the hill it is cut into, a slight crown and a windrow berm at each edge, blending back
-// into the 10 m mountain over BLEND meters past the edge. That makes one 2 m height grid which the
-// physics samples and a fine mesh draws; the 10 m ground is cut away underneath it.
-const DETAIL_RUNS = ['Sunnyside', 'Max Park', 'Powderhorn'];
-// The Elk Camp side, Elk Camp to Two Creeks, is the test ground for the whole mountain: every groomed run
-// whose line lies mostly inside this box is detailed too, so its junctions and cat tracks can be tried out.
-// Ungroomed runs stay on the 10 m mountain until the runs are mapped properly.
-const DETAIL_AREA = { x0: 2150, x1: 4800, z0: -5900, z1: -700 };
-const DETAIL_GROOMED = /^Funnel Bypass$/;     // a cat track the run file's name guess calls ungroomed
-const inDetailArea = (r) => r.points.filter(([x, z]) => x > DETAIL_AREA.x0 && x < DETAIL_AREA.x1 && z > DETAIL_AREA.z0 && z < DETAIL_AREA.z1).length >= r.points.length / 2;
-const isDetailRun = (r) => !r.area && r.points.length > 1 &&
-  (DETAIL_RUNS.includes(r.name) || (inDetailArea(r) && (r.kind === 'groomed' || DETAIL_GROOMED.test(r.name))));
-const PCELL = 2, BLEND = 18, CROWN = 0.12, BERM = 0.35, BERM_W = 1.6, SIDE_KEEP = 0.7, TAPER = 60;
-// Cat tracks (the narrow runs) are a bench cut across the slope: nearly level from side to side.
-const TRACK_W = 14, TRACK_KEEP = 0.1;
-// The 2 m grid is kept in tiles of 64 x 64 points (128 m), only where a detailed run reaches, and drawn as
-// meshes of 2 x 2 tiles (256 m): 2 m cells within PATCH_NEAR of the camera, 4 m cells out to PATCH_FAR, and past
-// that the 10 m ground draws the runs, cut by the same edges. The physics always uses the 2 m grid.
-// The grid is built ahead of time (bake.mjs writes patch.js); ?bake builds it in the page instead.
+// ---------- The runs on a 2 m grid ----------
+// The 10 m mountain is too coarse for a groomed run: no crisp edge, no windrow, every 10 m bump shows. Every run
+// (expert runs too, as natural snow) is on a 2 m height grid, shaped ahead of time from the traced outlines, which
+// the physics samples and a fine mesh draws, blending back into the 10 m mountain over BLEND meters past its edge;
+// the 10 m ground is cut away underneath it.
+const PCELL = 2, BLEND = 18, BERM_W = 1.6;
+// The 2 m grid is kept in tiles of 64 x 64 points (128 m), only where a run reaches, and drawn as meshes of
+// 2 x 2 tiles (256 m): 2 m cells within PATCH_NEAR of the camera, 4 m cells out to PATCH_FAR, and past that the
+// 10 m ground draws the runs, cut by the same edges. The physics always uses the 2 m grid.
 const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 2, PATCH_NEAR = 250, PATCH_FAR = 800;
-// what the baked tiles store and in what unit (millimeters, centimeters)
-const BAKED = [['hp', 1000], ['hr', 1000], ['edge', 100]];
-// meters outside a run's groomed edge (negative inside); past either end of the line, the end is square
-const edgeOf = (u, hw, over) => (over > 0 ? Math.max(Math.abs(u) - hw, over) : Math.abs(u) - hw);
 const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-// Gaussian smoothing of a list, sigma in samples, renormalized at the ends
-function gauss(arr, sigma) {
-  const r = Math.ceil(sigma * 3), w = [];
-  for (let k = -r; k <= r; k++) w.push(Math.exp(-k * k / (2 * sigma * sigma)));
-  return arr.map((_, i) => {
-    let s = 0, n = 0;
-    for (let k = -r; k <= r; k++) { const j = i + k; if (j >= 0 && j < arr.length) { s += arr[j] * w[k + r]; n += w[k + r]; } }
-    return s / n;
-  });
-}
-// A groomed long profile never climbs: the closest profile to the hill that keeps dropping at least
-// MIN_GRADE (pool-adjacent violators on height + MIN_GRADE * distance), so the cat cuts the bumps.
-const MIN_GRADE = 0.04;
-function downhillFit(h, s) {
-  const blocks = [];                 // [mean, count] of y = h + MIN_GRADE * s, kept non-increasing
-  h.forEach((v, i) => {
-    blocks.push([v + MIN_GRADE * s[i], 1]);
-    while (blocks.length > 1 && blocks[blocks.length - 2][0] < blocks[blocks.length - 1][0]) {
-      const [m2, n2] = blocks.pop(), b = blocks[blocks.length - 1];
-      b[0] = (b[0] * b[1] + m2 * n2) / (b[1] + n2); b[1] += n2;
-    }
-  });
-  const out = [];
-  for (const [m, n] of blocks) for (let k = 0; k < n; k++) out.push(m - MIN_GRADE * s[out.length]);
-  return out;
-}
-// the run's line every 2 m, with the corners of the OSM line smoothed out
-function denseLine(points) {
-  const out = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const [ax, az] = points[i], [bx, bz] = points[i + 1], n = Math.max(1, Math.round(Math.hypot(bx - ax, bz - az) / PCELL));
-    for (let k = 0; k < n; k++) out.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n]);
-  }
-  out.push(points[points.length - 1]);
-  const xs = gauss(out.map((p) => p[0]), 5), zs = gauss(out.map((p) => p[1]), 5);
-  return xs.map((x, i) => [x, zs[i]]);
-}
-// Visit every grid point within reach of a polyline: fn(c, u, s, over, d) with c the point's slot in the
-// tiles, u the signed distance across the line, s the distance along it, over how far past either end the
-// point lies and d its distance from the line. Points in tiles that weren't kept are skipped.
-function rasterLine(P, pts, reach, fn) {
-  let s0 = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [ax, az] = pts[i], [bx, bz] = pts[i + 1], dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1e-6;
-    const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - P.x0) / PCELL)), i1 = Math.min(P.nx - 1, Math.ceil((Math.max(ax, bx) + reach - P.x0) / PCELL));
-    const j0 = Math.max(0, Math.floor((Math.min(az, bz) - reach - P.z0) / PCELL)), j1 = Math.min(P.nz - 1, Math.ceil((Math.max(az, bz) + reach - P.z0) / PCELL));
-    for (let j = j0; j <= j1; j++) {
-      for (let a = i0; a <= i1; a++) {
-        const c = P.at(a, j);
-        if (c < 0) continue;
-        const px = P.x0 + a * PCELL - ax, pz = P.z0 + j * PCELL - az, t = (px * dx + pz * dz) / (len * len);
-        // past a segment's end at a corner of the line, measure to that corner instead of skipping the point,
-        // or points in the sliver between two segments get no surface at all (a hole in the patch)
-        let over = 0, corner = false;
-        if (t < 0) { if (i > 0) corner = true; else over = -t * len; }
-        if (t > 1) { if (i < pts.length - 2) corner = true; else over = (t - 1) * len; }
-        const tc = clamp(t, 0, 1), d = Math.hypot(px - dx * tc, pz - dz * tc);
-        let u = (px * dz - pz * dx) / len;
-        if (corner) u = u < 0 ? -d : d;
-        fn(c, u, s0 + tc * len, over, d);
-      }
-    }
-    s0 += len;
-  }
-}
 // the 10 m mesh's own surface at any point: the same two triangles per cell that buildChunk draws up close
 function meshY(x, z) {
   const fx = clamp((x - X0) / CELL, 0, NX - 1.001), fz = clamp((z - Z0) / CELL, 0, NZ - 1.001);
@@ -1669,232 +1622,214 @@ function meshY(x, z) {
   if ((i + j) & 1) return tx + tz <= 1 ? h00 + tx * (h10 - h00) + tz * (h01 - h00) : h11 + (1 - tx) * (h01 - h11) + (1 - tz) * (h10 - h11);
   return tx >= tz ? h00 + tx * (h10 - h00) + tz * (h11 - h10) : h00 + tz * (h01 - h00) + tx * (h11 - h01);
 }
-{
-  const detail = RUNS.filter(isDetailRun);
-  // what the baked tiles were built from: the runs, the shaping numbers and a sample of the 10 m mountain
-  let sig = `v1|${PCELL},${BLEND},${CROWN},${BERM},${BERM_W},${SIDE_KEEP},${TAPER},${TRACK_W},${TRACK_KEEP},${MIN_GRADE},${TILE}|`;
-  for (const r of detail) sig += `${r.name}:${r.width}:${r.points.length}:${r.points[0]}:${r.points[r.points.length - 1]}|`;
-  for (let k = 0; k < H.length; k += 997) sig += Math.round(H[k] * 10) + ',';
-  let hash = 2166136261;
-  for (let i = 0; i < sig.length; i++) hash = Math.imul(hash ^ sig.charCodeAt(i), 16777619);
-  const key = (hash >>> 0).toString(16);
-  for (const r of detail) {
-    // a groomed profile must run downhill: turn round any line drawn from the bottom up
-    if (groundY(...r.points[0]) < groundY(...r.points[r.points.length - 1])) r.points = r.points.slice().reverse();
-    // stations every 2 m: smoothed line, long profile and side slope of the hill under it
-    const pts = denseLine(r.points), n = pts.length, hw = r.width / 2;
-    const C = [], K = [], S = [0];
-    for (let i = 0; i < n; i++) {
-      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      const nx = (b[1] - a[1]) / l, nz = -(b[0] - a[0]) / l;   // across, the same side as rasterLine's u
-      C.push(groundY(pts[i][0], pts[i][1]));
-      K.push((groundY(pts[i][0] + nx * 12, pts[i][1] + nz * 12) - groundY(pts[i][0] - nx * 12, pts[i][1] - nz * 12)) / 24);
-      if (i) S.push(S[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+// The whole-mountain runs, shaped ahead of time from the traced outlines (runs-build/scripts). runs.js holds the index,
+// the run-edge trees, the stand-in blocks and two 10 m fields; the 2 m tiles stream in by distance from
+// runs/<ca>_<cj>.json, 4 x 4 tiles to a file (Jack's choice 8). For each point a file has the shaped height's change
+// from the 10 m mountain's smooth surface (mm, as steps along each row) and the distances to the groomed edge and to
+// the edge of any run (int8 steps). Physics heights are put back together as a file loads; mesh heights and blend
+// weights tile by tile as meshes need them.
+const RUN_LOAD = 1200, RUN_DROP = 1700;          // m: chunks nearer the camera than this load, ones further are let go
+let runStream = null;
+if (RUN_DATA) {
+  const B = RUN_DATA, x0 = B.x0, z0 = B.z0, tx = B.nx / TILE, tz = B.nz / TILE, CH = B.chunk, step = B.edge_step;
+  const P = { x0, z0, cell: PCELL, nx: B.nx, nz: B.nz, key: 'runs', tiles: [], baked: true, nodes: B.tiles.length / 2 * TT };
+  // a grid point's slot in the loaded tiles, or -1
+  const tileOf = new Int32Array(tx * tz).fill(-1);
+  P.at = (a, j) => {
+    if (a < 0 || j < 0 || a >= P.nx || j >= P.nz) return -1;
+    const t = tileOf[(j >> TILE_BITS) * tx + (a >> TILE_BITS)];
+    return t < 0 ? -1 : t * TT + ((j & (TILE - 1)) << TILE_BITS) + (a & (TILE - 1));
+  };
+  // tile slots, grown as more are needed
+  let cap = 0;
+  const free = [], slotTile = [];
+  const grow = (n) => {
+    const fit = (A, T) => { const b = new T(n * TT); if (A) b.set(A); return b; };
+    P.hp = fit(P.hp, Float32Array); P.edge = fit(P.edge, Float32Array); P.aedge = fit(P.aedge, Int8Array);
+    P.hr = fit(P.hr, Float32Array); P.wmin = fit(P.wmin, Float32Array);
+    const d = new Uint8Array(n); if (P.done) d.set(P.done); P.done = d;
+    for (let t = n - 1; t >= cap; t--) free.push(t);
+    cap = n;
+  };
+  grow(64);
+  // a tile's mesh heights and blend weights: shaped snow near the runs, the 10 m mesh where it has blended back
+  const base = { h: 0, gx: 0, gz: 0 };
+  const fill = (t) => {
+    if (P.done[t]) return;
+    P.done[t] = 1;
+    const tl = slotTile[t];
+    for (let q = 0; q < TT; q++) {
+      const c = t * TT + q, x = x0 + (tl.a0 + (q & (TILE - 1))) * PCELL, z = z0 + (tl.j0 + (q >> TILE_BITS)) * PCELL;
+      const w = smoothstep(BERM_W, BLEND, P.aedge[c] * step);
+      P.wmin[c] = w;
+      P.hr[c] = P.hp[c] + w * (meshY(x, z) - sampleGrid(H, NX, NZ, X0, Z0, CELL, x, z, base).h);
     }
-    r.points = pts;                       // signs, rope lines and the start follow the smoothed line
-    r.kind = 'groomed';                   // a detailed run is a groomed one (Powderhorn too, for this first pass)
-    const keep = r.width <= TRACK_W ? TRACK_KEEP : SIDE_KEEP, G = gauss(downhillFit(gauss(C, 6), S), 4);
-    r.detail = { hw, S, G, K: gauss(K, 10).map((k) => k * keep), len: S[n - 1], cut: Math.max(...G.map((g, i) => Math.abs(g - C[i]))) };
+  };
+  // the tiles of a group and the ones around it (its skirts look one point past its border)
+  P.ready = (g) => {
+    for (const tl of g.tiles) for (let dj = -1; dj <= 1; dj++) for (let da = -1; da <= 1; da++) {
+      const c = P.at(tl.a0 + da * TILE, tl.j0 + dj * TILE);
+      if (c >= 0) fill((c / TT) | 0);
+    }
+  };
+  // the files, and the groups of 2 x 2 tiles the meshes are built for
+  const chunks = new Map(), side = TILE * CH * PCELL;
+  for (const [ca, cj] of B.chunks) {
+    chunks.set(ca * 1000 + cj, { ca, cj, x0: x0 + ca * side, z0: z0 + cj * side, x1: x0 + (ca + 1) * side, z1: z0 + (cj + 1) * side, state: 0, tiles: [], groups: [] });
   }
-  if (detail.length) {
-    const reach = Math.max(...detail.map((r) => r.width / 2)) + BLEND + 6;
-    let ax = Infinity, az = Infinity, bx = -Infinity, bz = -Infinity;
-    for (const r of detail) for (const [x, z] of r.points) { ax = Math.min(ax, x); az = Math.min(az, z); bx = Math.max(bx, x); bz = Math.max(bz, z); }
-    const x0 = Math.floor((ax - reach) / PCELL) * PCELL, z0 = Math.floor((az - reach) / PCELL) * PCELL;
-    const tx = Math.ceil((Math.ceil((bx + reach - x0) / PCELL) + 2) / TILE), tz = Math.ceil((Math.ceil((bz + reach - z0) / PCELL) + 2) / TILE);
-    // keep only the tiles a detailed run reaches
-    const tileOf = new Int32Array(tx * tz).fill(-1), tiles = [];
-    for (const r of detail) {
-      for (const [x, z] of r.points) {
-        const ta0 = Math.max(0, Math.floor((x - reach - x0) / PCELL) >> TILE_BITS), ta1 = Math.min(tx - 1, Math.floor((x + reach - x0) / PCELL) >> TILE_BITS);
-        const tj0 = Math.max(0, Math.floor((z - reach - z0) / PCELL) >> TILE_BITS), tj1 = Math.min(tz - 1, Math.floor((z + reach - z0) / PCELL) >> TILE_BITS);
-        for (let tj = tj0; tj <= tj1; tj++) for (let ta = ta0; ta <= ta1; ta++) {
-          if (tileOf[tj * tx + ta] < 0) { tileOf[tj * tx + ta] = tiles.length; tiles.push({ a0: ta * TILE, j0: tj * TILE }); }
-        }
-      }
+  const around = (ch) => {
+    const out = [];
+    for (let dj = -1; dj <= 1; dj++) for (let da = -1; da <= 1; da++) if (da || dj) out.push(chunks.get((ch.ca + da) * 1000 + ch.cj + dj));
+    return out;
+  };
+  // a cell at a tile's edge reads the next tile, so a group builds once its file and the ones around it are in
+  const inAround = (ch) => ch.state === 2 && around(ch).every((n) => !n || n.state === 2);
+  P.groupOk = (g) => inAround(g.chunk);
+  const groups = new Map();
+  for (let k = 0; k < B.tiles.length; k += 2) {
+    const tl = { a0: B.tiles[k], j0: B.tiles[k + 1] };
+    P.tiles.push(tl);
+    const ga = Math.floor(tl.a0 / (TILE * MESH_TILES)), gj = Math.floor(tl.j0 / (TILE * MESH_TILES));
+    if (!groups.has(ga * 10000 + gj)) {
+      const a0 = ga * TILE * MESH_TILES, j0 = gj * TILE * MESH_TILES, gs = TILE * MESH_TILES * PCELL;
+      const chunk = chunks.get(Math.floor(tl.a0 / (TILE * CH)) * 1000 + Math.floor(tl.j0 / (TILE * CH)));
+      const g = { tiles: [], a0, j0, x0: x0 + a0 * PCELL, z0: z0 + j0 * PCELL, x1: x0 + a0 * PCELL + gs, z1: z0 + j0 * PCELL + gs, meshes: [null, null], level: -1, chunk };
+      groups.set(ga * 10000 + gj, g);
+      chunk.groups.push(g);
     }
-    const P = { x0, z0, cell: PCELL, nx: tx * TILE, nz: tz * TILE, tiles, key };
-    // a grid point's slot in the kept tiles, or -1
-    P.at = (a, j) => {
-      if (a < 0 || j < 0 || a >= P.nx || j >= P.nz) return -1;
-      const t = tileOf[(j >> TILE_BITS) * tx + (a >> TILE_BITS)];
-      return t < 0 ? -1 : t * TT + ((j & (TILE - 1)) << TILE_BITS) + (a & (TILE - 1));
-    };
-    const N = tiles.length * TT;
-    const baked = !BAKE && PATCH_DATA && PATCH_DATA.key === key && PATCH_DATA.tiles === tiles.length;
-    if (PATCH_DATA && !baked && !BAKE) console.warn('Golden Ski: the baked run tiles are out of date, building them now (run bake.mjs)');
-    Object.assign(P, baked ? await unbakePatch(PATCH_DATA, N, tiles.length) : buildPatch(P, detail, reach, N));
-    const { wmin } = P;
-    // The 10 m ground is cut away in 4 m blocks wherever the fine mesh covers the whole block.
-    const mw = P.nx / 2, mh = P.nz / 2, mask = new Uint8Array(mw * mh);
-    const covered = (a, j) => { const c = P.at(a, j); return c >= 0 && wmin[c] < 1; };
-    for (const tl of tiles) {
+    groups.get(ga * 10000 + gj).tiles.push(tl);
+  }
+  P.groups = [...groups.values()];
+  const dropMeshes = (g) => {
+    for (let l = 0; l < 2; l++) if (g.meshes[l]) { scene.remove(g.meshes[l]); g.meshes[l].geometry.dispose(); g.meshes[l] = null; }
+    g.level = -1;
+  };
+  // The 10 m ground is cut away in 4 m blocks wherever the fine mesh covers the whole block.
+  const mw = P.nx / 2, mh = P.nz / 2, mask = new Uint8Array(mw * mh);
+  const tex = new THREE.DataTexture(mask, mw, mh, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  const covered = (a, j) => { const c = P.at(a, j); return c >= 0 && P.aedge[c] * step < BLEND; };
+  const maskTiles = (list) => {
+    for (const tl of list) {
       for (let bj = tl.j0 / 2; bj < (tl.j0 + TILE) / 2; bj++) {
         for (let bi = tl.a0 / 2; bi < (tl.a0 + TILE) / 2; bi++) {
           let all = true;
           for (let j = 2 * bj; j <= 2 * bj + 2 && all; j++) for (let a = 2 * bi; a <= 2 * bi + 2 && all; a++) all = covered(a, j);
-          if (all) mask[bj * mw + bi] = 255;
+          mask[bj * mw + bi] = all ? 255 : 0;
         }
       }
     }
-    // the fine mesh, one per 2 x 2 tiles, built when the camera first comes near (updatePatch)
-    P.mat = new THREE.ShaderMaterial({
-      uniforms: terrainMat.uniforms, vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
-      defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
-    });
-    const groups = new Map();
-    for (const tl of tiles) {
-      const ga = Math.floor(tl.a0 / (TILE * MESH_TILES)), gj = Math.floor(tl.j0 / (TILE * MESH_TILES));
-      if (!groups.has(ga * 10000 + gj)) {
-        const a0 = ga * TILE * MESH_TILES, j0 = gj * TILE * MESH_TILES, side = TILE * MESH_TILES * PCELL;
-        groups.set(ga * 10000 + gj, { tiles: [], a0, j0, x0: x0 + a0 * PCELL, z0: z0 + j0 * PCELL, x1: x0 + a0 * PCELL + side, z1: z0 + j0 * PCELL + side, meshes: [null, null], level: -1 });
-      }
-      groups.get(ga * 10000 + gj).tiles.push(tl);
-    }
-    P.groups = [...groups.values()];
-    const tex = new THREE.DataTexture(mask, mw, mh, THREE.RedFormat, THREE.UnsignedByteType);
-    tex.magFilter = tex.minFilter = THREE.NearestFilter;
     tex.needsUpdate = true;
-    terrainMat.uniforms.uPMask.value = tex;
-    terrainMat.uniforms.uPMin.value.set(x0, z0);
-    terrainMat.uniforms.uPSize.value.set(mw * 2 * PCELL, mh * 2 * PCELL);
-    terrainMat.uniforms.uPFar.value = PATCH_FAR;
-    terrainMat.uniforms.uPOn.value = 1;
-    Object.assign(P, { nodes: N, baked });
-    PATCH = P;
-    // the 10 m ground beyond PATCH_FAR draws the runs with the same edges
-    const i0 = Math.max(0, Math.floor((x0 - X0) / CELL)), i1 = Math.min(NX - 1, Math.ceil((x0 + P.nx * PCELL - X0) / CELL));
-    const j0 = Math.max(0, Math.floor((z0 - Z0) / CELL)), j1 = Math.min(NZ - 1, Math.ceil((z0 + P.nz * PCELL - Z0) / CELL));
-    for (let j = j0; j <= j1; j++) {
-      for (let i = i0; i <= i1; i++) {
-        const e = patchEdge(X0 + i * CELL, Z0 + j * CELL);
-        if (e === undefined) continue;
-        const k = j * NX + i;
-        RUNF[k] = clamp(Math.round(e * 2), -127, 127);
-        POWDER[k] = RUNF[k] < 0 ? 0 : 1;
-      }
-    }
-  }
-}
-// Build the detailed runs' surface on the kept tiles: heights for the physics (hp) and the mesh (hr), the signed
-// distance to the nearest groomed edge (edge) and how far each point has blended back into the mountain (wmin).
-// bake.mjs runs this ahead of time and stores the result in patch.js, so a normal page load only unpacks it.
-function buildPatch(P, detail, reach, N) {
-  const { x0, z0, tiles } = P;
-  // signed distance to the nearest groomed edge from the groomed runs that aren't detailed
-  const others = new Float32Array(N).fill(60);
-  for (const r of RUNS) {
-    if (r.kind !== 'groomed' || r.area || r.points.length < 2 || r.detail) continue;
-    rasterLine(P, r.points, r.width / 2 + 40, (c, u, s, over, d) => { const e = d - r.width / 2; if (e < others[c]) others[c] = e; });
-  }
-  // each detailed run in turn: the nearest piece of its line at every point it reaches
-  const best = new Float32Array(N).fill(1e9), U = new Float32Array(N), SS = new Float32Array(N), OV = new Float32Array(N), touched = [];
-  const nearest = (r) => {
-    touched.length = 0;
-    rasterLine(P, r.points, reach, (c, u, s, over, d) => {
-      if (best[c] === 1e9) touched.push(c);
-      if (d < best[c]) { best[c] = d; U[c] = u; SS[c] = s; OV[c] = over; }
-    });
   };
-  const forget = () => { for (const c of touched) best[c] = 1e9; };
-  // the nearest and second nearest detailed run's edge at every point (the windrow stays off another run's snow)
-  const e1 = new Float32Array(N).fill(60), e2 = new Float32Array(N).fill(60), r1 = new Int16Array(N).fill(-1);
-  detail.forEach((r, ri) => {
-    nearest(r);
-    for (const c of touched) {
-      const e = edgeOf(U[c], r.detail.hw, OV[c]);
-      if (e < e1[c]) { e2[c] = e1[c]; e1[c] = e; r1[c] = ri; } else if (e < e2[c]) e2[c] = e;
-    }
-    forget();
-  });
-  const edge = new Float32Array(N);
-  for (let c = 0; c < N; c++) edge[c] = Math.min(e1[c], others[c]);
-  // each detailed run's surface and blend weight at every point it reaches, averaged where runs overlap
-  const sum = new Float32Array(N), wsum = new Float32Array(N), wmin = new Float32Array(N).fill(1);
-  detail.forEach((r, ri) => {
-    nearest(r);
-    const D = r.detail, hw = D.hw;
-    for (const c of touched) {
-      const u = U[c], s = SS[c], e = edgeOf(u, hw, OV[c]);
-      // station values at s
-      let lo = 0, hi = D.S.length - 1;
-      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (D.S[m] <= s) lo = m; else hi = m; }
-      const f = clamp((s - D.S[lo]) / ((D.S[hi] - D.S[lo]) || 1), 0, 1);
-      const g = D.G[lo] + (D.G[hi] - D.G[lo]) * f, kk = D.K[lo] + (D.K[hi] - D.K[lo]) * f;
-      let h = g + kk * clamp(u, -hw - BLEND, hw + BLEND);
-      if (Math.abs(u) < hw) h += CROWN * (1 - (u / hw) * (u / hw));
-      // the windrow, except where it would sit on another groomed run's snow
-      const away = Math.min(r1[c] === ri ? e2[c] : e1[c], others[c]);
-      if (e > 0 && e < BERM_W) h += BERM * Math.sin(Math.PI * e / BERM_W) * clamp(away / 2, 0, 1);
-      // back to the 10 m mountain past the edge, and over the last stretch where the run ends
-      const w = Math.max(smoothstep(BERM_W, BLEND, e), smoothstep(D.len - TAPER, D.len - 5, s));
-      const a = 1 - w + 1e-4;
-      sum[c] += h * a; wsum[c] += a; wmin[c] = Math.min(wmin[c], w);
-    }
-    forget();
-  });
-  // one height grid for the physics (blending into the smooth 10 m surface) and one for the mesh
-  // (blending into the 10 m triangles, so the seam with the ground around it is exact)
-  const hp = new Float32Array(N), hr = new Float32Array(N);
-  tiles.forEach((tl, t) => {
-    for (let q = 0; q < TT; q++) {
-      const c = t * TT + q, x = x0 + (tl.a0 + (q & (TILE - 1))) * PCELL, z = z0 + (tl.j0 + (q >> TILE_BITS)) * PCELL, w = wmin[c];
-      const s = wsum[c] ? sum[c] / wsum[c] : 0;
-      hp[c] = s * (1 - w) + groundY(x, z) * w;
-      hr[c] = s * (1 - w) + meshY(x, z) * w;
-    }
-  });
-  return { hp, hr, edge, wmin };
-}
-// The baked form, per tile: both heights in millimeters and the edge in centimeters, each as a 32-bit start and
-// then, along every row, the change in slope from the last two points (the first column: the change from the
-// point above; the second: the change from the point to the left), which is near zero on smooth snow and packs
-// small. The blend weight is in 255ths (255 only where a point is fully back on the mountain). Deflated, base64.
-async function bakePatch(P) {
-  const nt = P.tiles.length, N = nt * TT, F = BAKED.length;
-  const buf = new ArrayBuffer(nt * F * 4 + N * F * 2 + N), start = new Int32Array(buf, 0, nt * F);
-  BAKED.forEach(([name, unit], k) => {
-    const h = P[name], out = new Int16Array(buf, nt * F * 4 + N * 2 * k, N);
-    for (let t = 0; t < nt; t++) {
-      const q = (i) => clamp(Math.round(h[t * TT + i] * unit), -2e9, 2e9);
-      start[t * F + k] = q(0);
-      for (let j = 0; j < TILE; j++) for (let a = 0; a < TILE; a++) {
-        const i = j * TILE + a;
-        out[t * TT + i] = clamp(i === 0 ? 0 : a === 0 ? q(i) - q(i - TILE) : a === 1 ? q(i) - q(i - 1) : q(i) - 2 * q(i - 1) + q(i - 2), -32768, 32767);
+  const crw = (t, w, o) => {
+    const t2 = t * t, t3 = t2 * t;
+    w[o] = 0.5 * (-t + 2 * t2 - t3); w[o + 1] = 0.5 * (2 - 5 * t2 + 3 * t3); w[o + 2] = 0.5 * (t + 4 * t2 - 3 * t3); w[o + 3] = 0.5 * (t3 - t2);
+  };
+  const wx = new Float32Array(TILE * 4), ix = new Int32Array(TILE), wz = new Float32Array(4);
+  async function loadChunk(ch) {
+    ch.state = 1;
+    let J, bytes;
+    try {
+      J = await (await fetch(new URL(`runs/${ch.ca}_${ch.cj}.json`, document.baseURI))).json();
+      bytes = await inflate(J.data);
+    } catch (e) { console.warn('Golden Ski: run tiles failed to load', ch.ca, ch.cj, e); ch.state = 0; return; }
+    if (ch.state !== 1) return;                     // let go while it loaded
+    const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length), n = J.tiles.length / 2, N = n * TT;
+    const dh = new Int16Array(buf, 0, N), e8 = new Int8Array(buf, N * 2, N), a8 = new Int8Array(buf, N * 3, N);
+    if (free.length < n) grow(cap + Math.max(n, 64));
+    for (let k = 0; k < n; k++) {
+      const tl = { a0: J.tiles[2 * k], j0: J.tiles[2 * k + 1] }, t = free.pop();
+      tl.slot = t; slotTile[t] = tl; ch.tiles.push(tl); P.done[t] = 0;
+      // sampleGrid's surface at the tile's points, its column weights worked out once per tile
+      for (let a = 0; a < TILE; a++) {
+        const f = clamp((x0 + (tl.a0 + a) * PCELL - X0) / CELL, 0, NX - 1.001), i = Math.floor(f);
+        ix[a] = i; crw(f - i, wx, a * 4);
       }
-    }
-  });
-  const wb = new Uint8Array(buf, nt * F * 4 + N * F * 2, N);
-  for (let c = 0; c < N; c++) wb[c] = P.wmin[c] >= 1 ? 255 : Math.min(254, Math.round(P.wmin[c] * 255));
-  const z = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
-  let s = '';
-  for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
-  return { key: P.key, tiles: nt, data: btoa(s) };
-}
-async function unbakePatch(B, N, nt) {
-  const bytes = await inflate(B.data), buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length), F = BAKED.length;
-  const start = new Int32Array(buf, 0, nt * F), res = {};
-  BAKED.forEach(([name, unit], k) => {
-    const d = new Int16Array(buf, nt * F * 4 + N * 2 * k, N), out = new Float32Array(N);
-    for (let t = 0; t < nt; t++) {
-      let row = start[t * F + k];
       for (let j = 0; j < TILE; j++) {
-        const o = t * TT + j * TILE;
-        if (j) row += d[o];
-        let v2 = row, v1 = row + d[o + 1];
-        out[o] = v2 / unit; out[o + 1] = v1 / unit;
-        for (let a = 2; a < TILE; a++) { const v = 2 * v1 - v2 + d[o + a]; out[o + a] = v / unit; v2 = v1; v1 = v; }
+        const f = clamp((z0 + (tl.j0 + j) * PCELL - Z0) / CELL, 0, NZ - 1.001), jj = Math.floor(f);
+        crw(f - jj, wz, 0);
+        const o = k * TT + j * TILE, oo = t * TT + j * TILE;
+        let q = 0;
+        for (let a = 0; a < TILE; a++) {
+          let h = 0;
+          for (let m = 0; m < 4; m++) {
+            const row = clamp(jj - 1 + m, 0, NZ - 1) * NX, i = ix[a];
+            h += wz[m] * (wx[a * 4] * H[row + clamp(i - 1, 0, NX - 1)] + wx[a * 4 + 1] * H[row + clamp(i, 0, NX - 1)]
+              + wx[a * 4 + 2] * H[row + clamp(i + 1, 0, NX - 1)] + wx[a * 4 + 3] * H[row + clamp(i + 2, 0, NX - 1)]);
+          }
+          q += dh[o + a];
+          P.hp[oo + a] = h + q / 1000;
+          P.edge[oo + a] = e8[o + a] * step;
+          P.aedge[oo + a] = a8[o + a];
+        }
       }
+      tileOf[(tl.j0 >> TILE_BITS) * tx + (tl.a0 >> TILE_BITS)] = t;
     }
-    res[name] = out;
+    ch.state = 2;
+    const near = around(ch).filter((c) => c && c.state === 2);
+    maskTiles([ch, ...near].flatMap((c) => c.tiles));
+    // the meshes beside it were built without its edge points: build them again
+    for (const c of near) for (const g of c.groups) dropMeshes(g);
+  }
+  function unloadChunk(ch) {
+    for (const g of ch.groups) dropMeshes(g);
+    for (const tl of ch.tiles) { tileOf[(tl.j0 >> TILE_BITS) * tx + (tl.a0 >> TILE_BITS)] = -1; free.push(tl.slot); }
+    const was = ch.state === 2, old = ch.tiles;
+    ch.state = 0; ch.tiles = [];
+    if (was) maskTiles([...old, ...around(ch).filter((c) => c && c.state === 2).flatMap((c) => c.tiles)]);
+  }
+  const dist = (ch, x, z) => Math.hypot(Math.max(ch.x0 - x, 0, x - ch.x1), Math.max(ch.z0 - z, 0, z - ch.z1));
+  let at = null;
+  runStream = (x, z, force) => {
+    if (!force && at && Math.hypot(x - at.x, z - at.z) < 40) return [];
+    at = { x, z };
+    const loads = [];
+    for (const ch of chunks.values()) {
+      const d = dist(ch, x, z);
+      if (d < RUN_LOAD && ch.state === 0) loads.push(loadChunk(ch));
+      else if (d > RUN_DROP && ch.state === 2) unloadChunk(ch);
+      else if (d > RUN_DROP && ch.state === 1) ch.state = 0;
+    }
+    return loads;
+  };
+  P.mat = new THREE.ShaderMaterial({
+    uniforms: terrainMat.uniforms, vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
+    defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
   });
-  const wb = new Uint8Array(buf, nt * F * 4 + N * F * 2, N), wmin = new Float32Array(N);
-  for (let c = 0; c < N; c++) wmin[c] = wb[c] / 255;
-  return Object.assign(res, { wmin });
+  terrainMat.uniforms.uPMask.value = tex;
+  terrainMat.uniforms.uPMin.value.set(x0, z0);
+  terrainMat.uniforms.uPSize.value.set(mw * 2 * PCELL, mh * 2 * PCELL);
+  terrainMat.uniforms.uPFar.value = PATCH_FAR;
+  terrainMat.uniforms.uPOn.value = 1;
+  PATCH = P;
+  // the 10 m ground draws the runs with the same groomed edges wherever no tiles are loaded
+  const [runfB, areaB, treeB] = await Promise.all([inflate(B.runf), inflate(B.area), inflate(B.trees)]);
+  for (let k = 0; k < RUNF.length; k++) { RUNF[k] = (runfB[k] << 24) >> 24; POWDER[k] = RUNF[k] < 0 ? 0 : 1; }
+  // the run area the game's own forest keeps clear of, and the trees along every run's edges and in its tree islands:
+  // where the real ones stand, as dense as the 1 m tree-height map shows, packed so they can still be skied through.
+  // The packed fill (kind + 128) is drawn only near the camera (FILL_NEAR); every tree is solid wherever it is.
+  RUN_AREA = new Int8Array(areaB.buffer, areaB.byteOffset, areaB.length);
+  const dv = new DataView(treeB.buffer, treeB.byteOffset, treeB.length);
+  for (let n = 0; n < B.ntrees; n++) {
+    const o = n * 8, x = dv.getInt16(o, true) / 2, z = dv.getInt16(o + 2, true) / 2, height = dv.getUint8(o + 4) / 10, kind = dv.getUint8(o + 5) & 127;
+    const ground = STATIONS.length && stationAt(x, z) ? groundY(x, z) : dv.getUint16(o + 6, true) / 10;
+    const t = { x, z, y: ground - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TREE_R[kind] * height, kind, fill: dv.getUint8(o + 5) >> 7 };
+    addProp(t);
+    addObstacle(t);
+  }
+  // Plain stand-in blocks on the building footprints until real buildings are made (Jack's choice 4). They are
+  // placeholders for the concept thread to replace; any that overlap a station or something already built are left out.
+  const parts = [];
+  for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
+    if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
+    const yaw = yawD * Math.PI / 180, bot = y0 - 1, top = y1 + h;
+    parts.push(part(new THREE.BoxGeometry(w, top - bot, l).translate(0, (top - bot) / 2, 0), CONC, placeM(x, bot, z, yaw)));
+    SOLIDS.push({ x, z, y: (bot + top) / 2, hx: w / 2, hy: (top - bot) / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw) });
+  }
+  if (parts.length) scene.add(new THREE.Mesh(merge(parts), modelMat));
 }
-// A mesh for one group of tiles: 2 m cells (level 0) or 4 m cells (level 1), each cell kept where the runs
-// touch it, with a short skirt hanging off the group's border so a neighbor at the other level shows no crack.
 function buildGroupMesh(P, g, level) {
+  if (P.ready) P.ready(g);
   const s = level ? 2 : 1, side = TILE * MESH_TILES, { hr, edge, wmin } = P;
   const vert = new Map(), pos = [], cov = [], nrm = [], idx = [];
   const h = (a, j) => { const c = P.at(a, j); return c < 0 ? null : hr[c]; };
@@ -1966,9 +1901,10 @@ function patchEdge(x, z) {
 function updatePatch() {
   if (!PATCH) return;
   const cx = camera.position.x, cz = camera.position.z;
+  if (runStream) runStream(cx, cz);
   for (const g of PATCH.groups) {
     const d = Math.hypot(Math.max(g.x0 - cx, 0, cx - g.x1), Math.max(g.z0 - cz, 0, cz - g.z1));
-    const level = !patchOn || d >= PATCH_FAR ? -1 : d < PATCH_NEAR ? 0 : 1;
+    const level = !patchOn || d >= PATCH_FAR || (PATCH.groupOk && !PATCH.groupOk(g)) ? -1 : d < PATCH_NEAR ? 0 : 1;
     if (level === g.level) continue;
     if (level >= 0 && !g.meshes[level]) g.meshes[level] = buildGroupMesh(PATCH, g, level);
     g.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
@@ -1982,43 +1918,36 @@ function setPatch(on) {
   terrainMat.uniforms.uPOn.value = on && PATCH ? 1 : 0;
 }
 const onGroomed = (x, z) => { const e = patchEdge(x, z); return e === undefined ? RUNF[cellAt(x, z)] < 0 : e < 0; };
-// Trees stand in a wall along the detailed runs' edges where the photo shows forest there
-{
-  for (const r of RUNS) {
-    if (!r.detail) continue;
-    const D = r.detail;
-    for (const side of [1, -1]) {
-      for (let d = 2, q = 0; d < D.len - TAPER; d += 4.5, q++) {
-        const p = alongRun(r, d), hsh = hash2(q * 7 + (side > 0 ? 1 : 0), Math.floor(d));
-        const off = D.hw + 4 + hsh * 5, x = p.x + p.uz * off * side, z = p.z - p.ux * off * side;
-        const c = cellAt(x, z), cov = conifer(c) + aspen(c) * 0.5;
-        if (cov < 0.25 || hsh > cov + 0.25 || LIFT_CUT[c] || isRock(c)) continue;
-        if (patchEdge(x, z) < 3.5) continue;          // not out onto the other run
-        const y = groundY(x, z), kind = y > 3380 && hsh < 0.3 ? KIND.snowghost : hsh < 0.55 ? KIND.spruce : KIND.fir;
-        const height = kind === KIND.snowghost ? 2.6 + hsh * 1.6 : (kind === KIND.spruce ? 15 : 12) + hash2(q, 77) * 8;
-        const t = { x, z, y: y - 0.3, height, r: TREE_R[kind] * height, kind };
-        addProp(t);
-        addObstacle(t);
-      }
-    }
-  }
-}
-// sign boards: every run name drawn once onto one canvas, light lettering on a dark wooden board
-const SIGN_W = 128, SIGN_H = 32, SIGN_COLS = 8;
-const signNames = [...new Set(RUNS.filter((r) => r.name && !r.area).map((r) => r.name))];
+// sign boards: every sign drawn once onto one canvas, the run's difficulty symbol on a light patch at the left
+// (green circle, blue square, black diamond, double black diamond) and its name in light lettering on dark wood.
+// The name is fitted to the board: the board is as long as the name needs, up to SIGN_MAX px, and only names too
+// long for that are set smaller.
+const SIGN_W = 256, SIGN_H = 32, SIGN_COLS = 4, SIGN_MIN = 120, SIGN_MAX = 181, SIGN_M = 0.6 / SIGN_H;   // m per px
+const SIGNS = (RUN_DATA && RUN_DATA.signs) || [];
 const signCanvas = document.createElement('canvas');
-signCanvas.width = SIGN_W * SIGN_COLS; signCanvas.height = SIGN_H * Math.ceil(signNames.length / SIGN_COLS);
+signCanvas.width = SIGN_W * SIGN_COLS; signCanvas.height = SIGN_H * Math.max(1, Math.ceil(SIGNS.length / SIGN_COLS));
+const signPx = [];                             // each sign's board length in px
 {
-  const g = signCanvas.getContext('2d');
-  signNames.forEach((name, n) => {
+  const g = signCanvas.getContext('2d'), P = SIGN_H, pad = 3;
+  SIGNS.forEach(([name, diff], n) => {
     const x = (n % SIGN_COLS) * SIGN_W, y = Math.floor(n / SIGN_COLS) * SIGN_H;
-    g.fillStyle = '#3b2717'; g.fillRect(x, y, SIGN_W, SIGN_H);
-    g.fillStyle = '#5a3b22'; g.fillRect(x, y + SIGN_H / 2 - 1, SIGN_W, 2);
-    g.strokeStyle = '#1c120a'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, SIGN_W - 2, SIGN_H - 2);
     let size = 20;
-    do { g.font = `bold ${size}px ui-monospace, Menlo, Consolas, monospace`; size--; } while (g.measureText(name).width > SIGN_W - 12 && size > 8);
+    do { g.font = `bold ${size}px ui-monospace, Menlo, Consolas, monospace`; size--; } while (g.measureText(name).width > SIGN_MAX - P - 14 && size > 8);
+    const w = clamp(Math.ceil(P + 6 + g.measureText(name).width + 8), SIGN_MIN, SIGN_MAX);
+    signPx.push(w);
+    g.fillStyle = '#3b2717'; g.fillRect(x, y, w, SIGN_H);
+    g.fillStyle = '#5a3b22'; g.fillRect(x, y + SIGN_H / 2 - 1, w, 2);
+    g.strokeStyle = '#1c120a'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, w - 2, SIGN_H - 2);
     g.fillStyle = '#f1e6c8'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText(name, x + SIGN_W / 2, y + SIGN_H / 2 + 1);
+    g.fillText(name, x + P + 3 + (w - P - 3) / 2, y + SIGN_H / 2 + 1);
+    // the symbol
+    const cx = x + P / 2 + 1, cy = y + SIGN_H / 2;
+    g.fillStyle = '#f1e6c8'; g.fillRect(x + pad + 1, y + pad, P - 2 * pad, SIGN_H - 2 * pad);
+    const diamond = (dx, r) => { g.beginPath(); g.moveTo(cx + dx, cy - r); g.lineTo(cx + dx + r, cy); g.lineTo(cx + dx, cy + r); g.lineTo(cx + dx - r, cy); g.closePath(); g.fill(); };
+    if (diff === 'green') { g.fillStyle = '#1f8a3a'; g.beginPath(); g.arc(cx, cy, 9, 0, Math.PI * 2); g.fill(); }
+    else if (diff === 'blue') { g.fillStyle = '#1b55b5'; g.fillRect(cx - 8.5, cy - 8.5, 17, 17); }
+    else if (diff === 'black') { g.fillStyle = '#111111'; diamond(0, 10); }
+    else if (diff === 'expert') { g.fillStyle = '#111111'; diamond(-6, 6); diamond(6, 6); }
   });
 }
 const signTex = new THREE.CanvasTexture(signCanvas);
@@ -2050,43 +1979,41 @@ const signMat = new THREE.ShaderMaterial({
 });
 const WOOD = [0.36, 0.25, 0.15], WOOD_DARK = [0.24, 0.16, 0.1];
 const runParts = [], facePos = [], faceUv = [], faceNrm = [], signSpots = [];
-// one sign per name, at the highest start among that name's pieces
+// each name's highest piece of the mapped lines (the starts below use them)
 const signRuns = new Map();
 for (const r of RUNS) {
   if (!r.name || r.area || r.points.length < 2) continue;
   const h = groundY(r.points[0][0], r.points[0][1]), best = signRuns.get(r.name);
   if (!best || h > best.h) signRuns.set(r.name, { run: r, h });
 }
-for (const [name, { run }] of signRuns) {
-  const a = alongRun(run, 8), b = alongRun(run, 30);
-  const ux = b.x - a.x, uz = b.z - a.z, len = Math.hypot(ux, uz) || 1, dx = ux / len, dz = uz / len;
-  // beside the run, off the edge, nudged along until it is clear of other signs and of groomed snow
-  let x = 0, z = 0, ok = false;
-  for (let tries = 0; tries < 12 && !ok; tries++) {
-    const side = tries % 2 ? -1 : 1, down = 26 + Math.floor(tries / 2) * 7, off = run.width / 2 + 3;
-    const p = alongRun(run, down);
-    x = p.x + dz * off * side; z = p.z - dx * off * side;
-    ok = !onGroomed(x, z) && signSpots.every((s) => Math.hypot(s.x - x, s.z - z) > 6);
-  }
-  signSpots.push({ x, z, name, dx, dz });
-  const y = groundY(x, z), yaw = Math.atan2(-dx, -dz);   // the board faces skiers coming down
+// The signs stand where each run begins (runs-build/scripts/signs.py): just off the snow in the fork with the run it
+// splits from, or at its edge, or where the split is in open snow, on the snow at the split; turned to face skiers
+// arriving. The first of its spots that is clear of station huts and the stand-in blocks.
+SIGNS.forEach(([name, , spots], n) => {
+  const spot = spots.find(([x, z]) => !nearSolid(x, z, 1.5));
+  if (!spot) return;
+  const [x, z, yawD, gy] = spot, yaw = yawD * Math.PI / 180;
+  const y = STATIONS.length && stationAt(x, z) ? groundY(x, z) : gy;
+  const w = signPx[n] * SIGN_M, post = w / 2 - 0.25;
+  signSpots.push({ x, z, name, yaw });
   const m = placeM(x, y - 0.3, z, yaw);
   runParts.push(...placed([
-    part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(-1.0, 1.15, 0), WOOD_DARK),
-    part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(1.0, 1.15, 0), WOOD_DARK),
-    part(new THREE.BoxGeometry(2.5, 0.68, 0.08).translate(0, 1.95, 0), WOOD),
+    // the posts behind the board, clear of its face
+    part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(-post, 1.15, -0.12), WOOD_DARK),
+    part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(post, 1.15, -0.12), WOOD_DARK),
+    part(new THREE.BoxGeometry(w + 0.1, 0.68, 0.08).translate(0, 1.95, 0), WOOD),
   ], m));
-  const n = signNames.indexOf(name), u0 = (n % SIGN_COLS) / SIGN_COLS, u1 = u0 + 1 / SIGN_COLS;
+  const u0 = (n % SIGN_COLS) * SIGN_W / signCanvas.width, u1 = u0 + signPx[n] / signCanvas.width;
   const v1 = 1 - Math.floor(n / SIGN_COLS) * SIGN_H / signCanvas.height, v0 = v1 - SIGN_H / signCanvas.height;
-  const face = new THREE.PlaneGeometry(2.4, 0.6).translate(0, 1.95, 0.05).applyMatrix4(m);
+  const face = new THREE.PlaneGeometry(w, 0.6).translate(0, 1.95, 0.05).applyMatrix4(m);
   const fp = face.attributes.position, fuv = [[u0, v1], [u1, v1], [u0, v0], [u1, v0]], nrm = [Math.sin(yaw), 0, Math.cos(yaw)];
   for (const idx of face.index.array) {
     facePos.push(fp.getX(idx), fp.getY(idx), fp.getZ(idx));
     faceUv.push(...fuv[idx]);
     faceNrm.push(...nrm);
   }
-  casters.push({ x, z, h: 2.3, w: 1.2 });
-}
+  casters.push({ x, z, h: 2.3, w: w / 2 });
+});
 {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(facePos), 3));
@@ -2095,23 +2022,14 @@ for (const [name, { run }] of signRuns) {
   g.computeBoundingSphere();
   scene.add(new THREE.Mesh(g, signMat));
 }
-// rope lines on bamboo poles down both edges of the first 170 m of Sunnyside and Max Park,
-// broken wherever the edge runs onto the other run's groomed snow
+// rope lines on bamboo poles down both edges of the first 170 m of Sunnyside and Max Park, kept where kit v18
+// had them (runs-build/ropes.json), standing on the shaped snow
 const ropePts = [];
-for (const name of ['Sunnyside', 'Max Park']) {
-  const run = signRuns.get(name)?.run;
-  if (!run) continue;
-  for (const side of [1, -1]) {
-    let prev = null;
-    for (let d = 4; d <= 170; d += 6) {
-      const p = alongRun(run, d), off = run.width / 2 + 1.2;
-      const x = p.x + p.uz * off * side, z = p.z - p.ux * off * side;
-      if (onGroomed(x, z)) { prev = null; continue; }
-      const y = groundY(x, z);
-      addProp({ x, z, y: y - 0.15, height: 1.7, r: 0, kind: KIND.pole });
-      if (prev) ropePts.push(prev[0], prev[1], prev[2], x, y + 1.25, z);
-      prev = [x, y + 1.25, z];
-    }
+for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
+  for (let k = 0; k < line.length; k += 3) {
+    const [x, z, y] = [line[k], line[k + 1], line[k + 2]];
+    addProp({ x, z, y: y - 0.15, height: 1.7, r: 0, kind: KIND.pole });
+    if (k) ropePts.push(line[k - 3], line[k - 1] + 1.25, line[k - 2], x, y + 1.25, z);
   }
 }
 {
@@ -2154,6 +2072,8 @@ for (const [name, label] of [['Sunnyside', 'Start: Sunnyside'], ['Powderhorn', '
   STARTS.push({ label, x: p.x, z: p.z, heading: Math.atan2(q.x - p.x, -(q.z - p.z)) });
 }
 if (STARTS.length) Object.assign(META.start, STARTS[0], { name: 'Village Express, top' });
+// the run tiles around the start, before the first frame
+if (runStream) await Promise.all(runStream(META.start.x, META.start.z, true));
 // and the top of every lift, for getting round the mountain quickly: on the groomed run that leaves the top,
 // a little way down it and facing down it; where no run starts there, off to one side of the top terminal
 // where the snow falls away most steeply, facing down the fall line
@@ -2804,7 +2724,15 @@ function toSummit() {
   phase = 'ready';
   placeSkier(META.start.x, META.start.z, META.start.heading, 0);
   hockeyStop = false;
-  fadeEl.classList.remove('on');
+  // a start whose run tiles aren't in yet stays behind the fade until they are, then stands on them
+  const loads = runStream ? runStream(META.start.x, META.start.z, true) : [];
+  if (!loads.length) { fadeEl.classList.remove('on'); return; }
+  fadeEl.classList.add('on');
+  const at = { x: META.start.x, z: META.start.z };
+  Promise.all(loads).then(() => {
+    if (phase === 'ready' && sk.pos.x === at.x && sk.pos.z === at.z) placeSkier(at.x, at.z, sk.heading, 0);
+    fadeEl.classList.remove('on');
+  });
 }
 function wake() {
   if (phase === 'ready') {
@@ -3255,6 +3183,8 @@ function leanAxis(out) {
 function ballVsSolids(px, py, pz, r, n) {
   let best = 0;
   for (const b of SOLIDS) {
+    // far from this box's footprint (hx + hz reaches past any corner): skip it, there are 1,700 of them
+    if (Math.abs(px - b.x) > b.hx + b.hz + r || Math.abs(pz - b.z) > b.hx + b.hz + r) continue;
     const dx = px - b.x, dz = pz - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz, y = py - b.y;
     let eu = u - clamp(u, -b.hx, b.hx), ey = y - clamp(y, -b.hy, b.hy), ev = v - clamp(v, -b.hz, b.hz), depth;
     const d = Math.hypot(eu, ey, ev);
@@ -3746,7 +3676,7 @@ window.__golden = {
   cover: (x, z) => { const k = cellAt(x, z); return { conifer: conifer(k), aspen: aspen(k), rock: isRock(k), powder: POWDER[k], h: H[k] }; },
   get phase() { return phase; },
   get trips() { return trips; },
-  get trees() { return treeGeo.instanceCount; },
+  get trees() { return treeGeo.instanceCount + fillGeo.instanceCount; },
   get clumps() { return clumpGeo.instanceCount; },
   setManual(on) { manual = on; },
   get free() { return free; },
@@ -3770,6 +3700,6 @@ window.__golden = {
   pixel(on) { setPixelLook(on); },
   lifts: liftPaths, carriers, runs: RUNS, signs: signSpots,
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
-  bakePatch: () => bakePatch(PATCH),
+  streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
   solids: SOLIDS, bail, BAIL,
 };
