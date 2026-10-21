@@ -3,7 +3,8 @@
 True-size Snowmass with Momentum physics plus carve turns, the 18 real lifts, real run lines, and 2 m detailed runs on
 Sunnyside, Max Park, Powderhorn and every groomed run on the Elk Camp side (Elk Camp to Two Creeks, the test ground for
 junctions and cat tracks). The 2 m runs are built ahead of time (`patch.js`) and drawn at 2 m within 250 m of the camera
-and 4 m out to 800 m. FreePlay starts at the Village Express top, facing down Sunnyside.
+and 4 m out to 800 m. The rest of the mountain gets coarser with distance, and past about 300 m the forest is drawn
+as clumps of trees instead of single trees. FreePlay starts at the Village Express top, facing down Sunnyside.
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
   On phones, drag to steer, swipe down to pole, swipe up to brake.

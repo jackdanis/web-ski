@@ -105,9 +105,12 @@ const assist = () => (physics.assists ? ASSIST.on : ASSIST.off);
 // ---------- The mountain ----------
 const TREELINE = 3560;          // no conifers above this (the satellite photo agrees)
 const TREE_FAR = 900;           // trees are drawn within this distance; beyond it the forest is a tint on the ground
-const CHUNK = 64;               // terrain chunk: 64 cells of 10 m
-const LOD_STEPS = [1, 2, 4, 8]; // triangle size in cells: 10, 20, 40, 80 m
-const LOD_DIST = [450, 1200, 3200];
+const TREE_NEAR = [250, 350];    // single trees hand over to clump sprites across this distance
+const CLUMP = 32;               // m: past TREE_NEAR, the trees in each 32 m square are drawn as one clump
+const CHUNK = 32;               // terrain chunk: 32 cells of 10 m (320 m)
+const SUPER = 4;                // far away, 4 x 4 chunks are drawn as one piece (1.28 km)
+const LOD_STEPS = [1, 2, 4, 8, 16]; // triangle size in cells: 10, 20, 40, 80, 160 m
+const LOD_DIST = [250, 700, 1800, 4000]; // m from the camera to a piece's edge where it steps down a size
 
 // ---------- Small helpers ----------
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -383,8 +386,8 @@ const terrainMat = new THREE.ShaderMaterial({
     }`,
 });
 
-// Chunks of 64 x 64 cells, each built at four triangle sizes on demand. Skirts hang off every edge
-// so cracks between neighbors at different sizes never show sky.
+// Chunks of 32 x 32 cells near the camera, merged 4 x 4 into one piece farther out, each built at its sizes on
+// demand. Skirts hang off every edge so cracks between neighbors at different sizes never show sky.
 const NCX = Math.ceil((NX - 1) / CHUNK), NCZ = Math.ceil((NZ - 1) / CHUNK);
 const chunks = [];
 function buildChunk(ch, level) {
@@ -444,59 +447,105 @@ function buildChunk(ch, level) {
   scene.add(mesh);
   return mesh;
 }
-for (let cj = 0; cj < NCZ; cj++) {
-  for (let ci = 0; ci < NCX; ci++) {
-    const ch = { i0: ci * CHUNK, j0: cj * CHUNK, i1: Math.min((ci + 1) * CHUNK, NX - 1), j1: Math.min((cj + 1) * CHUNK, NZ - 1), meshes: [], level: -1 };
-    ch.cx = X0 + (ch.i0 + ch.i1) / 2 * CELL; ch.cz = Z0 + (ch.j0 + ch.j1) / 2 * CELL;
-    ch.half = Math.max(ch.i1 - ch.i0, ch.j1 - ch.j0) * CELL / 2;
-    chunks.push(ch);
+const piece = (i0, j0, i1, j1) => ({ i0, j0, i1: Math.min(i1, NX - 1), j1: Math.min(j1, NZ - 1), meshes: [], level: -1 });
+for (let sj = 0; sj < NCZ; sj += SUPER) {
+  for (let si = 0; si < NCX; si += SUPER) {
+    const sup = piece(si * CHUNK, sj * CHUNK, (si + SUPER) * CHUNK, (sj + SUPER) * CHUNK);
+    sup.kids = [];
+    for (let cj = sj; cj < Math.min(sj + SUPER, NCZ); cj++) {
+      for (let ci = si; ci < Math.min(si + SUPER, NCX); ci++) sup.kids.push(piece(ci * CHUNK, cj * CHUNK, (ci + 1) * CHUNK, (cj + 1) * CHUNK));
+    }
+    chunks.push(sup);
   }
+}
+// horizontal distance from the camera to the nearest point of a piece
+const pieceDist = (p, cx, cz) => Math.hypot(Math.max(0, X0 + p.i0 * CELL - cx, cx - X0 - p.i1 * CELL), Math.max(0, Z0 + p.j0 * CELL - cz, cz - Z0 - p.j1 * CELL));
+function showPiece(p, level) {
+  if (level === p.level) return;
+  if (level >= 0 && !p.meshes[level]) p.meshes[level] = buildChunk(p, level);
+  p.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
+  // the finest size is big: let it go once the piece is well away
+  if (level !== 0 && level !== 1 && p.meshes[0]) { scene.remove(p.meshes[0]); p.meshes[0].geometry.dispose(); p.meshes[0] = null; }
+  p.level = level;
 }
 function updateTerrain() {
   const cx = camera.position.x, cz = camera.position.z;
-  for (const ch of chunks) {
-    const d = Math.max(0, Math.hypot(cx - ch.cx, cz - ch.cz) - ch.half * 1.2);
-    const level = d < LOD_DIST[0] ? 0 : d < LOD_DIST[1] ? 1 : d < LOD_DIST[2] ? 2 : 3;
-    if (level === ch.level) continue;
-    if (!ch.meshes[level]) ch.meshes[level] = buildChunk(ch, level);
-    ch.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
-    // the finest level is big: let it go once the camera is well away
-    if (level > 1 && ch.meshes[0]) { scene.remove(ch.meshes[0]); ch.meshes[0].geometry.dispose(); ch.meshes[0] = null; }
-    ch.level = level;
+  for (const sup of chunks) {
+    const d = pieceDist(sup, cx, cz);
+    if (d >= LOD_DIST[1]) {
+      showPiece(sup, d < LOD_DIST[2] ? 2 : d < LOD_DIST[3] ? 3 : 4);
+      for (const k of sup.kids) showPiece(k, -1);
+    } else {
+      showPiece(sup, -1);
+      for (const k of sup.kids) {
+        const dk = pieceDist(k, cx, cz);
+        showPiece(k, dk < LOD_DIST[0] ? 0 : dk < LOD_DIST[1] ? 1 : 2);
+      }
+    }
   }
 }
 
-// The surrounding peaks: every other point of the 100 m data (200 m triangles) out to about 25 km,
-// with a hole where the 10 m mountain sits.
+// The surrounding peaks out to about 25 km, from the 100 m data, with a hole where the 10 m mountain sits.
+// Coarser with distance from the mountain: 200 m triangles within 3 km of it, 400 m to 8 km, 800 m past that.
+// Built in blocks of 1.6 km, with skirts where blocks of two sizes meet, and drawn as one piece.
 {
-  const S = 2, nx = Math.floor((FAR.nx - 1) / S) + 1, nz = Math.floor((FAR.nz - 1) / S) + 1, cell = FAR.cell * S;
-  const pos = new Float32Array(nx * nz * 3), cov = new Float32Array(nx * nz * 4);
+  const S = 2, nx = Math.floor((FAR.nx - 1) / S) + 1, nz = Math.floor((FAR.nz - 1) / S) + 1, cell = FAR.cell * S, B = 8;
   const inner = (x, z, m) => x > X0 + m && x < X1 - m && z > Z0 + m && z < Z1 - m;
   const hk = (a, b) => FH[clamp(b * S, 0, FAR.nz - 1) * FAR.nx + clamp(a * S, 0, FAR.nx - 1)];
-  for (let j = 0; j < nz; j++) {
-    for (let i = 0; i < nx; i++) {
-      const k = j * nx + i, x = FAR.x0 + i * cell, z = FAR.z0 + j * cell, h = hk(i, j);
-      const slope = Math.hypot(hk(i + 1, j) - hk(i - 1, j), hk(i, j + 1) - hk(i, j - 1)) / (2 * cell);
-      // tucked a little under the 10 m mountain where the two overlap, easing back up outside it
-      const out = Math.hypot(Math.max(X0 - x, 0, x - X1), Math.max(Z0 - z, 0, z - Z1));
-      pos[k * 3] = x; pos[k * 3 + 1] = h - 14 * clamp(1 - out / 800, 0, 1); pos[k * 3 + 2] = z;
-      cov[k * 4] = 60; cov[k * 4 + 1] = slope > 0.85 ? 1 : 0;
-      cov[k * 4 + 2] = h < 3300 && slope < 0.8 ? 0.75 : h < 3500 ? 0.3 : 0;
-      cov[k * 4 + 3] = 0;
-    }
-  }
-  const idx = [];
-  for (let j = 0; j < nz - 1; j++) {
-    for (let i = 0; i < nx - 1; i++) {
-      if (inner(FAR.x0 + (i + 0.5) * cell, FAR.z0 + (j + 0.5) * cell, 260)) continue;
-      const v = j * nx + i;
-      idx.push(v, v + nx, v + 1, v + 1, v + nx, v + nx + 1);
+  const pos = [], cov = [], nrm = [], idx = [];
+  const put = (i, j, drop, skirt) => {
+    const x = FAR.x0 + i * cell, z = FAR.z0 + j * cell, h = hk(i, j);
+    const gx = (hk(i + 1, j) - hk(i - 1, j)) / (2 * cell), gz = (hk(i, j + 1) - hk(i, j - 1)) / (2 * cell), slope = Math.hypot(gx, gz);
+    // tucked a little under the 10 m mountain where the two overlap, easing back up outside it
+    const out = Math.hypot(Math.max(X0 - x, 0, x - X1), Math.max(Z0 - z, 0, z - Z1));
+    pos.push(x, h - 14 * clamp(1 - out / 800, 0, 1) - drop, z);
+    cov.push(60, slope > 0.85 ? 1 : 0, h < 3300 && slope < 0.8 ? 0.75 : h < 3500 ? 0.3 : 0, 0);
+    if (skirt) nrm.push(-gx, 1, -gz); else nrm.push(0, 0, 0);
+    return pos.length / 3 - 1;
+  };
+  const stepOf = (bi, bj) => {
+    if (bi < 0 || bj < 0 || bi >= nx - 1 || bj >= nz - 1) return 0;
+    const i1 = Math.min(bi + B, nx - 1), j1 = Math.min(bj + B, nz - 1);
+    const out = Math.hypot(Math.max(X0 - FAR.x0 - i1 * cell, 0, FAR.x0 + bi * cell - X1), Math.max(Z0 - FAR.z0 - j1 * cell, 0, FAR.z0 + bj * cell - Z1));
+    return out < 3000 ? 1 : out < 8000 ? 2 : 4;
+  };
+  for (let bj = 0; bj < nz - 1; bj += B) {
+    for (let bi = 0; bi < nx - 1; bi += B) {
+      const i1 = Math.min(bi + B, nx - 1), j1 = Math.min(bj + B, nz - 1), step = stepOf(bi, bj);
+      const is = [], js = [];
+      for (let i = bi; i < i1; i += step) is.push(i);
+      is.push(i1);
+      for (let j = bj; j < j1; j += step) js.push(j);
+      js.push(j1);
+      const w = is.length, v0 = pos.length / 3;
+      for (const j of js) for (const i of is) put(i, j, 0);
+      for (let b = 0; b < js.length - 1; b++) {
+        for (let a = 0; a < w - 1; a++) {
+          if (inner(FAR.x0 + (is[a] + is[a + 1]) / 2 * cell, FAR.z0 + (js[b] + js[b + 1]) / 2 * cell, 260)) continue;
+          const v = v0 + b * w + a;
+          idx.push(v, v + w, v + 1, v + 1, v + w, v + w + 1);
+        }
+      }
+      // a skirt only along edges where the neighbor's triangles are another size, so a crack there never shows sky
+      const drop = step * cell * 0.6 + 20;
+      const skirt = (pts) => {
+        const top = pts.map(([i, j]) => put(i, j, 0, true)), bot = pts.map(([i, j]) => put(i, j, drop, true));
+        for (let q = 0; q < pts.length - 1; q++) {
+          const a = top[q], b = top[q + 1], a2 = bot[q], b2 = bot[q + 1];
+          idx.push(a, a2, b, b, a2, b2, a, b, a2, b, b2, a2);
+        }
+      };
+      const other = (n) => n > 0 && n !== step;
+      if (other(stepOf(bi, bj - B))) skirt(is.map((i) => [i, bj]));
+      if (other(stepOf(bi, bj + B))) skirt(is.map((i) => [i, j1]));
+      if (other(stepOf(bi - B, bj))) skirt(js.map((j) => [bi, j]));
+      if (other(stepOf(bi + B, bj))) skirt(js.map((j) => [i1, j]));
     }
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('aCov', new THREE.BufferAttribute(cov, 4));
-  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(nx * nz * 3), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(cov), 4));
+  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   geo.setIndex(idx);
   const m = new THREE.Mesh(geo, terrainMat);
   m.frustumCulled = false;
@@ -508,36 +557,65 @@ function updateTerrain() {
 // lit per pixel from its normal map like Goldie. Trees are made page by page (320 m squares) from the
 // cover map, the same way every time, so the ones you see are the ones you hit.
 const SLOT = 80;
-const atlas = (() => {
-  const c = document.createElement('canvas'), cn = document.createElement('canvas');
-  c.width = cn.width = SLOT * TREE_KINDS.length; c.height = cn.height = 128;
-  const g = c.getContext('2d'), gn = cn.getContext('2d');
-  const rects = TREE_KINDS.map((k, n) => {
-    const im = treeImgs[n * 2], imn = treeImgs[n * 2 + 1];
-    const x = n * SLOT + Math.floor((SLOT - im.width) / 2), y = 128 - im.height;
-    g.drawImage(im, x, y); gn.drawImage(imn, x, y);
-    return { u0: x / c.width, u1: (x + im.width) / c.width, v1: im.height / 128, aspect: im.width / im.height };
+// Clumps: the same tree sprites bunched up on one sprite, for forest past TREE_NEAR. Three rows, the back ones
+// smaller and standing higher, the way rows of trees farther up a slope show over the ones in front.
+// Each tree is [kind, scale, x, rise] in sprite pixels; drawn in order, back row first.
+const CLUMP_W = 168;
+const CLUMPS = [
+  { kind: 'conifer', mix: [0, 0, 1] }, { kind: 'conifer', mix: [1, 1, 0] }, { kind: 'conifer', mix: [0, 1] },
+  { kind: 'aspen', mix: [2] }, { kind: 'snowghost', mix: [3] },
+].map((c, m) => {
+  const trees = [];
+  [[0.56, 0.17], [0.74, 0.08], [0.94, 0]].forEach(([sc, rise], row) => {
+    for (let q = 0; q < 4; q++) {
+      const r = (u) => hash2(m * 7 + row * 4 + q, u);
+      const n = c.mix[Math.floor(r(1) * c.mix.length)], scale = sc + (r(2) - 0.5) * 0.12;
+      const w = treeImgs[n * 2].width * scale, h = treeImgs[n * 2].height;
+      // evenly spread with a little jitter, each row set half a gap over from the one behind
+      const room = CLUMP_W - w, x = Math.round(clamp(room * (q + (row === 1 ? 0.25 : row === 2 ? 0.6 : 0) + (r(3) - 0.5) * 0.35) / 3.6, 0, room));
+      trees.push([n, scale, x, Math.round(h * (rise + r(4) * 0.04))]);
+    }
   });
+  return { kind: c.kind, trees };
+});
+const atlas = (() => {
+  const W = SLOT * TREE_KINDS.length + CLUMP_W * CLUMPS.length;
   const mk = (cv) => {
     const t = new THREE.CanvasTexture(cv);
     t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapLinearFilter; t.generateMipmaps = true;
     return t;
   };
-  const out = { map: mk(c), normal: mk(cn), rects };
-  // the storm atlas: the same sheet with the storm spruce squeezed into the spruce's rectangle
-  const r = rects[0], x = Math.round(r.u0 * c.width), w = Math.round((r.u1 - r.u0) * c.width), h = Math.round(r.v1 * 128);
-  const storm = [[c, stormImgs[0]], [cn, stormImgs[1]]].map(([cv, im]) => {
-    const copy = document.createElement('canvas');
-    copy.width = cv.width; copy.height = cv.height;
-    const g2 = copy.getContext('2d');
-    g2.drawImage(cv, 0, 0);
-    g2.clearRect(0, 0, SLOT, 128);
-    g2.drawImage(im, x, 128 - h, w, h);
-    return mk(copy);
-  });
-  [out.stormMap, out.stormNormal] = storm;
-  return out;
+  const rects = [];
+  // paints one sheet (colors or normals); the storm sheet has the storm spruce squeezed into the spruce's size
+  const paint = (normal, storm) => {
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = 128;
+    const g = cv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    const img = (n) => (storm && n === 0 ? stormImgs[normal ? 1 : 0] : treeImgs[n * 2 + (normal ? 1 : 0)]);
+    const size = (n) => [treeImgs[n * 2].width, treeImgs[n * 2].height];
+    TREE_KINDS.forEach((k, n) => {
+      const [w, h] = size(n), x = n * SLOT + Math.floor((SLOT - w) / 2), y = 128 - h;
+      g.drawImage(img(n), x, y, w, h);
+      if (!normal && !storm) rects[n] = { u0: x / W, u1: (x + w) / W, v1: h / 128, aspect: w / h };
+    });
+    CLUMPS.forEach((c, m) => {
+      const x0 = SLOT * TREE_KINDS.length + m * CLUMP_W;
+      let left = CLUMP_W, right = 0, top = 128;
+      for (const [n, sc, x, rise] of c.trees) {
+        const [w, h] = size(n), dw = Math.round(w * sc), dh = Math.round(h * sc), y = 128 - rise - dh;
+        g.drawImage(img(n), x0 + x, y, dw, dh);
+        left = Math.min(left, x); right = Math.max(right, x + dw); top = Math.min(top, y);
+      }
+      if (!normal && !storm) rects.push({ u0: (x0 + left) / W, u1: (x0 + right) / W, v1: (128 - top) / 128, aspect: (right - left) / (128 - top), clump: c.kind });
+    });
+    return mk(cv);
+  };
+  const map = paint(false, false);
+  return { map, normal: paint(true, false), stormMap: paint(false, true), stormNormal: paint(true, true), rects };
 })();
+const CLUMP_IDS = { conifer: [], aspen: [], snowghost: [] };
+atlas.rects.forEach((r, n) => { if (r.clump) CLUMP_IDS[r.clump].push(n); });
 const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5 };
 const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0];      // trunk-and-branches radius as a share of height
 const PAGE = 32;                              // cells per tree page
@@ -599,32 +677,72 @@ function makePage(pi, pj) {
   }
   // run props (rope poles, boundary signs) placed by the art pass, bucketed by page
   for (const t of PROPS.get(key) || []) list.push(t);
-  const data = new Float32Array(list.length * 8);
-  list.forEach((t, n) => {
-    const r = atlas.rects[t.kind];
-    data.set([t.x, t.y, t.z, t.height, r.u0, r.u1, r.aspect, r.v1], n * 8);
-  });
-  pg = { list, data, rocks };
+  pg = Object.assign({ list, rocks }, pageData(list, pi, pj));
   pages.set(key, pg);
   return pg;
 }
+// What the page draws. near: every tree, sorted into 4 x 4 squares of 80 m (sub[q] .. sub[q + 1] are square q's)
+// so only the squares near the camera are sent. far: one clump per 32 m square holding three or more trees, at
+// their middle, as tall as the tallest of the main kind there; squares with fewer keep their trees, as do props.
+function pageData(list, pi, pj) {
+  const P = PAGE * CELL, px = X0 + pi * P, pz = Z0 + pj * P, SQ = P / 4;
+  const inst = (t, r, aspect) => [t.x, t.y, t.z, t.height, r.u0, r.u1, aspect, r.v1];
+  const sq = (t) => clamp(Math.floor((t.z - pz) / SQ), 0, 3) * 4 + clamp(Math.floor((t.x - px) / SQ), 0, 3);
+  const sorted = list.slice().sort((a, b) => sq(a) - sq(b));
+  const near = new Float32Array(sorted.length * 8), sub = new Int32Array(17);
+  sorted.forEach((t, n) => { near.set(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect), n * 8); sub[sq(t) + 1] = n + 1; });
+  for (let q = 1; q <= 16; q++) sub[q] = Math.max(sub[q], sub[q - 1]);
+  const cells = new Map(), far = [];
+  for (const t of list) {
+    if (t.kind > KIND.snowghost) { far.push(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect)); continue; }
+    const k = Math.floor((t.z - pz) / CLUMP) * 64 + Math.floor((t.x - px) / CLUMP);
+    if (!cells.has(k)) cells.set(k, []);
+    cells.get(k).push(t);
+  }
+  // thick squares are halved across their longer side, two clumps standing one behind the other like the forest's depth
+  const groups = [];
+  for (const [k, ts] of cells) {
+    if (ts.length < 8) { groups.push([k, ts]); continue; }
+    const sx = Math.max(...ts.map((t) => t.x)) - Math.min(...ts.map((t) => t.x)), sz = Math.max(...ts.map((t) => t.z)) - Math.min(...ts.map((t) => t.z));
+    const by = sx > sz ? (t) => t.x : (t) => t.z, o = ts.slice().sort((a, b) => by(a) - by(b)), half = ts.length >> 1;
+    groups.push([k, o.slice(0, half)], [k + 0.5, o.slice(half)]);
+  }
+  for (const [k, ts] of groups) {
+    if (ts.length < 3) { for (const t of ts) far.push(inst(t, atlas.rects[t.kind], atlas.rects[t.kind].aspect)); continue; }
+    const count = [0, 0, 0];
+    for (const t of ts) count[t.kind === KIND.aspen ? 1 : t.kind === KIND.snowghost ? 2 : 0]++;
+    const main = count.indexOf(Math.max(...count)), name = ['conifer', 'aspen', 'snowghost'][main];
+    const own = ts.filter((t) => (t.kind === KIND.aspen ? 1 : t.kind === KIND.snowghost ? 2 : 0) === main);
+    let x = 0, z = 0, y = Infinity, h = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const t of ts) { x += t.x; z += t.z; y = Math.min(y, t.y); x0 = Math.min(x0, t.x); x1 = Math.max(x1, t.x); z0 = Math.min(z0, t.z); z1 = Math.max(z1, t.z); }
+    for (const t of own) h = Math.max(h, t.height);
+    const ids = CLUMP_IDS[name], r = atlas.rects[ids[Math.floor(hash2(k + 31 * pi, 17 * pj) * ids.length)]];
+    // stretched a little to the spread of the trees it stands for, so neighboring clumps close up like the forest does
+    const spread = Math.max(x1 - x0, z1 - z0) + h * 0.4;
+    far.push(inst({ x: x / ts.length, y, z: z / ts.length, height: h }, r, r.aspect * clamp(spread / (h * r.aspect), 0.85, 1.3)));
+  }
+  return { near, sub, far: new Float32Array(far.flat()) };
+}
 const TREE_MAX = 60000;
-const treeGeo = new THREE.InstancedBufferGeometry();
-{
+// Two layers in one atlas: single trees near the camera, clumps past TREE_NEAR. Each fades out across TREE_NEAR
+// by the same per-pixel dither the other fades in with, so every pixel shows exactly one of them.
+function treeLayer(layer) {
+  const geo = new THREE.InstancedBufferGeometry();
   const base = new THREE.PlaneGeometry(1, 1);
   base.translate(0, 0.5, 0);
-  treeGeo.index = base.index;
-  treeGeo.setAttribute('position', base.getAttribute('position'));
+  geo.index = base.index;
+  geo.setAttribute('position', base.getAttribute('position'));
   const buf = new THREE.InstancedInterleavedBuffer(new Float32Array(TREE_MAX * 8), 8, 1);
   buf.setUsage(THREE.DynamicDrawUsage);
-  treeGeo.setAttribute('iPos', new THREE.InterleavedBufferAttribute(buf, 4, 0));
-  treeGeo.setAttribute('iTex', new THREE.InterleavedBufferAttribute(buf, 4, 4));
-  treeGeo.instanceCount = 0;
+  geo.setAttribute('iPos', new THREE.InterleavedBufferAttribute(buf, 4, 0));
+  geo.setAttribute('iTex', new THREE.InterleavedBufferAttribute(buf, 4, 4));
+  geo.instanceCount = 0;
+  return geo;
 }
-const treeMat = new THREE.ShaderMaterial({
-  uniforms: Object.assign({ uA: { value: atlas.map }, uN: { value: atlas.normal } }, LIGHT),
+const treeGeo = treeLayer(0), clumpGeo = treeLayer(1);
+const treeShaders = {
   vertexShader: /* glsl */ `
-    uniform vec3 uSun;
+    uniform vec3 uSun; uniform vec2 uNear; uniform float uLayer;
     attribute vec4 iPos, iTex;
     varying vec2 vUv; varying vec3 vRight; varying float vD; varying vec3 vBase; varying float vUp;
     void main() {
@@ -639,16 +757,21 @@ const treeMat = new THREE.ShaderMaterial({
       vec4 mv = viewMatrix * vec4(p, 1.0);
       vD = -mv.z;
       gl_Position = projectionMatrix * mv;
+      // wholly outside its layer's distances: no pixels at all
+      float d = -(viewMatrix * vec4(iPos.xyz, 1.0)).z;
+      if (uLayer < 0.5 ? d > uNear.y + 40.0 : d < uNear.x - 40.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     }`,
   fragmentShader: /* glsl */ `
     ${LIGHT_GLSL}
-    uniform sampler2D uA, uN;
+    uniform sampler2D uA, uN; uniform vec2 uNear; uniform float uLayer;
     varying vec2 vUv; varying vec3 vRight; varying float vD; varying vec3 vBase; varying float vUp;
     void main() {
+      float hsh = hash(gl_FragCoord.xy), f = smoothstep(uNear.x, uNear.y, vD);
+      if (uLayer < 0.5 ? hsh < f : hsh >= f) discard;
+      // thin out by dithering toward the edge of tree range, where the ground tint takes over
+      if (hsh < smoothstep(uTreeFar * 0.75, uTreeFar, vD)) discard;
       vec4 a = texture2D(uA, vUv);
       if (a.a < 0.5) discard;
-      // thin out by dithering toward the edge of tree range, where the ground tint takes over
-      if (hash(gl_FragCoord.xy) < smoothstep(uTreeFar * 0.75, uTreeFar, vD)) discard;
       vec3 s = texture2D(uN, vUv).rgb * 2.0 - 1.0;
       vec3 toward = vec3(-vRight.z, 0.0, vRight.x);
       vec3 n = normalize(vRight * s.x + vec3(0.0, s.y, 0.0) + toward * s.z);
@@ -658,37 +781,59 @@ const treeMat = new THREE.ShaderMaterial({
              + uBounce * band(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 * (1.0 - 0.6 * shade(vBase)) + lamps(vBase + vec3(0.0, 2.0, 0.0), n) * 1.4 + 0.05;
       gl_FragColor = vec4(finish(a.rgb, l, vD, 1.25), 1.0);
     }`,
-});
-const treeMesh = new THREE.Mesh(treeGeo, treeMat);
-treeMesh.frustumCulled = false;
-scene.add(treeMesh);
-let treePage = '';
+};
+const treeMat = new THREE.ShaderMaterial(Object.assign({
+  uniforms: Object.assign({ uA: { value: atlas.map }, uN: { value: atlas.normal }, uNear: { value: new THREE.Vector2(...TREE_NEAR) }, uLayer: { value: 0 } }, LIGHT),
+}, treeShaders));
+// the clump layer shares the tree layer's uniforms (atlas, lighting), all but which layer it is
+const clumpMat = new THREE.ShaderMaterial(Object.assign({
+  uniforms: Object.assign({}, treeMat.uniforms, { uLayer: { value: 1 } }),
+}, treeShaders));
+const treeMesh = new THREE.Mesh(treeGeo, treeMat), clumpMesh = new THREE.Mesh(clumpGeo, clumpMat);
+for (const m of [treeMesh, clumpMesh]) { m.frustumCulled = false; scene.add(m); }
+let treePage = '', treeAt = null;
+const TREE_STEP = 48;   // m the camera moves before the near squares are picked again
 function updateTrees(force) {
-  const P = PAGE * CELL;
-  const pi = Math.floor((camera.position.x - X0) / P), pj = Math.floor((camera.position.z - Z0) / P);
-  const id = pi + ',' + pj;
-  if (id === treePage && !force) return;
+  const P = PAGE * CELL, cx = camera.position.x, cz = camera.position.z;
+  if (!force && treeAt && Math.hypot(cx - treeAt.x, cz - treeAt.z) < TREE_STEP) return;
+  treeAt = { x: cx, z: cz };
+  const pi = Math.floor((cx - X0) / P), pj = Math.floor((cz - Z0) / P);
+  const id = pi + ',' + pj, newPage = id !== treePage;
   treePage = id;
   const R = Math.ceil(TREE_FAR / P) + 1;
-  const buf = treeGeo.attributes.iPos.data;
-  let n = 0;
+  const boxDist = (x0, z0, s) => Math.hypot(Math.max(0, x0 - cx, cx - x0 - s), Math.max(0, z0 - cz, cz - z0 - s));
+  const nb = treeGeo.attributes.iPos.data, fb = clumpGeo.attributes.iPos.data;
+  let n = 0, m = 0;
   const inRange = [];
   for (let b = pj - R; b <= pj + R; b++) {
     for (let a = pi - R; a <= pi + R; a++) {
       if (a < 0 || b < 0 || a * PAGE >= NX || b * PAGE >= NZ) continue;
-      const cxp = X0 + (a + 0.5) * P, czp = Z0 + (b + 0.5) * P;
-      if (Math.hypot(cxp - camera.position.x, czp - camera.position.z) > TREE_FAR + P) continue;
+      const x0 = X0 + a * P, z0 = Z0 + b * P;
+      if (Math.hypot(x0 + P / 2 - cx, z0 + P / 2 - cz) > TREE_FAR + P) continue;
       const pg = makePage(a, b);
       inRange.push(pg);
-      const count = Math.min(pg.list.length, TREE_MAX - n);
-      buf.array.set(pg.data.subarray(0, count * 8), n * 8);
-      n += count;
+      const d = boxDist(x0, z0, P);
+      if (d > TREE_FAR) continue;
+      // near: only the 80 m squares that can come within TREE_NEAR before the next pick
+      if (d < TREE_NEAR[1] + TREE_STEP + 20) {
+        for (let q = 0; q < 16; q++) {
+          if (boxDist(x0 + (q % 4) * P / 4, z0 + Math.floor(q / 4) * P / 4, P / 4) > TREE_NEAR[1] + TREE_STEP + 20) continue;
+          const count = Math.min(pg.sub[q + 1] - pg.sub[q], TREE_MAX - n);
+          nb.array.set(pg.near.subarray(pg.sub[q] * 8, (pg.sub[q] + count) * 8), n * 8);
+          n += count;
+        }
+      }
+      const count = Math.min(pg.far.length / 8, TREE_MAX - m);
+      fb.array.set(pg.far.subarray(0, count * 8), m * 8);
+      m += count;
     }
   }
-  buf.addUpdateRange(0, n * 8);
-  buf.needsUpdate = true;
-  treeGeo.instanceCount = n;
-  fillRocks(inRange);
+  for (const [geo, buf, k] of [[treeGeo, nb, n], [clumpGeo, fb, m]]) {
+    buf.addUpdateRange(0, k * 8);
+    buf.needsUpdate = true;
+    geo.instanceCount = k;
+  }
+  if (newPage || force) fillRocks(inRange);
 }
 
 // ---------- World Kit models: low poly, flat shaded, colored per vertex, lit by the same Snowlight ----------
@@ -2837,6 +2982,7 @@ window.__golden = {
   get phase() { return phase; },
   get trips() { return trips; },
   get trees() { return treeGeo.instanceCount; },
+  get clumps() { return clumpGeo.instanceCount; },
   setManual(on) { manual = on; },
   get free() { return free; },
   get menuOpen() { return !debugEl.hidden; },
