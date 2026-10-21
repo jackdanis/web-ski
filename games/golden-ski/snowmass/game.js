@@ -1580,10 +1580,11 @@ if (apronGeos.length) {
   });
   scene.add(new THREE.Mesh(geo, mat));
 }
-// ---------- Run art pass: trail signs and a fence on the real runs ----------
-// Every named run gets a trail sign where it begins, and the Village Express top terminal gets a rail fence.
+// ---------- Run art pass: trail signs, rope lines and a fence on the real runs ----------
+// Every named run gets a trail sign where it begins. Sunnyside and Max Park, which start together at the top of
+// Village Express, get rope lines down both edges of their first stretch, and the top terminal gets a rail fence.
 const RUNS = MAP.runs || [];
-const PROPS = new Map();                       // tree page -> props (the run-edge trees), merged into that page's trees
+const PROPS = new Map();                       // tree page -> props (run-edge trees, rope poles), merged into that page's trees
 function addProp(t) {
   const P = PAGE * CELL, key = Math.floor((t.x - X0) / P) * 1000 + Math.floor((t.z - Z0) / P);
   if (!PROPS.has(key)) PROPS.set(key, []);
@@ -2020,6 +2021,21 @@ SIGNS.forEach(([name, , spots], n) => {
   g.setAttribute('aNrm', new THREE.BufferAttribute(new Float32Array(faceNrm), 3));
   g.computeBoundingSphere();
   scene.add(new THREE.Mesh(g, signMat));
+}
+// rope lines on bamboo poles down both edges of the first 170 m of Sunnyside and Max Park, kept where kit v18
+// had them (runs-build/ropes.json), standing on the shaped snow
+const ropePts = [];
+for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
+  for (let k = 0; k < line.length; k += 3) {
+    const [x, z, y] = [line[k], line[k + 1], line[k + 2]];
+    addProp({ x, z, y: y - 0.15, height: 1.7, r: 0, kind: KIND.pole });
+    if (k) ropePts.push(line[k - 3], line[k - 1] + 1.25, line[k - 2], x, y + 1.25, z);
+  }
+}
+{
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ropePts), 3));
+  scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xc8261c })));
 }
 // a wooden rail fence behind the Village Express top terminal, where the ridge drops away
 {

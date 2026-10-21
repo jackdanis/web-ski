@@ -21,7 +21,8 @@ of single trees. FreePlay starts at the Village Express top, facing down Sunnysi
 - Run edges are lined with trees from a 1 m canopy height map at real forest density. Within about 150 m of you the
   gaps are packed in so the forest is tight but you can still ski between the trees; farther out only the mapped trees
   and clumps are drawn. Every tree is solid.
-- Each named run has one trail sign where it begins, with the run's name and its difficulty symbol.
+- Each named run has one trail sign where it begins, with the run's name and its difficulty symbol. Rope lines on
+  bamboo poles run down both edges of the first 170 m of Sunnyside and Max Park.
 - Buildings near the runs are plain stand-in blocks on their real footprints until the real buildings are made.
 - No build step. `data.js` holds the terrain, forest and lifts. `runs.js` holds the run index, the run-edge trees,
   the signs and the stand-in blocks, and `runs/` holds the 2 m run tiles in 512 m chunks that the game fetches as you
