@@ -202,9 +202,33 @@ function samplePatch(P, x, z, out) {
   out.gx = cr(rowD[0], rowD[1], rowD[2], rowD[3], tz);
   return out;
 }
-function sample(x, z, out = samp) {
+function sampleBase(x, z, out) {
   if (patchOn && PATCH && samplePatch(PATCH, x, z, out)) return out;
   return sampleGrid(H, NX, NZ, X0, Z0, CELL, x, z, out);
+}
+// Chairlift stations sit on their own snow: flat on the deck, then easing back down (or up) to the natural
+// ground over the apron around it, so the slope flows into the station and you can ski onto the deck.
+const STATIONS = [];
+const stB = { h: 0, gx: 0, gz: 0 };
+function stationAt(x, z) {
+  for (const st of STATIONS) if (x > st.bx0 && x < st.bx1 && z > st.bz0 && z < st.bz1) return st;
+  return null;
+}
+// how far (m) a point is outside a station's deck, in the station's own frame
+function deckDist(st, x, z) {
+  const dx = x - st.x, dz = z - st.z, u = st.c * dx - st.s * dz, v = st.s * dx + st.c * dz;
+  return Math.hypot(Math.max(st.u0 - u, 0, u - st.u1), Math.max(st.v0 - v, 0, v - st.v1));
+}
+function stationH(st, x, z) {
+  const t = Math.min(1, deckDist(st, x, z) / st.A), e = t * t * (3 - 2 * t);
+  return st.y * (1 - e) + sampleBase(x, z, stB).h * e;
+}
+function sample(x, z, out = samp) {
+  const st = STATIONS.length ? stationAt(x, z) : null;
+  if (!st) return sampleBase(x, z, out);
+  const h = stationH(st, x, z), E = 0.3;
+  out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
+  return out;
 }
 const groundY = (x, z) => sample(x, z, { h: 0, gx: 0, gz: 0 }).h;
 function normalFrom(s, out) {
@@ -295,6 +319,8 @@ const [cordT, cordN, powT, powN, skyT, goldieT, goldieN, ...skyRest] = await Pro
   loadTex('sky_golden', { pixel: false }), loadTex('sky_night', { pixel: false }), loadTex('sky_storm', { pixel: false }),
 ]);
 const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
+// the station atlas: color and normal map tiles for the lift stations (lifts/textures/make_textures.py)
+const [stationT, stationN] = await Promise.all([loadTex('station_atlas'), loadTex('station_atlas_n')]);
 const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });
 const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n']).map(loadImg));
@@ -557,27 +583,38 @@ function updateTerrain() {
 // lit per pixel from its normal map like Goldie. Trees are made page by page (320 m squares) from the
 // cover map, the same way every time, so the ones you see are the ones you hit.
 const SLOT = 80;
-// Clumps: the same tree sprites bunched up on one sprite, for forest past TREE_NEAR. Three rows, the back ones
-// smaller and standing higher, the way rows of trees farther up a slope show over the ones in front.
+// Clumps: the same tree sprites bunched up on one sprite, for forest past TREE_NEAR.
 // Each tree is [kind, scale, x, rise] in sprite pixels; drawn in order, back row first.
+// The three conifer clumps are laid out by hand so each has its own outline (Jack 2026-10-21):
+// A an even spruce stand, B one tall fir off to the right with the rest trailing off to the left,
+// C a tall group, an opening, then a low pair. Here trees are [kind, scale, center x, rise].
 const CLUMP_W = 168;
+const CONIFER_CLUMPS = [
+  [[0, 0.556, 10, 22], [0, 0.58, 47, 22], [0, 0.604, 78, 22], [0, 0.568, 115, 22], [0, 0.592, 146, 22], [0, 0.732, 29, 11], [0, 0.696, 60, 11], [0, 0.72, 97, 11], [0, 0.744, 128, 11], [0, 0.708, 165, 11], [0, 0.848, 14, 0], [0, 0.872, 55, 0], [0, 0.836, 90, 0], [0, 0.86, 131, 0]],
+  [[1, 0.62, 138, 14], [1, 0.48, 76, 20], [1, 0.56, 50, 12], [1, 0.36, 12, 16], [0, 0.7, 106, 6], [1, 0.5, 30, 4], [1, 1.0, 124, 0], [1, 0.52, 152, 0], [0, 0.64, 88, 0], [1, 0.58, 64, 0], [0, 0.44, 38, 0], [1, 0.34, 18, 0]],
+  [[1, 0.62, 24, 18], [0, 0.7, 50, 16], [0, 0.94, 36, 4], [1, 0.74, 64, 2], [1, 0.48, 14, 0], [0, 0.56, 78, 0], [1, 0.52, 128, 10], [0, 0.6, 148, 4], [1, 0.4, 118, 0]],
+];
 const CLUMPS = [
-  { kind: 'conifer', mix: [0, 0, 1] }, { kind: 'conifer', mix: [1, 1, 0] }, { kind: 'conifer', mix: [0, 1] },
-  { kind: 'aspen', mix: [2] }, { kind: 'snowghost', mix: [3] },
-].map((c, m) => {
-  const trees = [];
-  [[0.56, 0.17], [0.74, 0.08], [0.94, 0]].forEach(([sc, rise], row) => {
-    for (let q = 0; q < 4; q++) {
-      const r = (u) => hash2(m * 7 + row * 4 + q, u);
-      const n = c.mix[Math.floor(r(1) * c.mix.length)], scale = sc + (r(2) - 0.5) * 0.12;
-      const w = treeImgs[n * 2].width * scale, h = treeImgs[n * 2].height;
-      // evenly spread with a little jitter, each row set half a gap over from the one behind
-      const room = CLUMP_W - w, x = Math.round(clamp(room * (q + (row === 1 ? 0.25 : row === 2 ? 0.6 : 0) + (r(3) - 0.5) * 0.35) / 3.6, 0, room));
-      trees.push([n, scale, x, Math.round(h * (rise + r(4) * 0.04))]);
-    }
-  });
-  return { kind: c.kind, trees };
-});
+  ...CONIFER_CLUMPS.map((list) => ({ kind: 'conifer', trees: list.map(([n, scale, cx, rise]) => {
+    const dw = Math.round(treeImgs[n * 2].width * scale);
+    return [n, scale, Math.round(clamp(cx - dw / 2, 0, CLUMP_W - dw)), rise];
+  }) })),
+  // aspen and snow ghost clumps: three rows, the back ones smaller and standing higher
+  ...[{ kind: 'aspen', mix: [2] }, { kind: 'snowghost', mix: [3] }].map((c, k) => {
+    const m = k + 3, trees = [];
+    [[0.56, 0.17], [0.74, 0.08], [0.94, 0]].forEach(([sc, rise], row) => {
+      for (let q = 0; q < 4; q++) {
+        const r = (u) => hash2(m * 7 + row * 4 + q, u);
+        const n = c.mix[Math.floor(r(1) * c.mix.length)], scale = sc + (r(2) - 0.5) * 0.12;
+        const w = treeImgs[n * 2].width * scale, h = treeImgs[n * 2].height;
+        // evenly spread with a little jitter, each row set half a gap over from the one behind
+        const room = CLUMP_W - w, x = Math.round(clamp(room * (q + (row === 1 ? 0.25 : row === 2 ? 0.6 : 0) + (r(3) - 0.5) * 0.35) / 3.6, 0, room));
+        trees.push([n, scale, x, Math.round(h * (rise + r(4) * 0.04))]);
+      }
+    });
+    return { kind: c.kind, trees };
+  }),
+];
 const atlas = (() => {
   const W = SLOT * TREE_KINDS.length + CLUMP_W * CLUMPS.length;
   const mk = (cv) => {
@@ -838,14 +875,21 @@ function updateTrees(force) {
 
 // ---------- World Kit models: low poly, flat shaded, colored per vertex, lit by the same Snowlight ----------
 // aH is each vertex's height above its own model's base, so shadows on the snow only darken the bottom.
+// Parts can carry a tile of the station atlas (aT: u, v in tiles, tile + 1; 0 = plain color). A textured part's
+// color is its vertex color times the tile's, and the tile's normal map bends the face normal, so seams, plank
+// gaps and battens catch the four Snowlight bands. Up close only: past ~300 m it fades to the tile's average.
+const TILES = { hood: 0, deck: 1, siding: 2, window: 3, roofSnow: 4, concrete: 5 };
+const TILE_AVG = [[0.14, 0.276, 0.588], [0.365, 0.279, 0.204], [0.469, 0.337, 0.225], [0.294, 0.303, 0.351], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541], [1, 1, 1], [1, 1, 1]];
 const modelMat = new THREE.ShaderMaterial({
   vertexColors: true,
-  uniforms: LIGHT,
+  uniforms: Object.assign({ uAtlas: { value: stationT }, uAtlasN: { value: stationN },
+    uAvg: { value: TILE_AVG.map((c) => new THREE.Vector3(...c)) } }, LIGHT),
   vertexShader: /* glsl */ `
     attribute float aH;
-    varying vec3 vC; varying vec3 vP; varying float vD; varying float vH;
+    attribute vec3 aT;
+    varying vec3 vC; varying vec3 vP; varying float vD; varying float vH; varying vec3 vT;
     void main() {
-      vC = color; vH = aH;
+      vC = color; vH = aH; vT = aT;
       vec4 w = vec4(position, 1.0);
       #ifdef USE_INSTANCING
         w = instanceMatrix * w;
@@ -858,23 +902,58 @@ const modelMat = new THREE.ShaderMaterial({
     }`,
   fragmentShader: /* glsl */ `
     ${LIGHT_GLSL}
-    varying vec3 vC; varying vec3 vP; varying float vD; varying float vH;
+    uniform sampler2D uAtlas, uAtlasN; uniform vec3 uAvg[8];
+    varying vec3 vC; varying vec3 vP; varying float vD; varying float vH; varying vec3 vT;
     void main() {
       vec3 n = normalize(cross(dFdx(vP), dFdy(vP)));
+      vec3 alb = vC;
+      if (vT.z > 0.5) {
+        int t = int(vT.z - 0.5);
+        float tf = float(t);
+        vec2 cell = vec2(mod(tf, 4.0), 1.0 - floor(tf / 4.0));   // the image's top row is the texture's upper half
+        vec2 auv = (cell + (fract(vT.xy) * 62.0 + 1.0) / 64.0) / vec2(4.0, 2.0);
+        vec3 tc = texture2D(uAtlas, auv).rgb, tn = texture2D(uAtlasN, auv).rgb * 2.0 - 1.0;
+        // bend the face normal along the tile's own axes, found from how the tile coordinates run across the screen
+        vec3 q0 = dFdx(vP), q1 = dFdy(vP); vec2 s0 = dFdx(vT.xy), s1 = dFdy(vT.xy);
+        vec3 q1p = cross(q1, n), q0p = cross(n, q0);
+        vec3 T = q1p * s0.x + q0p * s1.x, B = q1p * s0.y + q0p * s1.y;
+        float det = max(dot(T, T), dot(B, B)), sc = det == 0.0 ? 0.0 : inversesqrt(det);
+        vec3 pn = normalize(T * (tn.x * sc) + B * (tn.y * sc) + n * tn.z);
+        float near = 1.0 - smoothstep(120.0, 320.0, vD);
+        vec3 avg = uAvg[0];
+        for (int k = 1; k < 8; k++) if (k == t) avg = uAvg[k];
+        alb = vC * mix(avg, tc, near);
+        n = normalize(mix(n, pn, near));
+      }
       vec2 sunXZ = normalize(uSun.xz + vec2(1e-4));
       float lit = 1.0 - shade(vP + vec3(sunXZ.x, 0.0, sunXZ.y) * 1.5) * (1.0 - smoothstep(0.0, 4.0, vH));
       vec3 l = uSunC * band(max(0.0, dot(n, uSun))) * lit + uSky * (0.35 + 0.35 * n.y)
              + uBounce * band0(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 + lamps(vP, n) * 1.2 + 0.05;
-      gl_FragColor = vec4(finish(vC, l, vD, 1.25), 1.0);
+      gl_FragColor = vec4(finish(alb, l, vD, 1.25), 1.0);
     }`,
 });
 const STEEL = [0.46, 0.48, 0.52], DARK = [0.2, 0.21, 0.25], CONC = [0.62, 0.6, 0.56], PAD = [0.78, 0.12, 0.1],
   SEAT = [0.16, 0.2, 0.36], WALL = [0.5, 0.36, 0.24], SNOWCAP = [0.92, 0.95, 1.0], CABIN = [0.75, 0.6, 0.2], GLASS = [0.15, 0.2, 0.3];
 // A part: a simple geometry with one color, placed by an optional matrix.
-function part(g, col, m) {
+// With a tile (TILES), each face gets atlas coordinates projected along its main axis, 4 m to a tile, v up the walls.
+function part(g, col, m, tile = -1) {
   g = g.index ? g.toNonIndexed() : g;
-  const n = g.attributes.position.count, c = new Float32Array(n * 3), h = new Float32Array(n);
+  const n = g.attributes.position.count, c = new Float32Array(n * 3), h = new Float32Array(n), t = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) { c.set(col, i * 3); h[i] = g.attributes.position.getY(i); }
+  if (tile >= 0) {
+    const P = g.attributes.position.array;
+    for (let f = 0; f < n; f += 3) {
+      const ax = P[f * 3 + 3] - P[f * 3], ay = P[f * 3 + 4] - P[f * 3 + 1], az = P[f * 3 + 5] - P[f * 3 + 2];
+      const bx = P[f * 3 + 6] - P[f * 3], by = P[f * 3 + 7] - P[f * 3 + 1], bz = P[f * 3 + 8] - P[f * 3 + 2];
+      const nx = Math.abs(ay * bz - az * by), ny = Math.abs(az * bx - ax * bz), nz = Math.abs(ax * by - ay * bx);
+      for (let k = f; k < f + 3; k++) {
+        const x = P[k * 3], y = P[k * 3 + 1], z = P[k * 3 + 2];
+        const [u, v] = ny >= nx && ny >= nz ? [x, z] : nx >= nz ? [z, y] : [x, y];
+        t.set([u / 4, v / 4, tile + 1], k * 3);
+      }
+    }
+  }
+  g.setAttribute('aT', new THREE.BufferAttribute(t, 3));
   if (m) g.applyMatrix4(m);
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   g.setAttribute('aH', new THREE.BufferAttribute(h, 1));
@@ -882,16 +961,18 @@ function part(g, col, m) {
 }
 function merge(parts) {
   const n = parts.reduce((a, g) => a + g.attributes.position.count, 0);
-  const p = new Float32Array(n * 3), c = new Float32Array(n * 3), h = new Float32Array(n);
+  const p = new Float32Array(n * 3), c = new Float32Array(n * 3), h = new Float32Array(n), t = new Float32Array(n * 3);
   let o = 0;
   for (const g of parts) {
     p.set(g.attributes.position.array, o * 3); c.set(g.attributes.color.array, o * 3); h.set(g.attributes.aH.array, o);
+    if (g.attributes.aT) t.set(g.attributes.aT.array, o * 3);
     o += g.attributes.position.count;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(p, 3));
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   g.setAttribute('aH', new THREE.BufferAttribute(h, 1));
+  g.setAttribute('aT', new THREE.BufferAttribute(t, 3));
   g.computeBoundingSphere();
   return g;
 }
@@ -952,6 +1033,109 @@ function fillRocks(pagesInRange) {
   for (const m of rockMeshes) m.instanceMatrix.needsUpdate = true;
 }
 
+// New chairlift terminal (Jack 2026-10-21): a hood over the wheel on four thin legs, the wheel on its own center post,
+// a wooden deck and an operator hut. Local frame: wheel center at x = z = 0, ground y = 0, the line off toward -z.
+const TCOL = { STEEL, DARK, CONC, WALL, SNOWCAP, GLASS, CANOPY: [0.14, 0.28, 0.6], UNDER: [0.1, 0.13, 0.22], DECK: [0.42, 0.31, 0.21] };
+// the canopy: a rounded hood over the wheel, open to the line; three outlines stacked, each the same plan shape
+// (straight sides, a half circle around the wheel's back) at its own size, joined by sloped walls, capped top and bottom
+function canopy(R, L, y0, seg = 8) {
+  const ring = (w, y, front) => {
+    const p = [[w, front]];
+    for (let k = 0; k <= seg; k++) { const t = (k / seg) * Math.PI; p.push([w * Math.cos(t), w * Math.sin(t)]); }
+    p.push([-w, front]);
+    return p.map(([x, z]) => new THREE.Vector3(x, y, z));
+  };
+  const rings = [ring(R, y0, -L), ring(R + 0.25, y0 + 0.75, -L - 0.15), ring(R - 0.8, y0 + 1.45, -L + 0.5)];
+  const pos = [];
+  const tri = (a, b, c) => pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  for (let r = 0; r < rings.length - 1; r++) {
+    const A = rings[r], B = rings[r + 1], n = A.length;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; tri(A[i], B[j], A[j]); tri(A[i], B[i], B[j]); }
+  }
+  const cap = (Rg, up) => {
+    const f = THREE.ShapeUtils.triangulateShape(Rg.map((v) => new THREE.Vector2(v.x, v.z)), []);
+    for (const [a, b, c] of f) up ? tri(Rg[a], Rg[c], Rg[b]) : tri(Rg[a], Rg[b], Rg[c]);
+  };
+  cap(rings[2], true);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  // the underside, dark, so the hood reads as a shell from below
+  const u = [];
+  const f = THREE.ShapeUtils.triangulateShape(rings[0].map((v) => new THREE.Vector2(v.x, v.z)), []);
+  for (const [a, b, c] of f) for (const v of [rings[0][a], rings[0][c], rings[0][b]]) u.push(v.x, v.y + 0.02, v.z);
+  const ug = new THREE.BufferGeometry();
+  ug.setAttribute('position', new THREE.Float32BufferAttribute(u, 3));
+  return [g, ug];
+}
+// a gable roof: width across, length along z, ridge height; overhangs come from width/length past the walls
+function gable(w, l, h) {
+  const a = [-w / 2, 0], b = [w / 2, 0], c = [0, h], pos = [];
+  const v = (p, z) => [p[0], p[1], z];
+  const quad = (p, q, r, s) => pos.push(...p, ...q, ...r, ...p, ...r, ...s);
+  quad(v(a, l / 2), v(c, l / 2), v(c, -l / 2), v(a, -l / 2));
+  quad(v(b, -l / 2), v(c, -l / 2), v(c, l / 2), v(b, l / 2));
+  pos.push(...v(a, l / 2), ...v(b, l / 2), ...v(c, l / 2), ...v(b, -l / 2), ...v(a, -l / 2), ...v(c, -l / 2));
+  quad(v(a, -l / 2), v(b, -l / 2), v(b, l / 2), v(a, l / 2));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return g;
+}
+// The snow apron around a station: a grid in the station's frame over the deck plus its apron, heights from
+// stationH, the outer ring tucked just under the ground so it meets the mountain without a seam.
+function apron(sd, base) {
+  const step = 2.0, pos = [], A = sd.A;
+  const us = [], vs = [];
+  for (let u = sd.u0 - A; u < sd.u1 + A + step; u += step) us.push(Math.min(u, sd.u1 + A));
+  for (let v = sd.v0 - A; v < sd.v1 + A + step; v += step) vs.push(Math.min(v, sd.v1 + A));
+  const at = (u, v) => {
+    const x = sd.x + sd.c * u + sd.s * v, z = sd.z - sd.s * u + sd.c * v, d = deckDist(sd, x, z);
+    const y = d >= A ? sampleBase(x, z, stB).h - 0.4 : stationH(sd, x, z) + 0.03;
+    return [u, y - base, v, d];
+  };
+  const grid = vs.map((v) => us.map((u) => at(u, v)));
+  for (let b = 0; b < vs.length - 1; b++) for (let a = 0; a < us.length - 1; a++) {
+    const p = grid[b][a], q = grid[b][a + 1], r = grid[b + 1][a + 1], t = grid[b + 1][a];
+    if (p[3] === 0 && q[3] === 0 && r[3] === 0 && t[3] === 0) continue;      // under the deck
+    if (p[3] >= A && q[3] >= A && r[3] >= A && t[3] >= A) continue;          // past the apron
+    pos.push(...p.slice(0, 3), ...r.slice(0, 3), ...q.slice(0, 3), ...p.slice(0, 3), ...t.slice(0, 3), ...r.slice(0, 3));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.applyMatrix4(placeM(sd.x, base, sd.z, sd.yaw));
+  return g;
+}
+// the deck's footprint in the station's frame: [u0, u1] across, [v0, v1] along (the line off toward -v)
+const deckRect = (arm) => [-(arm + 2.0), arm + 5.0, -7.5, 1.5];
+function chairTerminal(H = 5, arm = 3, foot = 3) {
+  const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile)), W = [1, 1, 1];
+  const R = arm + 1.0, L = 7, top = H - 0.35;
+  // the wheel's own post: footing, tapered column, the drive box the wheel turns on
+  add(new THREE.BoxGeometry(2.2, 0.5, 2.2).translate(0, 0.25, 0), W, TILES.concrete);
+  add(new THREE.CylinderGeometry(0.42, 0.6, H - 0.7, 8).translate(0, 0.5 + (H - 0.7) / 2, 0), TCOL.STEEL);
+  add(new THREE.CylinderGeometry(arm, arm, 0.3, 14).translate(0, H, 0), TCOL.DARK);
+  // the hood and its four thin legs, standing just outside the chairs' path
+  const [hood, under] = canopy(R, L, top);
+  add(hood, W, TILES.hood); add(under, TCOL.UNDER);
+  for (const [x, z] of [[-(arm + 1.55), 1.2], [arm + 1.55, 1.2], [-(arm + 1.55), -L + 0.9], [arm + 1.55, -L + 0.9]]) {
+    const h = top - 0.5;
+    add(new THREE.BoxGeometry(0.2, h, 0.2).translate(x, 0.5 + h / 2, z), TCOL.STEEL);
+  }
+  // the deck: a wooden platform under the hood where the chairs come round, flush with the snow around it
+  const [xl, xr, d0, d1] = deckRect(arm);
+  add(new THREE.BoxGeometry(xr - xl, 0.5, d1 - d0).translate((xl + xr) / 2, 0.25, (d0 + d1) / 2), W, TILES.deck);
+  add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate((xl + xr) / 2, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);   // footing, down to the snow
+  // the operator hut on the deck, beside the chairs, windows all round so the operator sees the loading
+  const hx = arm + 3.4, hz = -L + 3.2, hb = 0.5;
+  add(new THREE.BoxGeometry(3.0, 2.6, 3.0).translate(hx, hb + 1.3, hz), W, TILES.siding);
+  add(new THREE.BoxGeometry(3.06, 0.9, 2.4).translate(hx, hb + 1.75, hz), W, TILES.window);
+  add(new THREE.BoxGeometry(2.4, 0.9, 3.06).translate(hx, hb + 1.75, hz), W, TILES.window);
+  // a gable roof under snow, running along the line
+  const roof = gable(3.8, 3.8, 1.0).translate(hx, hb + 2.6, hz);
+  add(roof, W, TILES.roofSnow);
+  add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(hx - 1.6, hb + 2.2, hz - 1.6), TCOL.DARK);   // lamp post
+  return P;
+}
+
 // ---------- Chairlifts on the real lift lines (OpenStreetMap, in lifts.json) ----------
 // The kit's towers, cable and chairs. OSM's points along a line are its towers where mapped; long gaps
 // get towers about every 110 m. Each tower is as tall as it needs to be for the chairs to clear the snow.
@@ -965,7 +1149,7 @@ const LIFT_STYLE = {
 const MAX_SPAN = 115;
 const LIFTS = MAP.lifts || [];
 const LIFT_CUT = new Uint8Array(NX * NZ);
-const liftParts = [], cablePts = [], casters = [], lampList = [];
+const liftParts = [], cablePts = [], casters = [], lampList = [], apronGeos = [];
 const carriers = { chair: [], cabin: [], bar: [] };
 const liftPaths = [];
 for (const lift of LIFTS) {
@@ -987,6 +1171,25 @@ for (const lift of LIFTS) {
   const N = pts.length;
   const g = pts.map(([x, z]) => groundY(x, z));
   const c = g.map((y, i) => y + (i === 0 || i === N - 1 ? st.term : st.tower));
+  // chairlift stations: the deck sits at the highest snow under it, the apron eases the ground to it,
+  // and the cable runs 3.15 m over the deck so the seats pass about half a meter above it
+  const stn = {};
+  if (lift.kind === 'chair_lift' || !LIFT_STYLE[lift.kind]) for (const i of [0, N - 1]) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N - 1, i + 1)];
+    const yaw = Math.atan2(b[0] - a[0], b[1] - a[1]) + (i === 0 ? Math.PI : 0), cs = Math.cos(yaw), sn = Math.sin(yaw);
+    const [u0, u1, v0, v1] = deckRect(st.arm);
+    let hi = -1e9, lo = 1e9;
+    for (let v = v0; v <= v1 + 0.01; v += 1.5) for (let u = u0; u <= u1 + 0.01; u += 1.5) {
+      const h = groundY(pts[i][0] + cs * u + sn * v, pts[i][1] - sn * u + cs * v);
+      hi = Math.max(hi, h); lo = Math.min(lo, h);
+    }
+    const y = hi + 0.1, A = clamp((y - lo) * 3 + 4, 6, 18);
+    const R = Math.hypot(Math.max(-u0, u1), Math.max(-v0, v1)) + A;
+    const sd = { x: pts[i][0], z: pts[i][1], c: cs, s: sn, yaw, u0, u1, v0, v1, y, lo, A,
+      bx0: pts[i][0] - R, bx1: pts[i][0] + R, bz0: pts[i][1] - R, bz1: pts[i][1] + R };
+    stn[i] = sd;
+    c[i] = y + 3.15;
+  }
   const sagOf = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) * 0.012;
   const cableAt = (i, f) => c[i] + (c[i + 1] - c[i]) * f - sagOf(i) * Math.sin(Math.PI * f);
   // raise towers until every span clears the snow under it
@@ -1033,8 +1236,10 @@ for (const lift of LIFTS) {
   }
   // terminals: a bullwheel on legs, and a snow-capped operator hut with a lamp
   for (const i of [0, N - 1]) {
-    const yaw = dirAt(i) + (i === 0 ? Math.PI : 0), arm = st.arm, hh = c[i] - g[i];
-    const parts = [
+    const sd = stn[i], yaw = sd ? sd.yaw : dirAt(i) + (i === 0 ? Math.PI : 0), arm = st.arm;
+    const base = sd ? sd.y - 0.5 : g[i] - 0.3, hh = c[i] - base;
+    const neu = !!sd;
+    const parts = neu ? chairTerminal(hh, arm, sd.y - sd.lo + 0.6) : [
       part(new THREE.BoxGeometry(arm * 2 + 4, 0.6, 9).translate(0, 0.0, 1.5), CONC),
       part(new THREE.BoxGeometry(0.7, hh - 0.6, 0.7).translate(-1.2, (hh - 0.6) / 2, 0), STEEL),
       part(new THREE.BoxGeometry(0.7, hh - 0.6, 0.7).translate(1.2, (hh - 0.6) / 2, 0), STEEL),
@@ -1045,10 +1250,24 @@ for (const lift of LIFTS) {
       part(new THREE.ConeGeometry(2.7, 1.5, 4, 1).rotateY(Math.PI / 4).translate(arm + 3.6, 3.35, -3), SNOWCAP),
       part(new THREE.BoxGeometry(0.2, 5.5, 0.2).translate(arm + 1.6, 2.75, -1.2), DARK),
     ];
-    const m = placeM(pts[i][0], g[i] - 0.3, pts[i][1], yaw);
+    const m = placeM(pts[i][0], base, pts[i][1], yaw);
     liftParts.push(...placed(parts, m));
+    if (sd) {
+      apronGeos.push(apron(sd, base));
+      STATIONS.push(sd);
+      // the post, the four legs and the hut stop you; the deck and apron are snow you ride on
+      const L = 7, toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
+      for (const [u, v, r] of [[0, 0, 0.6], [-(arm + 1.55), 1.2, 0.2], [arm + 1.55, 1.2, 0.2], [-(arm + 1.55), -L + 0.9, 0.2], [arm + 1.55, -L + 0.9, 0.2], [arm + 3.4, -L + 3.2, 1.7]]) {
+        const [x, z] = toW(u, v);
+        addObstacle({ x, z, y: sd.y, r, height: hh });
+      }
+      // no trees on the station or its apron
+      for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
+        for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
+          if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
+    }
     casters.push({ x: pts[i][0], z: pts[i][1], h: hh, w: arm + 1 });
-    lampList.push(new THREE.Vector3(arm + 1.6, 5.6, -1.2).applyMatrix4(m));
+    lampList.push((neu ? new THREE.Vector3(arm + 3.4 - 1.6, 4.9, -7 + 3.2 - 1.6) : new THREE.Vector3(arm + 1.6, 5.6, -1.2)).applyMatrix4(m));
   }
   // the cable: a dense path along the tower tops with sag, plus its length along the way
   const path = [];
@@ -1083,6 +1302,22 @@ for (const lift of LIFTS) {
   for (let d = 0; d < 2 * L; d += st.gap) carriers[st.carrier].push({ lp, s0: d });
 }
 scene.add(new THREE.Mesh(merge(liftParts), modelMat));
+// the stations' snow aprons: groomed snow drawn like the ground, a hair in front of it
+if (apronGeos.length) {
+  const n = apronGeos.reduce((a, g) => a + g.attributes.position.count, 0), p = new Float32Array(n * 3), cov = new Float32Array(n * 4);
+  let o = 0;
+  for (const g of apronGeos) { p.set(g.attributes.position.array, o * 3); o += g.attributes.position.count; }
+  for (let k = 0; k < n; k++) cov[k * 4] = -5;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  geo.setAttribute('aCov', new THREE.BufferAttribute(cov, 4));
+  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: Object.assign({}, terrainMat.uniforms, { uPFar: { value: 1e9 } }), vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
+    defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+  });
+  scene.add(new THREE.Mesh(geo, mat));
+}
 // ---------- Run art pass: trail signs, rope lines and a fence on the real runs ----------
 // Every named run gets a trail sign at its top. Sunnyside and Max Park, which start together at the top of
 // Village Express, get rope lines down both edges of their first stretch, and the top terminal gets a rail fence.
@@ -1752,12 +1987,36 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
   scene.add(lines);
 }
 // carriers: chairs, gondola cabins and T-bar hangers, each one instanced mesh, hanging below the cable
+// a square tube from a to b (model-local points), for the chair's frame
+function tube(a, b, r, col) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A);
+  const g = new THREE.BoxGeometry(r, d.length(), r);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(UP_Y, d.clone().normalize()));
+  return part(g.translate((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2), col);
+}
+// The chair (Jack's photo, a detachable quad): grip, hanger and a galvanized frame bowing down to both ends of
+// the seat, four dark cushions, a back, armrests and the safety bar raised. Faces +z; the cable is at y = 0.
+const FRAME = [0.62, 0.64, 0.68], CUSH = [0.17, 0.18, 0.21];
+const CHAIR_NEAR = 350, CHAIR_FAR = 2500;           // m: the full chair, then a plain one, then none at all
 const CARRIER_GEO = {
   chair: merge([
-    part(new THREE.BoxGeometry(0.14, 2.6, 0.14).translate(0, -1.3, 0), DARK),
-    part(new THREE.BoxGeometry(2.4, 0.25, 0.9).translate(0, -2.6, 0.2), SEAT),
-    part(new THREE.BoxGeometry(2.4, 1.0, 0.15).translate(0, -2.1, -0.25), SEAT),
-    part(new THREE.BoxGeometry(2.4, 0.08, 0.08).translate(0, -1.7, 0.75), DARK),
+    part(new THREE.BoxGeometry(0.26, 0.3, 0.5).translate(0, -0.15, 0), DARK),
+    tube([0, -0.3, 0], [0, -1.15, -0.32], 0.11, FRAME),
+    tube([-1.18, -1.2, -0.34], [1.18, -1.2, -0.34], 0.09, FRAME),
+    tube([-1.18, -1.2, -0.34], [-1.24, -2.0, -0.36], 0.08, FRAME), tube([-1.24, -2.0, -0.36], [-1.2, -2.66, -0.1], 0.08, FRAME),
+    tube([1.18, -1.2, -0.34], [1.24, -2.0, -0.36], 0.08, FRAME), tube([1.24, -2.0, -0.36], [1.2, -2.66, -0.1], 0.08, FRAME),
+    part(new THREE.BoxGeometry(2.42, 0.07, 0.55).translate(0, -2.72, 0.1), FRAME),
+    ...[-0.9, -0.3, 0.3, 0.9].map((x) => part(new THREE.BoxGeometry(0.56, 0.13, 0.52).translate(x, -2.62, 0.12), CUSH)),
+    part(new THREE.BoxGeometry(2.3, 0.5, 0.11).rotateX(-0.18).translate(0, -2.26, -0.24), CUSH),
+    tube([-1.22, -2.3, -0.2], [-1.22, -2.3, 0.38], 0.06, FRAME), tube([1.22, -2.3, -0.2], [1.22, -2.3, 0.38], 0.06, FRAME),
+    tube([-1.18, -1.2, -0.34], [-1.16, -1.38, 0.32], 0.06, FRAME), tube([1.18, -1.2, -0.34], [1.16, -1.38, 0.32], 0.06, FRAME),
+    tube([-1.16, -1.38, 0.32], [1.16, -1.38, 0.32], 0.06, FRAME),
+  ]),
+  // past CHAIR_NEAR: hanger, seat and back only
+  chairFar: merge([
+    part(new THREE.BoxGeometry(0.14, 2.5, 0.14).translate(0, -1.3, -0.3), FRAME),
+    part(new THREE.BoxGeometry(2.4, 0.2, 0.55).translate(0, -2.64, 0.12), CUSH),
+    part(new THREE.BoxGeometry(2.3, 0.5, 0.12).translate(0, -2.26, -0.24), CUSH),
   ]),
   cabin: merge([
     part(new THREE.BoxGeometry(0.14, 1.6, 0.14).translate(0, -0.8, 0), DARK),
@@ -1771,8 +2030,8 @@ const CARRIER_GEO = {
   ]),
 };
 const carrierMeshes = {};
-for (const k of Object.keys(carriers)) {
-  const m = new THREE.InstancedMesh(CARRIER_GEO[k], modelMat, Math.max(1, carriers[k].length));
+for (const k of [...Object.keys(carriers), 'chairFar']) {
+  const m = new THREE.InstancedMesh(CARRIER_GEO[k], modelMat, Math.max(1, carriers[k === 'chairFar' ? 'chair' : k].length));
   m.frustumCulled = false;
   scene.add(m);
   carrierMeshes[k] = m;
@@ -1788,19 +2047,32 @@ function pathAt(lp, d, out) {
 }
 const cp = { x: 0, y: 0, z: 0, dx: 0, dz: 0 };
 function placeCarriers(t) {
+  const cx = camera.position.x, cz = camera.position.z, fe = carrierMeshes.chairFar.instanceMatrix.array;
+  let nFar = 0;
   for (const k of Object.keys(carriers)) {
     const m = carrierMeshes[k], e = m.instanceMatrix.array;
-    carriers[k].forEach((c, n) => {
+    let nNear = 0;
+    carriers[k].forEach((c) => {
       const lp = c.lp, d = (c.s0 + t * lp.speed) % (2 * lp.L), up = d < lp.L;
       pathAt(lp, up ? d : 2 * lp.L - d, cp);
       const len = Math.hypot(cp.dx, cp.dz) || 1, ux = cp.dx / len, uz = cp.dz / len;
       const side = up ? 1 : -1, fx = ux * side, fz = uz * side;   // riders face the way they travel
       const x = cp.x + uz * lp.arm * side, z = cp.z - ux * lp.arm * side;
+      // chairs: the full model near, a plain one farther, none past CHAIR_FAR
+      let out = e, n = nNear;
+      if (k === 'chair') {
+        const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+        if (d2 > CHAIR_FAR * CHAIR_FAR) return;
+        if (d2 > CHAIR_NEAR * CHAIR_NEAR) { out = fe; n = nFar++; } else nNear++;
+      } else nNear++;
       // rotation about y taking local +z to (fx, fz)
-      e.set([fz, 0, -fx, 0, 0, 1, 0, 0, fx, 0, fz, 0, x, cp.y, z, 1], n * 16);
+      out.set([fz, 0, -fx, 0, 0, 1, 0, 0, fx, 0, fz, 0, x, cp.y, z, 1], n * 16);
     });
+    m.count = nNear;
     m.instanceMatrix.needsUpdate = true;
   }
+  carrierMeshes.chairFar.count = nFar;
+  carrierMeshes.chairFar.instanceMatrix.needsUpdate = true;
 }
 
 // ---------- Lamps: one on every terminal hut, lit at night ----------
