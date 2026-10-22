@@ -2277,10 +2277,10 @@ function besideTerminal(end, prev, label) {
 }
 
 // ---------- The lift ride (Jack 2026-10-22) ----------
-// A ring of light on every chairlift's loading deck. Ski into it: fade to black, ride a chair up (sped up to
-// about RIDE_T seconds), fade to black, and stand on the top deck where the chair lets you off. A tap or Space
-// skips to that last fade. Each lift's top start in the Tab menu is that same spot.
-const RIDE_T = 20, RING_R = 2.5, LOAD = 4.5;      // s; m across the ring's middle / 2; m from the wheel to load and unload
+// A ring of light on every chairlift's loading deck. Ski into it: fade to black, ride a chair up at the lift's
+// real speed, fade to black, and stand on the top deck where the chair lets you off. A tap or Space skips to
+// that last fade. Each lift's top start in the Tab menu is that same spot.
+const RING_R = 2.5, LOAD = 4.5;      // m across the ring's middle / 2; m from the wheel to load and unload
 const RIDES = [];
 for (const lp of liftPaths) {
   if (lp.kind !== 'chair_lift') continue;
@@ -2615,12 +2615,12 @@ function updateWorld(dt) {
 }
 
 // ---------- The skier: one camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
-// The sheet (rendered from her 3D model) has 9 pose columns and 5 camera-angle rows: 0 = behind her,
+// The sheet (rendered from her 3D model) has 10 pose columns and 5 camera-angle rows: 0 = behind her,
 // 45, 90 (her right side), 135, 180 = in front. Cameras on her left use the mirrored frame.
 // Snowlight: each sprite pixel is lit from its normal map by the sun, the sky above
 // and the sunlit snow below, then snapped to four bands.
-const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8 };
-const POSE_COLS = 9, ANGLE_ROWS = 5;
+const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8, sit: 9 };
+const POSE_COLS = 10, ANGLE_ROWS = 5;
 const SPRITE_H = 2.0, SPRITE_W = 2.5;
 const skierMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -3225,13 +3225,12 @@ function rideStep(dt) {
     cameraSnap = true;
   }
   if (ride.t < 0) return;
-  const f = Math.min(1, ride.t / RIDE_T), e = f * f * (3 - 2 * f);
-  ride.d = R.d0 + (R.d1 - R.d0) * (0.15 * e + 0.85 * f);
+  ride.d = Math.min(R.d1, R.d0 + ride.t * R.lp.speed);
   carrierAt(R.lp, ride.d, rideAt);
   sk.prev.copy(sk.pos);
   sk.pos.set(rideAt.x, rideAt.y, rideAt.z);
   sk.heading = Math.atan2(rideAt.fx, -rideAt.fz);
-  if (ride.t >= RIDE_T - FADE) skipRide();
+  if (ride.d >= R.d1 - R.lp.speed * FADE) skipRide();
 }
 const rideAt = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function wake() {
@@ -3990,17 +3989,17 @@ function updateCamera(p, dt) {
   cameraSnap = false;
 }
 
-// On the chair: behind it and a little above, looking up the line. Goldie sits on the seat (placeholder: her tuck
-// frame from behind, the chair's back hiding her legs).
-const RIDE_SEAT = -2.75, rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
+// On the chair: behind it and a little above, looking up the line. Goldie sits on the seat in her sit frame;
+// RIDE_SEAT is her sprite's base (the tails of her hanging skis) below the cable, so her hips rest on the cushion.
+const RIDE_SEAT = -3.05, rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function rideCamera(p) {
   const fx = Math.sin(sk.heading), fz = -Math.cos(sk.heading);
   const R = ride.R, ahead = Math.min(ride.d + 30, R.d1 + LOAD);
   carrierAt(R.lp, ahead, rideLook);
-  camera.position.set(p.x - fx * 4.5, p.y + RIDE_SEAT + 2.2, p.z - fz * 4.5);
+  camera.position.set(p.x - fx * 4.5, p.y - 1.5, p.z - fz * 4.5);
   // the sky is a band: never tip up so far that its top edge shows
   const dist = Math.hypot(rideLook.x - camera.position.x, rideLook.z - camera.position.z);
-  camera.lookAt(rideLook.x, Math.min(rideLook.y + RIDE_SEAT + 1.5, camera.position.y - dist * 0.02), rideLook.z);
+  camera.lookAt(rideLook.x, Math.min(rideLook.y - 1.9, camera.position.y - dist * 0.02), rideLook.z);
   if (Math.abs(camera.fov - 60) > 0.05) { camera.fov = 60; camera.updateProjectionMatrix(); }
 }
 function pickFrame() {
@@ -4098,7 +4097,7 @@ function render(alpha, dt) {
   const ahead = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
   const side = tmpA.x * Math.cos(sk.heading) + tmpA.z * Math.sin(sk.heading);
   const mirror = side < 0;
-  let frame = riding ? FRAMES.tuck : pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
+  let frame = riding ? FRAMES.sit : pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
   if (mirror && frame === FRAMES.carveL) frame = FRAMES.carveR;
   else if (mirror && frame === FRAMES.carveR) frame = FRAMES.carveL;
   const U = skierMat.uniforms;
