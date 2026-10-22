@@ -14,8 +14,3 @@ Open `index.html` in a browser, or serve the repo so phones on your network can 
 python3 -m http.server 8000
 # then visit http://<your-computer-ip>:8000 on your phone
 ```
-
-## Old prototypes
-
-Endless Skier, Downhill 3D, the Golden Ski Milestone 1 test slope, Jump Lab and the race-routes page were removed on
-2026-10-21. They are all in commit `e9bcf5a`; restore one with `git checkout e9bcf5a -- games/<folder>`.
