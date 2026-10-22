@@ -3,6 +3,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from './data.js';
 import { RUN_DATA } from './runs.js';
+import { ELK_REST_MODEL } from './assets/elk_rest.js';
 
 // ---------- Tuning ----------
 const STEP = 1 / 60;
@@ -1083,6 +1084,16 @@ const modelMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(finish(alb, l, vD, 1.25), 1.0);
     }`,
 });
+// Elk Camp restaurant model (TRELLIS v1): station shader, albedo from the model's texture
+const elkT = await loadTex('elk_rest');
+elkT.flipY = false;
+const elkMat = new THREE.ShaderMaterial({
+  vertexColors: true,
+  uniforms: Object.assign({ uElk: { value: elkT } }, modelMat.uniforms),
+  vertexShader: modelMat.vertexShader.replace('varying vec3 vT;', 'varying vec3 vT; varying vec2 vUv;').replace('vT = aT;', 'vT = aT; vUv = uv;'),
+  fragmentShader: modelMat.fragmentShader.replace('uniform sampler2D uAtlas, uAtlasN;', 'uniform sampler2D uAtlas, uAtlasN, uElk; varying vec2 vUv;')
+    .replace('vec3 alb = vC;', 'vec3 alb = vC * texture2D(uElk, vUv).rgb;'),
+});
 const STEEL = [0.46, 0.48, 0.52], DARK = [0.2, 0.21, 0.25], CONC = [0.62, 0.6, 0.56], PAD = [0.78, 0.12, 0.1],
   SEAT = [0.16, 0.2, 0.36], WALL = [0.5, 0.36, 0.24], SNOWCAP = [0.92, 0.95, 1.0], CABIN = [0.75, 0.6, 0.2], GLASS = [0.15, 0.2, 0.3];
 // A one-color part with an optional matrix. With a tile, each face gets atlas coords projected on its main axis, 4 m a tile.
@@ -1412,43 +1423,12 @@ function gondolaTerminal(H, arm, foot) {
   add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(wx + 1.2, 2.7, zf - 0.6), TCOL.DARK);   // lamp post
   return P;
 }
-// Elk Camp Gondola top: the terminal, the restaurant (stone foundation, sun deck, posters on the wall facing the terminal)
-// and a maintenance building. Footprints in the terminal frame: [x0, x1, z0, z1].
+// Elk Camp Gondola top: the terminal, the restaurant (elkCampRestaurant) and a maintenance building. Footprints in the terminal frame: [x0, x1, z0, z1].
 const ELK_REST = (arm) => [-(GW(arm) + 22.0), -(GW(arm) + 6.0), -15.0, 9.0];
 const ELK_REST_DECK = 5.0;                           // sun deck depth
 const ELK_SHOP = (arm) => [GW(arm) + 6.0, GW(arm) + 17.0, -12.0, 3.0];
-function elkCampTop(arm, lowRest, lowShop) {
+function elkCampTop(arm, lowShop) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
-  // restaurant
-  {
-    const [x0, x1, z0, z1] = ELK_REST(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0, dz0 = z0 - ELK_REST_DECK;
-    const fd = 0.5 - lowRest + 0.4;                  // foundation down past the lowest snow
-    add(new THREE.BoxGeometry(w + 0.4, fd, z1 - dz0 + 0.4).translate(xc, 0.5 - fd / 2, (z1 + dz0) / 2), W, TILES.stone);
-    add(new THREE.BoxGeometry(w, 0.4, ELK_REST_DECK).translate(xc, 0.3, z0 - ELK_REST_DECK / 2), W, TILES.deck);
-    // hall: dark panels, cedar band, glass on two sides
-    add(new THREE.BoxGeometry(w, 4.5, l).translate(xc, 0.5 + 2.25, zc), W, TILES.darkPanel);
-    add(new THREE.BoxGeometry(w + 0.1, 1.0, l + 0.1).translate(xc, 1.0, zc), W, TILES.cedar);
-    add(new THREE.BoxGeometry(w - 1.0, 3.2, 0.2).translate(xc, 3.1, z0 - 0.05), W, TILES.curtain);
-    add(new THREE.BoxGeometry(0.2, 3.2, l - 6.0).translate(x0 - 0.05, 3.1, zc - 1.0), W, TILES.curtain);
-    // roof slab over the deck, cedar soffit, snow on top
-    const rx = w + 5.0, rz = l + ELK_REST_DECK + 3.0, rzc = (z1 + 1.5 + dz0 - 0.5) / 2 + 0.5;
-    add(new THREE.BoxGeometry(rx, 0.6, rz).translate(xc, 5.3, rzc), W, TILES.darkPanel);
-    add(new THREE.BoxGeometry(rx - 0.3, 0.06, rz - 0.3).translate(xc, 4.98, rzc), W, TILES.cedar);
-    add(new THREE.BoxGeometry(rx - 0.6, 0.45, rz - 0.6).translate(xc, 5.8, rzc), W, TILES.roofSnow);
-    for (const x of [x0 + 0.6, xc, x1 - 0.6]) add(new THREE.BoxGeometry(0.3, 4.4, 0.3).translate(x, 2.7, dz0 + 0.4), TCOL.DARK);
-    // glass rail
-    add(new THREE.BoxGeometry(w, 1.0, 0.06).translate(xc, 1.0, dz0 + 0.1), TCOL.GLASS);
-    add(new THREE.BoxGeometry(w, 0.08, 0.12).translate(xc, 1.52, dz0 + 0.1), TCOL.DARK);
-    for (const x of [x0 + 0.05, x1 - 0.05]) {
-      add(new THREE.BoxGeometry(0.06, 1.0, ELK_REST_DECK).translate(x, 1.0, z0 - ELK_REST_DECK / 2), TCOL.GLASS);
-      add(new THREE.BoxGeometry(0.12, 0.08, ELK_REST_DECK).translate(x, 1.52, z0 - ELK_REST_DECK / 2), TCOL.DARK);
-    }
-    // posters, about 1 x 1.5 m
-    [TILES.posterA, TILES.posterB, TILES.posterC].forEach((t, k) => {
-      const g = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 + 0.03, 2.4, zc - 2.4 + k * 2.4);
-      P.push(partUV(g, W, t, 11 / 64, 53 / 64, 0, 1));
-    });
-  }
   // maintenance building
   {
     const [x0, x1, z0, z1] = ELK_SHOP(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0;
@@ -1460,6 +1440,23 @@ function elkCampTop(arm, lowRest, lowShop) {
     add(gable(w + 1.4, l + 1.4, 1.6).translate(xc, 4.1, zc), W, TILES.roofSnow);
   }
   return P;
+}
+// Restaurant: the TRELLIS v1 model stretched over its footprint and deck. Model deck (y 0.02) at the terminal floor (0.5),
+// deck side toward -z; a stone footing fills down to the snow where the slope drops below the model.
+const ELK_REST_H = 10.0;
+function elkCampRestaurant(arm, lowRest) {
+  const [x0, x1, z0, z1] = ELK_REST(arm), dz0 = z0 - ELK_REST_DECK;
+  const b64 = (t) => Uint8Array.from(atob(t), (ch) => ch.charCodeAt(0)).buffer;
+  const M = ELK_REST_MODEL, g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(b64(M.pos)), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(b64(M.uv)), 2));
+  g.setIndex(new THREE.BufferAttribute(M.i32 ? new Uint32Array(b64(M.idx)) : new Uint16Array(b64(M.idx)), 1));
+  const ys = ELK_REST_H / 0.7525, cy = 0.5 - 0.02 * ys, bottom = cy - 0.3775 * ys;
+  g.rotateY(Math.PI).scale(x1 - x0, ys, (z1 - dz0) / 0.881).translate((x0 + x1) / 2, cy, (z1 + dz0) / 2);
+  const footing = [];
+  if (lowRest < bottom) footing.push(part(new THREE.BoxGeometry(x1 - x0 - 1.0, bottom - lowRest + 0.6, z1 - dz0 - 1.0)
+    .translate((x0 + x1) / 2, (bottom + lowRest - 0.4) / 2 + 0.1, (z1 + dz0) / 2), W, null, TILES.stone));
+  return { model: part(g, W), footing };
 }
 // Gondola tower: galvanized column with a ladder, crossarm with a railed walkway, sheave trains. Base y = 0, line along z.
 function gondolaTower(th, arm) {
@@ -1515,7 +1512,15 @@ function gondolaStation(sd, arm, hh, base, m, elkTop) {
   };
   const R = ELK_REST(arm), S = ELK_SHOP(arm);
   const lowR = low([R[0], R[1], R[2] - ELK_REST_DECK, R[3]]), lowS = low(S);
-  liftParts.push(...placed(elkCampTop(arm, lowR, lowS), m));
+  liftParts.push(...placed(elkCampTop(arm, lowS), m));
+  const rest = elkCampRestaurant(arm, lowR);
+  liftParts.push(...placed(rest.footing, m));
+  // the model within 250 m, a charcoal box with a snowy roof to 800 m (collision is the boxes above)
+  {
+    const [u, v] = [(R[0] + R[1]) / 2, (R[2] - ELK_REST_DECK + R[3]) / 2], [x, z] = toW(u, v);
+    addBuilding({ x, z, yaw: Math.atan2(sd.s, sd.c), w: R[1] - R[0], l: R[3] - R[2] + ELK_REST_DECK, bot: base + lowR, top: y + 5.8,
+      color: DARK, roof: SNOWCAP, near: () => new THREE.Mesh(placed([rest.model], m)[0], elkMat), solid: false });
+  }
   box(R[0], R[1], R[2], R[3], base + lowR - 0.5, y + 5.6);
   box(R[0], R[1], R[2] - ELK_REST_DECK, R[2], base + lowR - 0.5, y + 1.55);
   box(S[0], S[1], S[2], S[3], base + lowS - 0.5, y + 5.0);
