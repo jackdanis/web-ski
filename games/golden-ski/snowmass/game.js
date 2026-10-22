@@ -1149,6 +1149,72 @@ function placed(parts, m) {
   });
 }
 
+// ---------- Detail rings: props and buildings drawn by distance ----------
+// Each entry shows while the camera's ground distance to its box is in [min, max). Near models are built on first use.
+const RING_NEAR = 250, RING_FAR = 800;
+const ringed = [];
+function addRinged(obj, min = 0, max = RING_FAR, box = null) {
+  if (!box) {
+    const b = obj.geometry.boundingBox || (obj.geometry.computeBoundingBox(), obj.geometry.boundingBox);
+    box = [b.min.x, b.max.x, b.min.z, b.max.z];
+  }
+  const e = { obj, min, max, box };
+  if (obj.isObject3D) { obj.visible = false; scene.add(obj); }
+  ringed.push(e);
+  return e;
+}
+function updateRings() {
+  const cx = camera.position.x, cz = camera.position.z;
+  for (const e of ringed) {
+    const [x0, x1, z0, z1] = e.box, d = Math.hypot(Math.max(x0 - cx, 0, cx - x1), Math.max(z0 - cz, 0, cz - z1));
+    const on = d >= e.min && d < e.max;
+    if (on && !e.obj.isObject3D) { e.obj = e.obj(); scene.add(e.obj); }
+    if (e.obj.isObject3D) e.obj.visible = on;
+  }
+}
+// geometries with the same attributes in one
+function mergeAny(geos) {
+  const g = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(geos[0].attributes)) {
+    const out = new Float32Array(geos.reduce((n, q) => n + q.attributes[name].array.length, 0));
+    let o = 0;
+    for (const q of geos) { out.set(q.attributes[name].array, o); o += q.attributes[name].array.length; }
+    g.setAttribute(name, new THREE.BufferAttribute(out, a.itemSize));
+  }
+  g.computeBoundingSphere();
+  return g;
+}
+// Static parts bucketed by tree page: one mesh per page, drawn out to RING_FAR.
+const pageKeyAt = (x, z) => Math.floor((x - X0) / (PAGE * CELL)) * 1000 + Math.floor((z - Z0) / (PAGE * CELL));
+function bucket(map, x, z, ...geos) {
+  const k = pageKeyAt(x, z);
+  if (!map.has(k)) map.set(k, []);
+  map.get(k).push(...geos);
+}
+function addByPage(map, mat, join = merge) {
+  for (const geos of map.values()) addRinged(new THREE.Mesh(join(geos), mat));
+  map.clear();
+}
+// Buildings: a box (walls, optional snowy roof) from RING_NEAR to RING_FAR and the near model inside RING_NEAR.
+// Without a near model the box draws from 0, batched by page until flushBuildings(). near is a geometry, a mesh,
+// or a function returning either, called when the camera first comes within RING_NEAR.
+const STAND_INS = new Map();
+function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof = null, near = null, mat = modelMat, solid = true }) {
+  const roofH = roof ? Math.min(0.5, (top - bot) * 0.1) : 0, m = placeM(x, bot, z, yaw);
+  const box = [part(new THREE.BoxGeometry(w, top - bot - roofH, l).translate(0, (top - bot - roofH) / 2, 0), color, m)];
+  if (roof) box.push(part(new THREE.BoxGeometry(w, roofH, l).translate(0, top - bot - roofH / 2, 0), roof, m));
+  if (solid) SOLIDS.push({ x, z, y: (bot + top) / 2, hx: w / 2, hy: (top - bot) / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw) });
+  if (!near) { bucket(STAND_INS, x, z, ...box); return; }
+  const r = Math.hypot(w, l) / 2, foot = [x - r, x + r, z - r, z + r];
+  addRinged(new THREE.Mesh(merge(box), modelMat), RING_NEAR, RING_FAR, foot);
+  const make = () => {
+    const n = typeof near === 'function' ? near() : near;
+    return n.isObject3D ? n : new THREE.Mesh(n, mat);
+  };
+  return addRinged(make, 0, RING_NEAR, foot);
+}
+const flushBuildings = () => addByPage(STAND_INS, modelMat);
+
 // ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 const ROCK_VARIANTS = 6, ROCK_MAX = 2500;
 function rockGeo(k) {
@@ -1730,10 +1796,12 @@ function kickGround(k) {
 function updateKickers() {
   for (const k of KICKERS) {
     const mode = kickGround(k);
-    if (mode === k.mode) continue;
-    if (k.mesh) { scene.remove(k.mesh); k.mesh.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
-    k.mesh = buildKicker(k); k.mode = mode;
-    scene.add(k.mesh);
+    if (mode !== k.mode) {
+      if (k.mesh) { scene.remove(k.mesh); k.mesh.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
+      k.mesh = buildKicker(k); k.mode = mode;
+      scene.add(k.mesh);
+    }
+    k.mesh.visible = Math.hypot(k.x - camera.position.x, k.z - camera.position.z) < RING_FAR;
   }
 }
 // ---------- Run props: trail signs, rope lines, fence ----------
@@ -1947,7 +2015,8 @@ if (RUN_DATA) {
     const loads = [];
     for (const ch of chunks.values()) {
       const d = dist(ch, x, z);
-      if (d < RUN_LOAD && ch.state === 0) loads.push(loadChunk(ch));
+      if (d < RUN_LOAD && ch.state === 0) loads.push(ch.loading = loadChunk(ch));
+      else if (d < RUN_LOAD && ch.state === 1 && force) loads.push(ch.loading);   // already on its way: wait for it too
       else if (d > RUN_DROP && ch.state === 2) unloadChunk(ch);
       else if (d > RUN_DROP && ch.state === 1) ch.state = 0;
     }
@@ -1978,14 +2047,11 @@ if (RUN_DATA) {
     addObstacle(t);
   }
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
-  const parts = [];
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
-    const yaw = yawD * Math.PI / 180, bot = y0 - 1, top = y1 + h;
-    parts.push(part(new THREE.BoxGeometry(w, top - bot, l).translate(0, (top - bot) / 2, 0), CONC, placeM(x, bot, z, yaw)));
-    SOLIDS.push({ x, z, y: (bot + top) / 2, hx: w / 2, hy: (top - bot) / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw) });
+    addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h });
   }
-  if (parts.length) scene.add(new THREE.Mesh(merge(parts), modelMat));
+  flushBuildings();
 }
 function buildGroupMesh(P, g, level) {
   if (P.ready) P.ready(g);
@@ -2147,7 +2213,7 @@ const signMat = new THREE.ShaderMaterial({
     }`,
 });
 const WOOD = [0.36, 0.25, 0.15], WOOD_DARK = [0.24, 0.16, 0.1];
-const runParts = [], facePos = [], faceUv = [], faceNrm = [], signSpots = [];
+const runParts = new Map(), signFaces = new Map(), signSpots = [];
 // each name's highest mapped line piece (for starts)
 const signRuns = new Map();
 for (const r of RUNS) {
@@ -2165,7 +2231,7 @@ SIGNS.forEach(([name, , spots], n) => {
   const w = signPx[n] * SIGN_M, post = w / 2 - 0.25;
   signSpots.push({ x, z, name, yaw });
   const m = placeM(x, y - 0.3, z, yaw);
-  runParts.push(...placed([
+  bucket(runParts, x, z, ...placed([
     // posts behind the board
     part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(-post, 1.15, -0.12), WOOD_DARK),
     part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(post, 1.15, -0.12), WOOD_DARK),
@@ -2175,21 +2241,20 @@ SIGNS.forEach(([name, , spots], n) => {
   const v1 = 1 - Math.floor(n / SIGN_COLS) * SIGN_H / signCanvas.height, v0 = v1 - SIGN_H / signCanvas.height;
   const face = new THREE.PlaneGeometry(w, 0.6).translate(0, 1.95, 0.05).applyMatrix4(m);
   const fp = face.attributes.position, fuv = [[u0, v1], [u1, v1], [u0, v0], [u1, v0]], nrm = [Math.sin(yaw), 0, Math.cos(yaw)];
+  const pos = [], uv = [], nr = [];
   for (const idx of face.index.array) {
-    facePos.push(fp.getX(idx), fp.getY(idx), fp.getZ(idx));
-    faceUv.push(...fuv[idx]);
-    faceNrm.push(...nrm);
+    pos.push(fp.getX(idx), fp.getY(idx), fp.getZ(idx));
+    uv.push(...fuv[idx]);
+    nr.push(...nrm);
   }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+  g.setAttribute('aNrm', new THREE.BufferAttribute(new Float32Array(nr), 3));
+  bucket(signFaces, x, z, g);
   casters.push({ x, z, h: 2.3, w: w / 2 });
 });
-{
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(facePos), 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(faceUv), 2));
-  g.setAttribute('aNrm', new THREE.BufferAttribute(new Float32Array(faceNrm), 3));
-  g.computeBoundingSphere();
-  scene.add(new THREE.Mesh(g, signMat));
-}
+addByPage(signFaces, signMat, mergeAny);
 // rope lines down both edges of the first 170 m of Sunnyside and Max Park (runs-build/ropes.json)
 const ropePts = [];
 for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
@@ -2202,7 +2267,7 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
 {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ropePts), 3));
-  scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xc8261c })));
+  if (ropePts.length) addRinged(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xc8261c })));
 }
 // rail fence behind the Village Express top terminal
 {
@@ -2214,13 +2279,13 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
     let last = null;
     for (let s = -18; s <= 18; s += 3) {
       const x = cx + uz * s, z = cz - ux * s, y = groundY(x, z) - 0.2;
-      runParts.push(part(new THREE.BoxGeometry(0.18, 1.3, 0.18).translate(0, 0.65, 0), WOOD_DARK, new THREE.Matrix4().setPosition(x, y, z)));
+      bucket(runParts, cx, cz, part(new THREE.BoxGeometry(0.18, 1.3, 0.18).translate(0, 0.65, 0), WOOD_DARK, new THREE.Matrix4().setPosition(x, y, z)));
       if (last) {
         const mx = (x + last[0]) / 2, mz = (z + last[2]) / 2, my = (y + last[1]) / 2, l = Math.hypot(x - last[0], z - last[2]);
         const tilt = Math.atan2(y - last[1], l), yaw = Math.atan2(x - last[0], z - last[2]);
         for (const h of [0.55, 1.05]) {
           const m = new THREE.Matrix4().makeRotationY(yaw).multiply(new THREE.Matrix4().makeRotationX(-tilt)).setPosition(mx, my + h, mz);
-          runParts.push(part(new THREE.BoxGeometry(0.1, 0.12, l + 0.2), WOOD, m));
+          bucket(runParts, cx, cz, part(new THREE.BoxGeometry(0.1, 0.12, l + 0.2), WOOD, m));
         }
       }
       last = [x, y, z];
@@ -2228,7 +2293,7 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
     }
   }
 }
-if (runParts.length) scene.add(new THREE.Mesh(merge(runParts), modelMat));
+addByPage(runParts, modelMat);
 // FreePlay starts a little way down Sunnyside from the Village Express top. The Tab menu moves the start to any lift top or bottom.
 const STARTS = [];
 {
@@ -4110,6 +4175,7 @@ function render(alpha, dt) {
   updateTerrain();
   updatePatch();
   updateKickers();
+  updateRings();
   updateTrees(snap);
   sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
 
@@ -4269,5 +4335,5 @@ window.__golden = {
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
   solids: SOLIDS, bail, BAIL, kickers: KICKERS,
-  get work() { return work.size; }, perf, rides: RIDES, ride, startRide, skipRide,
+  get work() { return work.size; }, perf, ringed, addBuilding, rides: RIDES, ride, startRide, skipRide,
 };
