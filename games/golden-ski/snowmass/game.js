@@ -272,6 +272,64 @@ function solidTop(x, z, out) {
   }
   return out;
 }
+// ---------- Kickers (Jack picked these 2026-10-22) ----------
+// Terrain-park kickers in three sizes, after the Wii Fit ski jump: groomed snow curving up to a lip with red and
+// white mats across it. They stand where the 25/26 trail map paints Snowmass's freestyle terrain: the orange
+// strip down Cabin, beside Coney Express, sized by the map's own labels (M/L up top, S/M at the bottom).
+// The kicker is part of the snow, so Momentum launches Goldie off the lip at whatever speed she brings.
+// Profile in the kicker's own frame: u down the fall line from its foot, w up; v across, sides at 45 degrees.
+const KICK_SIZES = {
+  small: { h: 1.0, a: 22, w: 4 },                              // about 11 m of air at 25 mph
+  medium: { h: 2.0, a: 27, w: 6 },                             // about 14 m
+  large: { h: 3.5, a: 32, w: 8, table: 8, land: 20 },          // a table and a built landing: clears it from about 31 mph
+};
+const KICK_AT = [                                              // meters down Cabin's line from its top
+  { run: 'Cabin', d: 330, size: 'medium' },
+  { run: 'Cabin', d: 720, size: 'large' },
+  { run: 'Cabin', d: 1290, size: 'small' },
+];
+const KICK_LIP = 1.2;                                          // m of red and white mat up to the lip
+const KICKERS = [];
+{
+  const kB = { h: 0, gx: 0, gz: 0 };
+  for (const at of KICK_AT) {
+    const run = (MAP.runs || []).find((r) => r.name === at.run);
+    if (!run) continue;
+    let left = at.d, x = run.points[0][0], z = run.points[0][1];
+    for (let i = 0; i < run.points.length - 1 && left > 0; i++) {
+      const [ax, az] = run.points[i], [bx, bz] = run.points[i + 1], L = Math.hypot(bx - ax, bz - az), f = Math.min(1, left / L);
+      x = ax + (bx - ax) * f; z = az + (bz - az) * f; left -= L;
+    }
+    // the fall line, averaged over 20 m so a bump doesn't swing it
+    let gx = 0, gz = 0;
+    for (let a = -10; a <= 10; a += 5) for (let b = -10; b <= 10; b += 5) { sampleBase(x + a, z + b, kB); gx += kB.gx; gz += kB.gz; }
+    const g = Math.hypot(gx, gz) || 1, S = KICK_SIZES[at.size], A = S.a * Math.PI / 180;
+    const R = S.h / (1 - Math.cos(A)), L = R * Math.sin(A);
+    const back = S.table ? Math.tan(S.land * Math.PI / 180) : Math.tan(50 * Math.PI / 180);
+    const top = L + (S.table || 0), end = top + S.h / back;
+    const prof = (u) => u <= 0 ? 0 : u <= L ? R - Math.sqrt(R * R - u * u) : u <= top ? S.h : Math.max(0, S.h - (u - top) * back);
+    const k = { x, z, fx: -gx / g, fz: -gz / g, hw: S.w / 2, h: S.h, L, end, prof, size: at.size, mode: -1, mesh: null };
+    const r = Math.hypot(end, k.hw + S.h);
+    Object.assign(k, { bx0: x - r, bx1: x + r, bz0: z - r, bz1: z + r });
+    KICKERS.push(k);
+  }
+}
+// how high a kicker lifts the snow at (x, z)
+function kickH(k, x, z) {
+  const dx = x - k.x, dz = z - k.z, u = dx * k.fx + dz * k.fz;
+  if (u <= 0 || u >= k.end) return 0;
+  const v = Math.abs(dz * k.fx - dx * k.fz);
+  return Math.max(0, k.prof(u) - Math.max(0, v - k.hw));
+}
+function addKick(x, z, out) {
+  for (const k of KICKERS) {
+    if (x < k.bx0 || x > k.bx1 || z < k.bz0 || z > k.bz1) continue;
+    const h = kickH(k, x, z), E = 0.05;
+    if (h <= 0 && kickH(k, x + E, z) <= 0 && kickH(k, x, z + E) <= 0) continue;
+    out.h += h; out.gx += (kickH(k, x + E, z) - h) / E; out.gz += (kickH(k, x, z + E) - h) / E;
+  }
+  return out;
+}
 function sample(x, z, out = samp) {
   const st = STATIONS.length ? stationAt(x, z) : null;
   if (!st) sampleBase(x, z, out);
@@ -279,6 +337,7 @@ function sample(x, z, out = samp) {
     const h = stationH(st, x, z), E = 0.3;
     out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
   }
+  if (KICKERS.length) addKick(x, z, out);
   return solidY !== null && SOLIDS.length ? solidTop(x, z, out) : out;
 }
 const groundY = (x, z) => sample(x, z, { h: 0, gx: 0, gz: 0 }).h;
@@ -1579,6 +1638,91 @@ if (apronGeos.length) {
     defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
   });
   scene.add(new THREE.Mesh(geo, mat));
+}
+// the kickers: groomed snow drawn like the ground, a hair in front of it, and the lip mats. Each is rebuilt when the
+// snow under it changes (the 2 m run tiles load in or drop out) so it always sits on the ground the skier rides.
+const kickSnowMat = new THREE.ShaderMaterial({
+  uniforms: Object.assign({}, terrainMat.uniforms, { uPFar: { value: 1e9 } }), vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
+  defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+});
+// the mats are drawn like the lift models, pulled in front of the kicker's snow they lie on
+const kickMatMat = modelMat.clone();
+Object.assign(kickMatMat, { uniforms: modelMat.uniforms, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
+const KICK_RED = [0.78, 0.12, 0.1], KICK_WHITE = [0.95, 0.96, 1.0];
+function buildKicker(k) {
+  const kB = { h: 0, gx: 0, gz: 0 }, step = 0.5, side = k.hw + k.h + step, y0 = sampleBase(k.x, k.z, kB).h;
+  const toW = (u, v) => [k.x + k.fx * u - k.fz * v, k.z + k.fz * u + k.fx * v];
+  const ground = (u, v) => { const [x, z] = toW(u, v); return [x, sampleBase(x, z, kB).h, z]; };
+  // the snow: a grid over the kicker's footprint, cells the kicker doesn't lift left out
+  const pos = [], us = [], vs = [];
+  for (let u = 0; u < k.end + step; u += step) us.push(Math.min(u, k.end));
+  for (let v = -side; v <= side + 1e-6; v += step) vs.push(v);
+  const grid = vs.map((v) => us.map((u) => {
+    const [x, y, z] = ground(u, v), lift = kickH(k, x, z);
+    return [x - k.x, y + lift + 0.03 - y0, z - k.z, lift];
+  }));
+  const tri = (a, b, c) => {
+    // wound to face up
+    const ux = b[0] - a[0], uz = b[2] - a[2], wx = c[0] - a[0], wz = c[2] - a[2];
+    if (uz * wx - ux * wz < 0) pos.push(...a.slice(0, 3), ...c.slice(0, 3), ...b.slice(0, 3));
+    else pos.push(...a.slice(0, 3), ...b.slice(0, 3), ...c.slice(0, 3));
+  };
+  for (let b = 0; b < vs.length - 1; b++) for (let a = 0; a < us.length - 1; a++) {
+    const p = grid[b][a], q = grid[b][a + 1], r = grid[b + 1][a + 1], t = grid[b + 1][a];
+    if (p[3] <= 0 && q[3] <= 0 && r[3] <= 0 && t[3] <= 0) continue;
+    tri(p, q, r); tri(p, r, t);
+  }
+  const n = pos.length / 3, cov = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) cov[i * 4] = -5;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aCov', new THREE.BufferAttribute(cov, 4));
+  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(geo, kickSnowMat));
+  // the lip mats: red panels across the last KICK_LIP m, each with a white chevron pointing down the hill
+  const mats = [], panels = Math.max(2, Math.round(k.hw * 2 / 1.4)), pw = k.hw * 2 / panels, u0 = k.L - KICK_LIP;
+  const at = (u, v, lift) => { const [x, y, z] = ground(u, v); return [x - k.x, y + k.prof(u) + lift - y0, z - k.z]; };
+  const poly = (pts, col) => {
+    const P = [];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = pts[0], b = pts[i], c = pts[i + 1];
+      const ux = b[0] - a[0], uz = b[2] - a[2], wx = c[0] - a[0], wz = c[2] - a[2];
+      P.push(...a, ...(uz * wx - ux * wz < 0 ? [...c, ...b] : [...b, ...c]));
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    mats.push(part(g, col));
+  };
+  for (let i = 0; i < panels; i++) {
+    const va = -k.hw + i * pw + pw * 0.04, vb = -k.hw + (i + 1) * pw - pw * 0.04, vm = (va + vb) / 2, q = (vb - va) * 0.42;
+    const U = (f) => u0 + KICK_LIP * f;
+    // the red panel, in strips so it follows the curve of the face
+    for (let s = 0; s < 4; s++) poly([at(U(s / 4), va, 0.06), at(U((s + 1) / 4), va, 0.06), at(U((s + 1) / 4), vb, 0.06), at(U(s / 4), vb, 0.06)], KICK_RED);
+    // the chevron's two arms
+    for (const sgn of [-1, 1]) poly([at(U(0.35), vm + sgn * q, 0.09), at(U(0.95), vm, 0.09), at(U(0.65), vm, 0.09), at(U(0.05), vm + sgn * q, 0.09)], KICK_WHITE);
+  }
+  group.add(new THREE.Mesh(merge(mats), kickMatMat));
+  group.position.set(k.x, y0, k.z);
+  return group;
+}
+// the snow under a kicker: 1 where the 2 m run tiles cover it all, 0 on the 10 m ground
+function kickGround(k) {
+  if (!PATCH || !patchOn) return 0;
+  const t = { h: 0, gx: 0, gz: 0 }, s = k.hw + k.h;
+  for (const [u, v] of [[0, -s], [0, s], [k.end, -s], [k.end, s], [k.end / 2, 0]]) {
+    if (!samplePatch(PATCH, k.x + k.fx * u - k.fz * v, k.z + k.fz * u + k.fx * v, t)) return 0;
+  }
+  return 1;
+}
+function updateKickers() {
+  for (const k of KICKERS) {
+    const mode = kickGround(k);
+    if (mode === k.mode) continue;
+    if (k.mesh) { scene.remove(k.mesh); k.mesh.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
+    k.mesh = buildKicker(k); k.mode = mode;
+    scene.add(k.mesh);
+  }
 }
 // ---------- Run art pass: trail signs, rope lines and a fence on the real runs ----------
 // Every named run gets a trail sign where it begins. Sunnyside and Max Park, which start together at the top of
@@ -3571,6 +3715,7 @@ function render(alpha, dt) {
   else updateCamera(p, dt);
   updateTerrain();
   updatePatch();
+  updateKickers();
   updateTrees(snap);
   sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
 
@@ -3718,5 +3863,5 @@ window.__golden = {
   lifts: liftPaths, carriers, runs: RUNS, signs: signSpots,
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
-  solids: SOLIDS, bail, BAIL,
+  solids: SOLIDS, bail, BAIL, kickers: KICKERS,
 };
