@@ -19,7 +19,7 @@ html, body {
   display: block;
   touch-action: none;
 }
-/* The trip back to the summit: a quick fade through navy, standing in for the lift cutscene. */
+/* Trip back to the summit: a quick fade through navy. */
 #fade {
   position: fixed;
   inset: 0;
@@ -31,7 +31,7 @@ html, body {
 #fade.on { opacity: 1; }
 /* The lift ride fades through black. */
 #fade.black { background: #000; }
-/* Debug menu (Tab), for testing on a laptop: one list of settings, nothing else. */
+/* Debug menu (Tab). */
 #debug {
   position: fixed;
   top: 12px;
@@ -49,7 +49,7 @@ html, body {
 #debug .box { width: 9px; height: 9px; border: 1.5px solid rgba(255, 255, 255, 0.8); border-radius: 2px; }
 #debug li[aria-checked="true"] .box { background: #f4c542; border-color: #f4c542; }
 #debug .box.dot { border-radius: 50%; }
-/* HUD map: the minimap top-left, and the full map (M, or a two-finger tap) over a navy dim. */
+/* HUD map: minimap top left, full map over a navy dim. */
 .hudmap-mini {
   position: fixed;
   top: 12px;
