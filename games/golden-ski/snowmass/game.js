@@ -366,7 +366,7 @@ async function loadTex(name, { pixel = true, repeat = false, mips = false } = {}
 const [cordT, cordN, powT, powN, skyT, goldieT, goldieN, ...skyRest] = await Promise.all([
   loadTex('corduroy', { repeat: true, mips: true }), loadTex('corduroy_n', { repeat: true, mips: true }),
   loadTex('powder', { repeat: true, mips: true }), loadTex('powder_n', { repeat: true, mips: true }),
-  loadTex('sky_noon', { pixel: false }), loadTex('goldie'), loadTex('goldie_n'),
+  loadTex('sky_noon', { pixel: false }), loadTex('goldie8'), loadTex('goldie8_n'),
   loadTex('sky_golden', { pixel: false }), loadTex('sky_night', { pixel: false }), loadTex('sky_storm', { pixel: false }),
 ]);
 const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
@@ -2399,15 +2399,20 @@ function updateWorld(dt) {
 }
 
 // ---------- The skier: one camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
+// The sheet (rendered from her 3D model) has 9 pose columns and 5 camera-angle rows: 0 = behind her,
+// 45, 90 (her right side), 135, 180 = in front. Cameras on her left use the mirrored frame.
 // Snowlight: each sprite pixel is lit from its normal map by the sun, the sky above
 // and the sunlit snow below, then snapped to four bands.
-const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, front: 8, celebrate: 9 };
-const SPRITE_H = 2.0, SPRITE_W = 1.5;
+const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8 };
+const POSE_COLS = 9, ANGLE_ROWS = 5;
+const SPRITE_H = 2.0, SPRITE_W = 2.5;
 const skierMat = new THREE.ShaderMaterial({
   uniforms: {
     map: { value: goldieT },
     normalMap: { value: goldieN },
-    frameOffset: { value: 0 },
+    frameCol: { value: 0 },
+    frameRow: { value: 0 },
+    mirror: { value: 0 },
     sunLocal: { value: new THREE.Vector3(0, 1, 0) },
     sunColor: { value: SUN_COLOR },
     skyColor: { value: SKY_COLOR },
@@ -2415,23 +2420,25 @@ const skierMat = new THREE.ShaderMaterial({
     uLit: { value: 1 },
   },
   vertexShader: `
-    uniform float frameOffset;
+    uniform float frameCol, frameRow, mirror;
     varying vec2 vUv;
     void main() {
-      vUv = vec2(uv.x * 0.1 + frameOffset, uv.y);
+      float u = mix(uv.x, 1.0 - uv.x, mirror);
+      vUv = vec2((u + frameCol) / ${POSE_COLS}.0, (uv.y + ${ANGLE_ROWS - 1}.0 - frameRow) / ${ANGLE_ROWS}.0);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }`,
   fragmentShader: `
     uniform sampler2D map;
     uniform sampler2D normalMap;
     uniform vec3 sunLocal, sunColor, skyColor, bounce;
-    uniform float uLit;
+    uniform float uLit, mirror;
     varying vec2 vUv;
     float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
     void main() {
       vec4 albedo = texture2D(map, vUv);
       if (albedo.a < 0.5) discard;
       vec3 n = normalize(texture2D(normalMap, vUv).rgb * 2.0 - 1.0);
+      if (mirror > 0.5) n.x = -n.x;
       vec3 l = sunColor * band(max(0.0, dot(n, sunLocal))) * uLit;
       l += skyColor * (0.35 + 0.35 * n.y);
       l += bounce * band(max(0.0, 0.15 - 0.8 * n.y)) * 0.55;
@@ -3490,10 +3497,9 @@ function updateCamera(p, dt) {
   cameraSnap = false;
 }
 
-function pickFrame(cameraInFront) {
+function pickFrame() {
   const speed = sk.vel.length();
   if (sk.crashed) return FRAMES.wipeout;
-  if (cameraInFront) return FRAMES.front;
   if (!sk.grounded && sk.airTime > 0.12) return FRAMES.air;
   if (sk.landT > 0) return FRAMES.land;
   if (sk.brake && speed > 1) return FRAMES.brake;
@@ -3578,13 +3584,19 @@ function render(alpha, dt) {
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   skierMat.uniforms.sunLocal.value.set(SUN_DIR.x * cy - SUN_DIR.z * sy, SUN_DIR.y, SUN_DIR.x * sy + SUN_DIR.z * cy);
   tmpA.set(camera.position.x - p.x, 0, camera.position.z - p.z).normalize();
-  const facing = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
-  const frame = pickFrame(facing > 0.35);
-  if (frame !== sk.frame) { skierMat.uniforms.frameOffset.value = frame / 10; sk.frame = frame; }
+  // Camera angle round her: 0 behind, 180 in front, snapped to the sheet's 45 degree rows; her left side is mirrored.
+  const ahead = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
+  const side = tmpA.x * Math.cos(sk.heading) + tmpA.z * Math.sin(sk.heading);
+  const mirror = side < 0;
+  let frame = pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
+  if (mirror && frame === FRAMES.carveL) frame = FRAMES.carveR;
+  else if (mirror && frame === FRAMES.carveR) frame = FRAMES.carveL;
+  const U = skierMat.uniforms;
+  U.frameCol.value = frame; U.frameRow.value = row; U.mirror.value = mirror && !sk.crashed ? 1 : 0; sk.frame = frame;
   if (sk.crashed) {
-    // the wipeout frame turned so her body lies along the box (the drawing's body leans 58 deg left), centred on it
+    // the behind-view wipeout frame turned so her body lies along the box (in the drawing her head points straight down), centred on it
     bA.set(0, 0, 1).applyQuaternion(bail.q).transformDirection(camera.matrixWorldInverse);
-    const th = Math.atan2(-bA.x, bA.y) - 58 * Math.PI / 180, c = SPRITE_H / 2 - 0.04;
+    const th = Math.atan2(-bA.x, bA.y) - Math.PI, c = SPRITE_H / 2 - 0.04;
     skierMesh.rotation.z = th;
     skierMesh.position.set(p.x + c * Math.sin(th) * cy, p.y - c * Math.cos(th), p.z - c * Math.sin(th) * sy);
   }
@@ -3669,7 +3681,7 @@ function frame(now) {
   }
   render(manual ? 1 : acc / STEP, dt);
 }
-skierMat.uniforms.frameOffset.value = FRAMES.stand / 10;
+skierMat.uniforms.frameCol.value = FRAMES.stand;
 resize();
 applyTime('noon');
 toSummit();
