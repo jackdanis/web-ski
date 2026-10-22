@@ -1456,6 +1456,11 @@ function elkCampRestaurant(arm, lowRest) {
   const footing = [];
   if (lowRest < bottom) footing.push(part(new THREE.BoxGeometry(x1 - x0 - 1.0, bottom - lowRest + 0.6, z1 - dz0 - 1.0)
     .translate((x0 + x1) / 2, (bottom + lowRest - 0.4) / 2 + 0.1, (z1 + dz0) / 2), W, null, TILES.stone));
+  // the three après posters, on the model's wall that faces the terminal (1.7 m in from the footprint edge)
+  [TILES.posterA, TILES.posterB, TILES.posterC].forEach((t, k) => {
+    const pg = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 - 1.65, 2.4, (z0 + z1) / 2 - 2.4 + k * 2.4);
+    footing.push(partUV(pg, W, t, 11 / 64, 53 / 64, 0, 1));
+  });
   return { model: part(g, W), footing };
 }
 // Gondola tower: galvanized column with a ladder, crossarm with a railed walkway, sheave trains. Base y = 0, line along z.
