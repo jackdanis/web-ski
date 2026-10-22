@@ -47,3 +47,21 @@ html, body {
 #debug .box { width: 9px; height: 9px; border: 1.5px solid rgba(255, 255, 255, 0.8); border-radius: 2px; }
 #debug li[aria-checked="true"] .box { background: #f4c542; border-color: #f4c542; }
 #debug .box.dot { border-radius: 50%; }
+/* HUD map: the minimap top-left, and the full map (M, or a two-finger tap) over a navy dim. */
+.hudmap-mini {
+  position: fixed;
+  top: 12px;
+  left: max(14px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+.hudmap-mini[hidden] { display: none; }
+.hudmap-full {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: rgba(19, 36, 77, 0.5);
+  pointer-events: none;
+}
+.hudmap-full[hidden] { display: none; }
+.hudmap-full canvas { position: fixed; }
+.hudmap-full canvas:first-child { border-radius: 4px; box-shadow: 0 0 0 3px #fff, 0 4px 18px rgba(0, 0, 0, 0.4); }

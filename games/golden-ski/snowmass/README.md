@@ -11,7 +11,9 @@ of single trees. FreePlay starts at the Village Express top, facing down Sunnysi
 - Tab menu (three-finger tap on phones): Freecam, Momentum or Classic physics, Assists, Carve turns, Weight,
   Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm,
   and a start at Sunnyside, Powderhorn or the top of any lift.
-- The Speed readout also shows the frame rate.
+- The Speed readout (mph) also shows the frame rate.
+- HUD map in the style of the Snowmass trail map: a minimap top-left that turns with Goldie, and the whole mountain
+  (summit at the top, run, lift, peak and base labels) on M or a two-finger tap. It is painted once at load.
 - Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
   siding and roof snow. The ground blends up to each deck so you can ski on and off, and the post, legs and hut are solid.
   Chairs are detailed close up, plain further out and hidden past 2.5 km.
