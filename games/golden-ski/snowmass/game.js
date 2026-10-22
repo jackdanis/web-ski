@@ -273,6 +273,30 @@ function solidTop(x, z, out) {
   }
   return out;
 }
+// ---------- Wood Rd bridge ----------
+// Ski bridges from runs.js (runs-build woodrd.py): a deck centreline every 1 m as [x, z, top y, snow y under it], its
+// half width and thickness, the point over the road and half the arch's span. The road is cut into the snow below,
+// so the deck is ground only from above, like box tops.
+const BRIDGES = ((RUN_DATA && RUN_DATA.bridges) || []).map(([q, hw, t, kx, arch]) => {
+  const n = q.length / 4, P = [];
+  for (let k = 0; k < n; k++) P.push({ x: q[4 * k], z: q[4 * k + 1], y: q[4 * k + 2], g: q[4 * k + 3] });
+  const xs = P.map((p) => p.x), zs = P.map((p) => p.z);
+  return { P, hw, t, kx, arch, bx0: Math.min(...xs) - hw, bx1: Math.max(...xs) + hw, bz0: Math.min(...zs) - hw, bz1: Math.max(...zs) + hw };
+});
+function bridgeTop(x, z, out) {
+  for (const b of BRIDGES) {
+    if (x < b.bx0 || x > b.bx1 || z < b.bz0 || z > b.bz1) continue;
+    let best = 1e9, y = 0, gx = 0, gz = 0;
+    for (let k = 0; k < b.P.length - 1; k++) {
+      const p = b.P[k], q = b.P[k + 1], dx = q.x - p.x, dz = q.z - p.z, L2 = dx * dx + dz * dz;
+      const t = clamp(((x - p.x) * dx + (z - p.z) * dz) / L2, 0, 1), ex = x - p.x - t * dx, ez = z - p.z - t * dz, d = ex * ex + ez * ez;
+      if (d < best) { best = d; y = p.y + t * (q.y - p.y); const s = (q.y - p.y) / L2; gx = dx * s; gz = dz * s; }
+    }
+    if (best > b.hw * b.hw || y < out.h || solidY < y - 0.5) continue;
+    out.h = y; out.gx = gx; out.gz = gz;
+  }
+  return out;
+}
 // ---------- Kickers ----------
 // Three sizes on Cabin's freestyle strip, part of the snow so physics launches off the lip.
 // Kicker frame: u down the fall line from its foot, v across (45 degree sides), w up.
@@ -335,6 +359,7 @@ function sample(x, z, out = samp) {
     out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
   }
   if (KICKERS.length) addKick(x, z, out);
+  if (BRIDGES.length && solidY !== null) bridgeTop(x, z, out);
   return solidY !== null && SOLIDS.length ? solidTop(x, z, out) : out;
 }
 const groundY = (x, z) => sample(x, z, { h: 0, gx: 0, gz: 0 }).h;
@@ -2301,6 +2326,58 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
       last = [x, y, z];
       casters.push({ x, z, h: 1.3, w: 0.2 });
     }
+  }
+}
+// Wood Rd from the bridge to Base Village in concrete (runs.js roads), and the stone ski bridge over it
+{
+  const shared = { vertexColors: true, uniforms: modelMat.uniforms, vertexShader: modelMat.vertexShader, fragmentShader: modelMat.fragmentShader, side: THREE.DoubleSide };
+  const roadMat = new THREE.ShaderMaterial({ ...shared, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  const bridgeMat = new THREE.ShaderMaterial(shared);
+  const strip = (pos) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3)); return g; };
+  const quad = (a, b, c, d) => [...a, ...b, ...c, ...a, ...c, ...d];
+  for (const [q, hw] of (RUN_DATA && RUN_DATA.roads) || []) {
+    const pos = [];
+    for (let k = 0; k + 5 < q.length; k += 3) {
+      const [ax, az, ay, bx, bz, by] = q.slice(k, k + 6), L = Math.hypot(bx - ax, bz - az), nx = -(bz - az) / L * hw, nz = (bx - ax) / L * hw;
+      pos.push(...quad([ax - nx, ay + 0.1, az - nz], [ax + nx, ay + 0.1, az + nz], [bx + nx, by + 0.1, bz + nz], [bx - nx, by + 0.1, bz - nz]));
+    }
+    const g = part(strip(pos), [1, 1, 1], null, TILES.concrete);
+    addRinged(new THREE.Mesh(g, roadMat));
+  }
+  const PARAPET = 1.0, PW = 0.5, STONE = [1, 1, 1];
+  for (const b of BRIDGES) {
+    const { P, hw, t, kx, arch } = b, top = [], stone = [], n = P.length;
+    // arch: the walls' and soffit's underside over the road, a half ellipse from the road up to just under the deck
+    const S = [0]; for (let k = 1; k < n; k++) S.push(S[k - 1] + Math.hypot(P[k].x - P[k - 1].x, P[k].z - P[k - 1].z));
+    const roadY = P[kx].g, crown = P[kx].y - t - 0.4;
+    const under = (k) => {
+      const u = (S[k] - S[kx]) / arch;
+      return Math.abs(u) < 1 ? roadY + (crown - roadY) * Math.sqrt(1 - u * u) : Math.min(P[k].g - 0.5, P[k].y - t);
+    };
+    const side = (k) => {
+      const a = P[Math.max(0, k - 1)], c = P[Math.min(n - 1, k + 1)], L = Math.hypot(c.x - a.x, c.z - a.z);
+      return [-(c.z - a.z) / L, (c.x - a.x) / L];
+    };
+    for (let k = 0; k < n - 1; k++) {
+      const p = P[k], q = P[k + 1], [pnx, pnz] = side(k), [qnx, qnz] = side(k + 1);
+      const at = (r, o, dy) => [r.x + (r === p ? pnx : qnx) * o, r.y + dy, r.z + (r === p ? pnz : qnz) * o];
+      const lo0 = under(k), lo1 = under(k + 1);
+      top.push(...quad(at(p, -hw + PW, 0), at(p, hw - PW, 0), at(q, hw - PW, 0), at(q, -hw + PW, 0)));
+      for (const sg of [-1, 1]) {
+        const o = sg * hw, i = sg * (hw - PW);
+        const wl = (r, y) => [r.x + (r === p ? pnx : qnx) * o, y, r.z + (r === p ? pnz : qnz) * o];
+        const wi = (r, y) => [r.x + (r === p ? pnx : qnx) * i, y, r.z + (r === p ? pnz : qnz) * i];
+        stone.push(...quad(wl(p, lo0), wl(q, lo1), wl(q, q.y + PARAPET), wl(p, p.y + PARAPET)));          // outer wall and parapet
+        stone.push(...quad(wi(p, p.y), wi(q, q.y), wi(q, q.y + PARAPET), wi(p, p.y + PARAPET)));          // parapet inside
+        stone.push(...quad(wl(p, p.y + PARAPET), wl(q, q.y + PARAPET), wi(q, q.y + PARAPET), wi(p, p.y + PARAPET)));   // coping
+        const yaw = Math.atan2(q.x - p.x, q.z - p.z), c = (sg * (hw - PW / 2));
+        SOLIDS.push({ x: (p.x + q.x) / 2 + (pnx + qnx) / 2 * c, z: (p.z + q.z) / 2 + (pnz + qnz) / 2 * c, y: (p.y + q.y) / 2 + PARAPET / 2,
+          hx: PW / 2, hy: PARAPET / 2 + Math.abs(q.y - p.y) / 2, hz: Math.hypot(q.x - p.x, q.z - p.z) / 2 + 0.05, c: Math.cos(yaw), s: Math.sin(yaw) });
+      }
+      // soffit: the deck's underside, following the arch over the road
+      stone.push(...quad(at(p, hw, lo0 - p.y), at(p, -hw, lo0 - p.y), at(q, -hw, lo1 - q.y), at(q, hw, lo1 - q.y)));
+    }
+    addRinged(new THREE.Mesh(merge([part(strip(top), SNOWCAP), part(strip(stone), STONE, null, TILES.stone)]), bridgeMat));
   }
 }
 addByPage(runParts, modelMat);
