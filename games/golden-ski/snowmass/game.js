@@ -1603,7 +1603,7 @@ for (const lift of LIFTS) {
   const s = [0];
   for (let k = 1; k < path.length; k++) s.push(s[k - 1] + Math.hypot(path[k][0] - path[k - 1][0], path[k][2] - path[k - 1][2]));
   const L = s[s.length - 1];
-  const lp = { path, s, L, arm: st.arm, speed: st.speed };
+  const lp = { path, s, L, arm: st.arm, speed: st.speed, shift: 0, name: lift.name, kind: lift.kind, pts, g, stn };
   liftPaths.push(lp);
   for (let k = 0; k < path.length - 1; k++) {
     const dx = path[k + 1][0] - path[k][0], dz = path[k + 1][2] - path[k][2], d = Math.hypot(dx, dz) || 1;
@@ -2276,6 +2276,67 @@ function besideTerminal(end, prev, label) {
   if (pick) STARTS.push({ label, x: pick.x, z: pick.z, heading: Math.atan2(-pick.f.gx, pick.f.gz) });
 }
 
+// ---------- The lift ride (Jack 2026-10-22) ----------
+// A ring of light on every chairlift's loading deck. Ski into it: fade to black, ride a chair up at the lift's
+// real speed, fade to black, and stand on the top deck where the chair lets you off. A tap or Space skips to
+// that last fade. Each lift's top start in the Tab menu is that same spot.
+const RING_R = 2.5, LOAD = 4.5;      // m across the ring's middle / 2; m from the wheel to load and unload
+const RIDES = [];
+for (const lp of liftPaths) {
+  if (lp.kind !== 'chair_lift') continue;
+  const N = lp.pts.length, b = lp.g[0] <= lp.g[N - 1] ? 0 : N - 1, t = N - 1 - b;
+  const sb = lp.stn[b], st = lp.stn[t];
+  if (!sb || !st) continue;
+  // uphill along the line at each end; loaded chairs ride on the right of it, looking up
+  const along = (i, j) => { const dx = lp.pts[j][0] - lp.pts[i][0], dz = lp.pts[j][1] - lp.pts[i][1], l = Math.hypot(dx, dz) || 1; return [dx / l, dz / l]; };
+  const [bx, bz] = along(b, b ? b - 1 : 1), [tx, tz] = along(t ? t - 1 : 1, t);
+  const ring = { x: sb.x + bx * LOAD + bz * lp.arm, z: sb.z + bz * LOAD - bx * lp.arm, y: sb.y };
+  const top = { x: st.x - tx * LOAD + tz * lp.arm, z: st.z - tz * LOAD - tx * lp.arm };
+  // off the chair she faces the way down the run the old top start faced from (a little way down it)
+  const old = STARTS.find((q) => q.label === `Start: ${lp.name} top`);
+  top.heading = old ? Math.atan2(old.x - top.x, -(old.z - top.z)) : Math.atan2(tx, -tz);
+  if (old) Object.assign(old, top);
+  // the ride in carrier distance (see carrierAt): from the loading spot to the unloading spot
+  const d0 = (b ? lp.L : 0) + LOAD, d1 = (b ? lp.L : 0) + lp.L - LOAD;
+  RIDES.push({ lp, ring, top, d0, d1, chair: carriers.chair.find((c) => c.lp === lp) });
+}
+// the ring: wisps of green light winding round a soft cyan glow, lying on the deck (Jack's reference image)
+const ringMat = new THREE.ShaderMaterial({
+  uniforms: { time: { value: 0 } },
+  transparent: true, depthWrite: false,
+  vertexShader: `
+    varying vec2 vP;
+    void main() { vP = (uv - 0.5) * ${((RING_R + 0.8) * 2).toFixed(1)}; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform float time;
+    varying vec2 vP;
+    void main() {
+      float r = length(vP), a = atan(vP.y, vP.x), R = ${RING_R.toFixed(1)};
+      // the soft cyan band, in patches that drift round
+      float glow = exp(-pow((r - R) / 0.42, 2.0)) * (0.6 + 0.4 * sin(a * 3.0 + time * 0.7) * sin(a * 5.0 - time * 0.4));
+      // green strands twisting round each other across it
+      float w = 0.0;
+      for (int k = 0; k < 9; k++) {
+        float fk = float(k);
+        float off = R + 0.26 * sin(a * (2.0 + fk) + time * (0.5 + 0.2 * fk) + fk * 1.7) + 0.08 * sin(a * (7.0 + 2.0 * fk) - time * 1.3);
+        w += exp(-pow((r - off) / 0.05, 2.0)) * (0.55 + 0.45 * sin(a * (4.0 + fk) - time * (1.0 + 0.3 * fk)));
+      }
+      w = min(w, 1.0);
+      vec3 col = mix(vec3(0.0, 0.78, 0.92), vec3(0.15, 0.95, 0.3), w);
+      col = mix(col, vec3(0.8, 1.0, 0.8), w * w * 0.5);
+      float alpha = clamp(glow * 0.85 + w, 0.0, 1.0);
+      if (alpha < 0.01) discard;
+      gl_FragColor = vec4(col, alpha);
+    }`,
+});
+for (const R of RIDES) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry((RING_R + 0.8) * 2, (RING_R + 0.8) * 2).rotateX(-Math.PI / 2), ringMat);
+  m.position.set(R.ring.x, R.ring.y + 0.12, R.ring.z);
+  m.renderOrder = 2;
+  scene.add(m);
+}
+const ride = { lp: null, chair: null, d: 0, t: 0, R: null };
+
 // Physics lab: start on Powderhorn, the long test run.
 {
   const geo = new THREE.BufferGeometry();
@@ -2397,18 +2458,29 @@ function pathAt(lp, d, out) {
   out.dx = b[0] - a[0]; out.dz = b[2] - a[2];
   return out;
 }
-const cp = { x: 0, y: 0, z: 0, dx: 0, dz: 0 };
+// a carrier d along the loop (0..L up the path's order, L..2L back): its spot on its side of the cable and the
+// way its riders face
+function carrierAt(lp, d, out) {
+  const up = d < lp.L;
+  pathAt(lp, up ? d : 2 * lp.L - d, out);
+  const len = Math.hypot(out.dx, out.dz) || 1, ux = out.dx / len, uz = out.dz / len;
+  const side = up ? 1 : -1;
+  out.fx = ux * side; out.fz = uz * side;   // riders face the way they travel
+  out.x += uz * lp.arm * side; out.z -= ux * lp.arm * side;
+  return out;
+}
+const cp = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function placeCarriers(t) {
   const cx = camera.position.x, cz = camera.position.z;
+  // the chair Goldie rides: its lift's chairs all shift so that one is where the ride has got to
+  if (ride.lp && ride.chair) ride.lp.shift = ride.d - (ride.chair.s0 + t * ride.lp.speed);
   for (const k of Object.keys(carriers)) {
     const m = carrierMeshes[k], e = m.instanceMatrix.array, fm = FAR_OF[k] && carrierMeshes[FAR_OF[k]], fe = fm && fm.instanceMatrix.array;
     let nNear = 0, nFar = 0;
     carriers[k].forEach((c) => {
-      const lp = c.lp, d = (c.s0 + t * lp.speed) % (2 * lp.L), up = d < lp.L;
-      pathAt(lp, up ? d : 2 * lp.L - d, cp);
-      const len = Math.hypot(cp.dx, cp.dz) || 1, ux = cp.dx / len, uz = cp.dz / len;
-      const side = up ? 1 : -1, fx = ux * side, fz = uz * side;   // riders face the way they travel
-      const x = cp.x + uz * lp.arm * side, z = cp.z - ux * lp.arm * side;
+      const lp = c.lp, d = (((c.s0 + t * lp.speed + lp.shift) % (2 * lp.L)) + 2 * lp.L) % (2 * lp.L);
+      carrierAt(lp, d, cp);
+      const x = cp.x, z = cp.z, fx = cp.fx, fz = cp.fz;
       // chairs and cabins: the full model near, a plain one farther, none past CHAIR_FAR
       let out = e, n = nNear;
       if (fm) {
@@ -2543,12 +2615,12 @@ function updateWorld(dt) {
 }
 
 // ---------- The skier: one camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
-// The sheet (rendered from her 3D model) has 9 pose columns and 5 camera-angle rows: 0 = behind her,
+// The sheet (rendered from her 3D model) has 10 pose columns and 5 camera-angle rows: 0 = behind her,
 // 45, 90 (her right side), 135, 180 = in front. Cameras on her left use the mirrored frame.
 // Snowlight: each sprite pixel is lit from its normal map by the sun, the sky above
 // and the sunlit snow below, then snapped to four bands.
-const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8 };
-const POSE_COLS = 9, ANGLE_ROWS = 5;
+const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8, sit: 9 };
+const POSE_COLS = 10, ANGLE_ROWS = 5;
 const SPRITE_H = 2.0, SPRITE_W = 2.5;
 const skierMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -2648,6 +2720,7 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   if (e.repeat) return;
   keys.add(k);
+  if (phase === 'ride') { if (k === 'jump') skipRide(); return; }
   if (phase === 'ready') wake();
   else if (k === 'jump' && !physics.momentum) input.jump = true;
 });
@@ -2675,6 +2748,7 @@ canvas.addEventListener('pointerdown', (e) => {
   hockeyStop = false;
   ptr.woke = phase === 'ready';
   canvas.setPointerCapture?.(e.pointerId);
+  if (phase === 'ride') skipRide();
   wake();
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -3103,20 +3177,62 @@ function placeSkier(x, z, heading, speed) {
   sk.edgeA = 0; sk.latA = 0; sk.roll = 0; sk.kappa = 0; sk.lean = 0;
   cameraSnap = true;
 }
-function toSummit() {
+function toSummit(at = META.start) {
   phase = 'ready';
-  placeSkier(META.start.x, META.start.z, META.start.heading, 0);
+  if (at === META.start) fadeEl.classList.remove('black');
+  placeSkier(at.x, at.z, at.heading, 0);
   hockeyStop = false;
   // a start whose run tiles aren't in yet stays behind the fade until they are, then stands on them
-  const loads = runStream ? runStream(META.start.x, META.start.z, true) : [];
+  const loads = runStream ? runStream(at.x, at.z, true) : [];
   if (!loads.length) { fadeEl.classList.remove('on'); return; }
   fadeEl.classList.add('on');
-  const at = { x: META.start.x, z: META.start.z };
   Promise.all(loads).then(() => {
     if (phase === 'ready' && sk.pos.x === at.x && sk.pos.z === at.z) placeSkier(at.x, at.z, sk.heading, 0);
     fadeEl.classList.remove('on');
   });
 }
+// The lift ride: fade to black, ride (the camera follows her chair, see render), then fade to black and stand
+// at the top. ride.t counts up from -FADE while the screen goes black, then through the ride.
+const FADE = 0.45;
+function startRide(R) {
+  phase = 'ride';
+  Object.assign(ride, { lp: null, chair: null, R, t: -FADE, d: R.d0 });
+  sk.vel.set(0, 0, 0);
+  sk.edgeA = sk.lean = 0;
+  hockeyStop = false;
+  fadeEl.classList.add('black', 'on');
+}
+function skipRide() {
+  if (phase !== 'ride' || ride.t < 0) return;
+  phase = 'unload';
+  backT = 0;
+  fadeEl.classList.add('on');
+}
+function rideStep(dt) {
+  const R = ride.R;
+  if (phase === 'unload') {
+    if ((backT += dt) <= FADE) return;
+    ride.lp = ride.chair = null;
+    toSummit(R.top);
+    return;
+  }
+  const was = ride.t;
+  ride.t += dt;
+  if (was < 0 && ride.t >= 0) {
+    // black: put her on the chair at the loading spot and fade in
+    ride.lp = R.lp; ride.chair = R.chair;
+    fadeEl.classList.remove('on');
+    cameraSnap = true;
+  }
+  if (ride.t < 0) return;
+  ride.d = Math.min(R.d1, R.d0 + ride.t * R.lp.speed);
+  carrierAt(R.lp, ride.d, rideAt);
+  sk.prev.copy(sk.pos);
+  sk.pos.set(rideAt.x, rideAt.y, rideAt.z);
+  sk.heading = Math.atan2(rideAt.fx, -rideAt.fz);
+  if (ride.d >= R.d1 - R.lp.speed * FADE) skipRide();
+}
+const rideAt = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function wake() {
   if (phase === 'ready') {
     phase = 'skiing';
@@ -3797,6 +3913,7 @@ function step() {
     if ((backT += dt) > 0.45) toSummit();
     return;
   }
+  if (phase === 'ride' || phase === 'unload') { rideStep(dt); return; }
   if (phase === 'ready') {
     sk.prev.copy(sk.pos);
     return;
@@ -3835,6 +3952,10 @@ function step() {
   else sk.stopT = 0;
   if (sk.stopT > STOP_TIME || offMap(sk.pos.x, sk.pos.z)) sendBack();
   solidY = null;
+  // into a lift's ring of light: ride it up
+  if (phase === 'skiing' && !sk.crashed) for (const R of RIDES) {
+    if (Math.hypot(sk.pos.x - R.ring.x, sk.pos.z - R.ring.z) < RING_R - 0.3 && Math.abs(sk.pos.y - R.ring.y) < 2) { startRide(R); break; }
+  }
 }
 
 // ---------- Rendering ----------
@@ -3868,6 +3989,19 @@ function updateCamera(p, dt) {
   cameraSnap = false;
 }
 
+// On the chair: behind it and a little above, looking up the line. Goldie sits on the seat in her sit frame;
+// RIDE_SEAT is her sprite's base (the tails of her hanging skis) below the cable, so her hips rest on the cushion.
+const RIDE_SEAT = -3.05, rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
+function rideCamera(p) {
+  const fx = Math.sin(sk.heading), fz = -Math.cos(sk.heading);
+  const R = ride.R, ahead = Math.min(ride.d + 30, R.d1 + LOAD);
+  carrierAt(R.lp, ahead, rideLook);
+  camera.position.set(p.x - fx * 4.5, p.y - 1.5, p.z - fz * 4.5);
+  // the sky is a band: never tip up so far that its top edge shows
+  const dist = Math.hypot(rideLook.x - camera.position.x, rideLook.z - camera.position.z);
+  camera.lookAt(rideLook.x, Math.min(rideLook.y - 1.9, camera.position.y - dist * 0.02), rideLook.z);
+  if (Math.abs(camera.fov - 60) > 0.05) { camera.fov = 60; camera.updateProjectionMatrix(); }
+}
 function pickFrame() {
   const speed = sk.vel.length();
   if (sk.crashed) return FRAMES.wipeout;
@@ -3938,7 +4072,9 @@ function facingCam(p) {
 function render(alpha, dt) {
   const p = view.copy(sk.prev).lerp(sk.pos, alpha);
   const snap = cameraSnap;
+  const riding = phase === 'ride' || phase === 'unload';
   if (free.on) updateFreecam(dt);
+  else if (riding) rideCamera(p);
   else updateCamera(p, dt);
   updateTerrain();
   updatePatch();
@@ -3948,6 +4084,7 @@ function render(alpha, dt) {
 
   // Sprite: turn to face the camera around the vertical axis only.
   skierMesh.position.copy(p);
+  if (riding) skierMesh.position.y += RIDE_SEAT;
   const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
   skierMesh.rotation.y = yaw;
   // Motion feel: Goldie leans into the turn as far as her skis are on edge (mirrored when seen from the front).
@@ -3960,7 +4097,7 @@ function render(alpha, dt) {
   const ahead = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
   const side = tmpA.x * Math.cos(sk.heading) + tmpA.z * Math.sin(sk.heading);
   const mirror = side < 0;
-  let frame = pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
+  let frame = riding ? FRAMES.sit : pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
   if (mirror && frame === FRAMES.carveL) frame = FRAMES.carveR;
   else if (mirror && frame === FRAMES.carveR) frame = FRAMES.carveL;
   const U = skierMat.uniforms;
@@ -3982,7 +4119,9 @@ function render(alpha, dt) {
   shadow.material.opacity = clamp(1 - lift / 8, 0.2, 1);
   shadow.scale.setScalar(1 + lift * 0.08);
 
-  updateSpray(p, dt);
+  shadow.visible = !riding;
+  if (!riding) updateSpray(p, dt);
+  ringMat.uniforms.time.value = performance.now() / 1000;
   if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 2.23694)} mph · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps`;
   updateWorld(dt);
   skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
@@ -4092,5 +4231,5 @@ window.__golden = {
   map: { get ready() { return !!hudMap.plain; }, get paintMs() { return hudMap.paintMs; }, setFull: setFullMap, drawMini: drawMiniMap },
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
-  solids: SOLIDS, bail, BAIL, kickers: KICKERS,
+  solids: SOLIDS, bail, BAIL, kickers: KICKERS, rides: RIDES, ride, startRide, skipRide,
 };
