@@ -2063,15 +2063,15 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
 }
 if (runParts.length) scene.add(new THREE.Mesh(merge(runParts), modelMat));
 // FreePlay starts at the top of Village Express, a little way down Sunnyside, facing down it.
-// The Tab menu can move the start (and every trip back up) to the top of Powderhorn instead.
+// The Tab menu can move the start (and every trip back up) to the top or bottom of any lift.
 const STARTS = [];
-for (const [name, label] of [['Sunnyside', 'Start: Sunnyside'], ['Powderhorn', 'Start: Powderhorn']]) {
-  const run = signRuns.get(name)?.run;
-  if (!run) continue;
-  const p = alongRun(run, 3), q = alongRun(run, 45);
-  STARTS.push({ label, x: p.x, z: p.z, heading: Math.atan2(q.x - p.x, -(q.z - p.z)) });
+{
+  const run = signRuns.get('Sunnyside')?.run;
+  if (run) {
+    const p = alongRun(run, 3), q = alongRun(run, 45);
+    Object.assign(META.start, { x: p.x, z: p.z, heading: Math.atan2(q.x - p.x, -(q.z - p.z)), name: 'Village Express, top' });
+  }
 }
-if (STARTS.length) Object.assign(META.start, STARTS[0], { name: 'Village Express, top' });
 // the run tiles around the start, before the first frame
 if (runStream) await Promise.all(runStream(META.start.x, META.start.z, true));
 // and the top of every lift, for getting round the mountain quickly: on the groomed run that leaves the top,
@@ -2110,21 +2110,26 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
     while (o < 120 && nearSolid(...lineAt(run.L, run.s0 + o), 5)) o += 6;
     const a = lineAt(run.L, run.s0 + o), b = lineAt(run.L, run.s0 + o + 33);
     STARTS.push({ label: `Start: ${lift.name} top`, x: a[0], z: a[1], heading: Math.atan2(b[0] - a[0], -(b[1] - a[1])) });
-    continue;
-  }
-  const d = Math.hypot(top[0] - prev[0], top[1] - prev[1]) || 1, ux = (top[0] - prev[0]) / d, uz = (top[1] - prev[1]) / d;
+  } else besideTerminal(top, prev, `Start: ${lift.name} top`);
+  // and its bottom, beside the bottom terminal
+  besideTerminal(up ? p[p.length - 1] : p[0], up ? p[p.length - 2] : p[1], `Start: ${lift.name} bottom`);
+}
+// a start off to one side of a terminal (end, with prev the next point along the lift line) where the snow falls
+// away most steeply, facing down the fall line, clear of buildings and not facing the terminal or the forest
+function besideTerminal(end, prev, label) {
+  const d = Math.hypot(end[0] - prev[0], end[1] - prev[1]) || 1, ux = (end[0] - prev[0]) / d, uz = (end[1] - prev[1]) / d;
   let pick = null;
   for (const side of [1, -1]) for (const along of [-10, 5, 20]) for (const lat of [25, 40]) {
-    const x = top[0] + ux * along - uz * lat * side, z = top[1] + uz * along + ux * lat * side;
+    const x = end[0] + ux * along - uz * lat * side, z = end[1] + uz * along + ux * lat * side;
     if (offMap(x, z) || nearSolid(x, z, 5)) continue;
-    const f = fallAt(x, z, 10), k = cellAt(x, z), tx = top[0] - x, tz = top[1] - z, tl = Math.hypot(tx, tz);
+    const f = fallAt(x, z, 10), k = cellAt(x, z), tx = end[0] - x, tz = end[1] - z, tl = Math.hypot(tx, tz);
     if ((-f.gx * tx - f.gz * tz) / (f.slope * tl || 1) > 0.7) continue;     // not facing the terminal
     let ahead = 0;                                                         // and not straight into the forest
     for (let m = 15; m <= 75; m += 15) { const q = cellAt(x - f.gx / (f.slope || 1) * m, z - f.gz / (f.slope || 1) * m); ahead += (conifer(q) + aspen(q)) / 5; }
     const score = f.slope + (onGroomed(x, z) ? 0.15 : 0) - (conifer(k) + aspen(k)) * 0.5 - ahead * 0.5;
     if (!pick || score > pick.score) pick = { x, z, f, score };
   }
-  if (pick) STARTS.push({ label: `Start: ${lift.name} top`, x: pick.x, z: pick.z, heading: Math.atan2(-pick.f.gx, pick.f.gz) });
+  if (pick) STARTS.push({ label, x: pick.x, z: pick.z, heading: Math.atan2(-pick.f.gx, pick.f.gz) });
 }
 
 // Physics lab: start on Powderhorn, the long test run.
