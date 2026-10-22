@@ -1,133 +1,120 @@
-// Golden Ski mockup: the World Kit on Snowmass. A copy of the Snowmass FreePlay mockup with the kit's
-// chairlifts on the real lift lines, rocks, painted shadows, lamps, the four times of day and the 320x180 look.
-// Physics: the approved Momentum model (PR #7, the physics thread), switchable in the Tab menu against the
-// milestone 1 model, "Classic". Every run is shaped on a 2 m grid (runs.js and runs/, loaded by distance).
-// World units are meters. x is east and z is south of the FreePlay start, y is meters above sea level.
-// The mountain is USGS 3DEP elevation at 10 m; trees and runs come from a Sentinel-2 photo (26 March 2025).
+// Golden Ski on Snowmass. Units are meters: x east, z south of the FreePlay start, y above sea level.
+// Terrain: USGS 3DEP at 10 m. Forest and runs: Sentinel-2. Runs are shaped on a 2 m grid (runs.js, runs/).
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from './data.js';
 import { RUN_DATA } from './runs.js';
 
-// ---------- Tuning (design book, chapter 05; unchanged from milestone 1) ----------
-const STEP = 1 / 60;            // fixed physics step
+// ---------- Tuning ----------
+const STEP = 1 / 60;
 const G = 9.81;
-const AIR_G = 1.3;              // extra gravity in the air so jumps feel snappy
+const AIR_G = 1.3;              // extra air gravity: snappier jumps
 const SNOW = {
   groomed: { friction: 0.04, grip: 1.15 },
   powder: { friction: 0.13, grip: 0.75 },
 };
-const DRAG = 0.006;             // air drag per (m/s)^2
-const TUCK_DRAG = 0.5;          // tucking halves drag...
-const TUCK_TURN = 0.55;         // ...and turns wider: the skis turn slower
-const TUCK_GRIP = 0.6;          // ...and hold less edge
-const SPEED_CAP = 26;           // soft cap, about 94 km/h
+const DRAG = 0.006;             // per (m/s)^2
+const TUCK_DRAG = 0.5;
+const TUCK_TURN = 0.55;         // tucked turns are wider...
+const TUCK_GRIP = 0.6;          // ...with less edge grip
+const SPEED_CAP = 26;           // soft cap, about 58 mph
 const CAP_DRAG = 0.6;
-const SKID = 0.55;              // speed lost to sideways slip, as a share of the normal force
-const BRAKE = 8.5;              // hockey stop deceleration
-const TURN_RATE = 1.9;          // rad/s the skis turn at full steer
-const AIR_TURN = 1.2;           // rad/s in the air, to line up the landing
-const MAX_HEADING = 1.85;       // how far from the fall line the skis can point (about 106 degrees)
+const SKID = 0.55;              // speed lost to sideways slip, share of normal force
+const BRAKE = 8.5;              // hockey stop, m/s^2
+const TURN_RATE = 1.9;          // rad/s at full steer
+const AIR_TURN = 1.2;           // rad/s in the air
+const MAX_HEADING = 1.85;       // max angle from the fall line (about 106 degrees)
 const POP = 3.4;                // jump impulse along the slope normal
 const POP_COOLDOWN = 0.35;
-const PUSH = 3.5;               // push off from the summit, and after a wipeout
-const TAKEOFF_MARGIN = 0.0005;  // extra gap (m per step) before a crest launches you
-const REAL_AIR = 0.22;          // air shorter than this is a bump, not a jump
+const PUSH = 3.5;               // push off at the summit and after a wipeout
+const TAKEOFF_MARGIN = 0.0005;  // m per step a crest must drop away before it launches you
+const REAL_AIR = 0.22;          // shorter air is a bump, not a jump
 const CLEAN_LAND = 20 * Math.PI / 180;
 const SLOPPY_LAND = 45 * Math.PI / 180;
-const SLOPPY_KEEP = 0.7;        // share of speed kept on a sloppy landing
-const HARD_IMPACT = 11;         // m/s into the snow that makes a landing sloppy
+const SLOPPY_KEEP = 0.7;        // speed kept on a sloppy landing
+const HARD_IMPACT = 11;         // landing impact (m/s) that's sloppy...
 const CRASH_IMPACT = 17;        // ...or a wipeout
 const CRASH_DECEL = 7;
-const CRASH_HIT_SPEED = 7;      // hitting a tree faster than this is a wipeout
+const CRASH_HIT_SPEED = 7;      // tree hit (m/s) that wipes out
 const SKIER_R = 0.35;
-const STOP_TIME = 3;            // seconds stalled on flat ground (the base, a flat cat track) before the trip back up
-const FLAT = 0.06;              // ...flat meaning too gentle to get going again by pointing downhill
-const EDGE_MARGIN = 150;        // meters from the edge of the map before the trip back up
+const STOP_TIME = 3;            // s stalled on flat ground before the trip back up
+const FLAT = 0.06;              // too gentle to restart by pointing downhill
+const EDGE_MARGIN = 150;        // m from the map edge before the trip back up
 
 // ---------- Momentum physics ----------
-// One velocity carries everything. Gravity, edges, poles, pops and spins only add to it or bend it,
-// and nothing is clamped to the fall line, so you can carve uphill until your speed runs out.
-// The assist layer is the arcade half of the middle ground; switch it off in the Tab menu to feel the raw model.
+// One velocity carries everything; nothing clamps it to the fall line, so you can carve uphill until you stall.
+// ASSIST is the arcade layer on top (Tab menu toggles it).
 const MO = {
-  DRAG: 0.0045,                 // air drag per (m/s)^2 standing up (half rho Cd A / m for a 75 kg skier)
+  DRAG: 0.0045,                 // per (m/s)^2 standing (75 kg skier)
   TUCK_DRAG: 0.0024,            // ...and tucked
-  PIVOT: 2.4,                   // rad/s the skis pivot at full steer when standing still...
-  PIVOT_FALL: 14,               // ...divided by (1 + speed / 14): heavier the faster you go
-  EDGE_IN: 5,                   // how quickly you roll onto an edge (1/s): weight takes a moment to move
-  EDGE_GRIP: 0.6,               // grip at full lean is (1 + 0.6) times the snow's grip
-  POLE: 1.7,                    // m/s each double-pole push adds from a standstill...
-  POLE_MAX: 5.5,                // ...fading to nothing at this speed (20 km/h)
-  POLE_EVERY: 0.55,             // seconds between pushes while held
-  OLLIE_MIN: 3.0,               // pop from a tap (m/s)...
-  OLLIE_MAX: 5.5,               // ...up to this after loading for OLLIE_CHARGE seconds
+  PIVOT: 2.4,                   // rad/s pivot at full steer, standing still...
+  PIVOT_FALL: 14,               // ...divided by (1 + speed / 14)
+  EDGE_IN: 5,                   // 1/s: how fast weight rolls onto an edge
+  EDGE_GRIP: 0.6,               // grip at full lean = (1 + this) x snow grip
+  POLE: 1.7,                    // m/s per double-pole push from a standstill...
+  POLE_MAX: 5.5,                // ...fading to zero at this speed (12 mph)
+  POLE_EVERY: 0.55,             // s between pushes while held
+  OLLIE_MIN: 3.0,               // m/s pop from a tap...
+  OLLIE_MAX: 5.5,               // ...up to this after OLLIE_CHARGE s of loading
   OLLIE_CHARGE: 0.5,
-  OLLIE_UP: 0.4,                // share of the pop that goes straight up rather than off the slope
-  SPIN_IN: 7,                   // rad/s^2: in the air, steering is torque on the spin you took off with
-  SPIN_TUCK: 1.6,               // tucking spins you faster
-  SPIN_DAMP: 0.4,               // spin lost per second with no steer held
-  CRASH_MU: 0.6,                // a wipeout slides with friction (plus a base drag), so it goes further on steep ground
+  OLLIE_UP: 0.4,                // share of the pop straight up rather than off the slope
+  SPIN_IN: 7,                   // rad/s^2: steering in the air torques the spin
+  SPIN_TUCK: 1.6,
+  SPIN_DAMP: 0.4,               // spin lost per second with no steer
+  CRASH_MU: 0.6,                // a wipeout slides with friction plus a base drag
   CRASH_BASE: 2,
-  CRASH_MAX: 5,                 // seconds before you self-arrest whatever the slope
+  CRASH_MAX: 5,                 // s before she self-arrests on any slope
 };
 const ASSIST = {
   on: { grip: 1.2, cap: 34, capDrag: 0.25, airG: 1.15, align: 2.5, clean: 25, sloppy: 55, crash: 20 },
   off: { grip: 1.0, cap: Infinity, capDrag: 0, airG: 1.0, align: 0, clean: 15, sloppy: 45, crash: 17 },
 };
-// ---------- Carve physics (proposal, Powderhorn physics lab) ----------
-// Momentum with real turn mechanics. Steering asks for a share of the tightest turn you can hold right
-// now: a ski on edge can't carve tighter than about 7 m, and the snow can't hold more than about 1.6 g
-// sideways on a groomer, so the tightest clean turn gets wider with speed squared (radius = v^2 / grip).
-// Like a real skier, Goldie leans exactly enough to balance the turn, so full steer is a clean carve at
-// the grip limit, never a washout. Carving costs a little speed (the edge cuts the snow), more the harder
-// you pull. Slow, the skis pivot instead; steering with the brake held is a skidded speed-control turn.
-// Air is thinner up here (about 70% of sea level at 3,000 m), so drag is lower, and waxed skis glide
-// better once they're moving, so runouts and cat tracks keep you rolling.
+// ---------- Carve physics ----------
+// Steering asks for a share of the tightest turn you can hold: radius = max(R_MIN, v^2 / grip). Goldie leans to balance
+// the turn, so full steer is a clean carve at the grip limit. Carving costs speed; slow, the skis pivot; brake + steer
+// is a skidded turn. Thinner air at altitude lowers drag, and wax glides better once moving.
 const CV = {
-  R_MIN: 7,                     // m: tightest carve a ski can make
-  LAT_GRIP: 1.4,                // sideways grip = snow grip x this: 1.6 g groomed, 1.05 g powder
-  CLEAN: 0.92,                  // full steer asks for this share of the grip, so there's a margin
-  EDGE_SWAP: 0.45,              // s to roll from a full turn one way to a full turn the other way
-  CARVE_DRAG: 0.08,             // speed lost per (m/s^2) of sideways pull
-  PIVOT: 2.4,                   // rad/s the skis pivot at full steer standing still...
-  PIVOT_V: 3,                   // ...divided by (1 + speed / 3): almost nothing at speed
-  SKID_TURN: 2.6,               // rad/s extra pivot when steering with the brake held (skidded turn)
-  SKID_BRAKE: 2.5,              // m/s^2 the brake adds in a skidded turn (a full hockey stop is BRAKE)
+  R_MIN: 7,                     // m: tightest carve
+  LAT_GRIP: 1.4,                // sideways grip = snow grip x this (1.6 g groomed, 1.05 g powder)
+  CLEAN: 0.92,                  // share of grip full steer asks for
+  EDGE_SWAP: 0.45,              // s to swap edges fully
+  CARVE_DRAG: 0.08,             // speed lost per m/s^2 of sideways pull
+  PIVOT: 2.4,                   // rad/s pivot at full steer, standing still...
+  PIVOT_V: 3,                   // ...divided by (1 + speed / 3)
+  SKID_TURN: 2.6,               // rad/s extra pivot in a skidded turn
+  SKID_BRAKE: 2.5,              // m/s^2 extra braking in a skidded turn
   TUCK_TURN: 0.5,               // tucked, the tightest turn is twice as wide
-  DRAG: 0.0045, TUCK_DRAG: 0.0024, // sea-level drag (same as Momentum)...
-  AIR_SCALE: 8500,              // ...times exp(-altitude / 8500 m) for thinner air
-  GLIDE: 3,                     // m/s: waxed skis glide better once moving (a film of meltwater): friction runs
-                                // from 1.2x the snow's figure standing still down toward 0.6x at speed
-  LEAN_T: 0.22,                 // s: body lean chases the stick with this lag (about 0.5 s to get most of the way over)
+  DRAG: 0.0045, TUCK_DRAG: 0.0024, // sea-level drag...
+  AIR_SCALE: 8500,              // ...times exp(-altitude / AIR_SCALE)
+  GLIDE: 3,                     // m/s: friction runs from 1.2x the snow's figure at rest
+                                // toward 0.6x at speed
+  LEAN_T: 0.22,                 // s: body lean lag behind the stick
 };
 const physics = { momentum: true, assists: true, carve: true, feel: true, weight: true, crashes: false, loadDrag: true, shapes: false };
-// ---------- Collision shapes and Steep-style bails (Jack picked concept 1, 2026-10-21) ----------
-// Skiing or in the air, Goldie is a pill (capsule) standing on a thin ski plate: the pill leans with her
-// and is what hits walls and boxes; the plate is what meets the snow. Only big mistakes bail her
-// (Steep-style): a square hit on a wall or trunk, landing badly sideways, or a huge drop. A bail swaps
-// both shapes for one flat box, Goldie spread-eagled with her skis on, which tumbles on the snow
-// until it settles, then she gets up. Bails are off by default for testing (Tab: Crashes).
+// ---------- Collision shapes and bails ----------
+// Goldie is a capsule (hits walls and boxes) on a thin ski plate (meets the snow). A square hit, a sideways landing
+// or a huge drop bails her: both shapes become one flat box that tumbles until it settles. Off by default (Tab: Crashes).
 const BODY = { R: 0.35, H: 1.7, PLATE_L: 1.7, PLATE_W: 0.3 };
 const BAIL = {
-  HIT: 9,                       // m/s straight into a wall or trunk (about 32 km/h) that bails; softer hits slide
-  MISS: 70,                     // degrees between skis and travel on landing that bails (sloppy below)
-  IMPACT: 16,                   // m/s into the snow on landing that bails (about a 13 m drop to flat)
-  L: 1.8, W: 0.6, T: 0.25,      // the flat body box: head to feet, hand to hand, front to back
-  MU: 0.7,                      // snow friction on her jacket
-  E: 0.15,                      // bounce
-  MAX: 6,                       // seconds before she gets up whatever the slope
+  HIT: 9,                       // m/s into a wall or trunk that bails (about 20 mph)
+  MISS: 70,                     // degrees between skis and travel on landing that bails
+  IMPACT: 16,                   // m/s landing impact that bails (about a 13 m drop)
+  L: 1.8, W: 0.6, T: 0.25,      // body box: length, width, thickness
+  MU: 0.7,
+  E: 0.15,
+  MAX: 6,                       // s before she gets up on any slope
 };
 const assist = () => (physics.assists ? ASSIST.on : ASSIST.off);
 
 // ---------- The mountain ----------
-const TREELINE = 3560;          // no conifers above this (the satellite photo agrees)
-const TREE_FAR = 900;           // trees are drawn within this distance; beyond it the forest is a tint on the ground
-const TREE_NEAR = [250, 350];    // single trees hand over to clump sprites across this distance
-const CLUMP = 32;               // m: past TREE_NEAR, the trees in each 32 m square are drawn as one clump
-const FILL_NEAR = [120, 160];   // the packed fill among the run-edge trees fades out across this; past it, the mapped trees
-const CHUNK = 32;               // terrain chunk: 32 cells of 10 m (320 m)
-const SUPER = 4;                // far away, 4 x 4 chunks are drawn as one piece (1.28 km)
-const LOD_STEPS = [1, 2, 4, 8, 16]; // triangle size in cells: 10, 20, 40, 80, 160 m
-const LOD_DIST = [250, 700, 1800, 4000]; // m from the camera to a piece's edge where it steps down a size
+const TREELINE = 3560;          // no conifers above this
+const TREE_FAR = 900;           // trees drawn within this; past it the forest is a ground tint
+const TREE_NEAR = [250, 350];    // single trees hand over to clumps across this
+const CLUMP = 32;               // m: one clump per square this size past TREE_NEAR
+const FILL_NEAR = [120, 160];   // packed run-edge fill fades out across this
+const CHUNK = 32;               // cells of 10 m per chunk
+const SUPER = 4;                // 4 x 4 chunks merge into one far piece
+const LOD_STEPS = [1, 2, 4, 8, 16]; // triangle size in cells
+const LOD_DIST = [250, 700, 1800, 4000]; // m to a piece's edge where it steps down a size
 
 // ---------- Small helpers ----------
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -145,7 +132,7 @@ async function inflate(b64) {
   const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
-// Heights are decimeters: each row's first value, then differences along the row.
+// Heights in decimeters: each row's first value, then deltas along the row.
 function decodeHeights(bytes, nx, nz) {
   const first = new Uint16Array(bytes.buffer, bytes.byteOffset, nz);
   const diff = new Int16Array(bytes.buffer, bytes.byteOffset + nz * 2, nx * nz);
@@ -159,8 +146,7 @@ function decodeHeights(bytes, nx, nz) {
 }
 const META = MAP.meta;
 const [nearBytes, farBytes, COVER, runBytes] = await Promise.all([inflate(MAP.near), inflate(MAP.far), inflate(MAP.cover), inflate(MAP.runField)]);
-// Distance to the nearest groomed run on the 10 m grid, in half meters, negative on the run.
-// The runs are the real Snowmass trails from OpenStreetMap (runs.json); their widths are guessed.
+// Distance to the nearest groomed run (half meters, 10 m grid), negative on the run.
 const RUNF = new Int8Array(runBytes.buffer, runBytes.byteOffset, runBytes.length);
 const runDist = (k) => RUNF[k] / 2;
 const CELL = META.near.cell, NX = META.near.nx, NZ = META.near.nz, X0 = META.near.x0, Z0 = META.near.z0;
@@ -169,28 +155,25 @@ const FAR = META.far;
 const FH = decodeHeights(farBytes, FAR.nx, FAR.nz);
 const X1 = X0 + (NX - 1) * CELL, Z1 = Z0 + (NZ - 1) * CELL;
 
-// Cover, one byte per cell: conifer density 0-15, aspen density 0-7, rock.
+// Cover byte: conifer 0-15, aspen 0-7, rock bit.
 const conifer = (k) => (COVER[k] & 15) / 15;
 const aspen = (k) => ((COVER[k] >> 4) & 7) / 7;
 const isRock = (k) => COVER[k] >> 7;
 const gridH = (i, j) => H[clamp(j, 0, NZ - 1) * NX + clamp(i, 0, NX - 1)];
 const cellAt = (x, z) => clamp(Math.round((z - Z0) / CELL), 0, NZ - 1) * NX + clamp(Math.round((x - X0) / CELL), 0, NX - 1);
-// Signed meters to the nearest run of any kind (half meters, 10 m grid), from the traced outlines; null until unpacked.
+// Signed distance to any run (half meters, 10 m grid); null until unpacked.
 let RUN_AREA = null;
-const EDGE_TREES = 25;          // m: within this of a run the trees come from the 1 m tree-height map instead
-// Groomed on the real runs, powder everywhere else.
+const EDGE_TREES = 25;          // m: near a run, trees come from the 1 m canopy map
 const POWDER = new Uint8Array(NX * NZ);
 for (let k = 0; k < NX * NZ; k++) POWDER[k] = RUNF[k] < 0 ? 0 : 1;
-// How much the whole-mountain runs' shaping changes the snow, on the 10 m grid (cm): added to the 10 m ground wherever
-// no run tiles are loaded, so what is built as the page loads (lift towers, stations) stands on the shaped snow.
+// Run shaping on the 10 m grid (cm), used where no 2 m tiles are loaded so lifts and stations sit on shaped snow.
 const RUN_DH = RUN_DATA && RUN_DATA.dh ? await inflate(RUN_DATA.dh).then((b) => new Int16Array(b.buffer, b.byteOffset, b.length / 2)) : null;
 
 const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
 const crd = (p0, p1, p2, p3, t) => 0.5 * ((p2 - p0) + 2 * (2 * p0 - 5 * p1 + 4 * p2 - p3) * t + 3 * (3 * p1 - p0 - 3 * p2 + p3) * t * t);
 const samp = { h: 0, gx: 0, gz: 0 };
 const rowV = [0, 0, 0, 0], rowD = [0, 0, 0, 0];
-// Height and gradient (dh/dx, dh/dz) at any point, on a smooth surface through the grid points:
-// the 10 m mountain, or the 2 m grid of the detailed runs where there is one (built further down).
+// Height and gradient on a Catmull-Rom surface through the 10 m grid, or the 2 m run grid where loaded.
 let PATCH = null, patchOn = true;
 function sampleGrid(g, nx, nz, x0, z0, cell, x, z, out) {
   const fx = clamp((x - x0) / cell, 0, nx - 1.001), fz = clamp((z - z0) / cell, 0, nz - 1.001);
@@ -207,10 +190,9 @@ function sampleGrid(g, nx, nz, x0, z0, cell, x, z, out) {
   out.gx = cr(rowD[0], rowD[1], rowD[2], rowD[3], tz);
   return out;
 }
-// The same smooth surface over the detailed runs' tiled 2 m grid; null where its points aren't all kept.
+// Same surface over the 2 m tiles; null where any of the 4 x 4 points is missing.
 function samplePatch(P, x, z, out) {
   const fx = (x - P.x0) / P.cell, fz = (z - P.z0) / P.cell, i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
-  // the four corners of the 4 x 4 points cover every tile the points can fall in
   if (P.at(i - 1, j - 1) < 0 || P.at(i + 2, j - 1) < 0 || P.at(i - 1, j + 2) < 0 || P.at(i + 2, j + 2) < 0) return null;
   const g = P.hp;
   for (let m = 0; m < 4; m++) {
@@ -237,15 +219,14 @@ function sampleBase(x, z, out) {
   }
   return out;
 }
-// Chairlift stations sit on their own snow: flat on the deck, then easing back down (or up) to the natural
-// ground over the apron around it, so the slope flows into the station and you can ski onto the deck.
+// Stations sit on a flat deck that eases back to the natural ground across an apron, so you can ski on and off.
 const STATIONS = [];
 const stB = { h: 0, gx: 0, gz: 0 };
 function stationAt(x, z) {
   for (const st of STATIONS) if (x > st.bx0 && x < st.bx1 && z > st.bz0 && z < st.bz1) return st;
   return null;
 }
-// how far (m) a point is outside a station's deck, in the station's own frame
+// m outside a station's deck, in the station's frame
 function deckDist(st, x, z) {
   const dx = x - st.x, dz = z - st.z, u = st.c * dx - st.s * dz, v = st.s * dx + st.c * dz;
   return Math.hypot(Math.max(st.u0 - u, 0, u - st.u1), Math.max(st.v0 - v, 0, v - st.v1));
@@ -254,13 +235,12 @@ function stationH(st, x, z) {
   const t = Math.min(1, deckDist(st, x, z) / st.A), e = t * t * (3 - 2 * t);
   return st.y * (1 - e) + sampleBase(x, z, stB).h * e;
 }
-// Solid boxes (walls, huts): {x, y, z} centre, half sizes hx, hy, hz, yaw as c, s.
+// Solid boxes: centre x, y, z, half sizes hx, hy, hz, yaw as c, s.
 const SOLIDS = [];
-// is (x, z) within pad meters of a solid box's footprint (starts keep clear of buildings)
 function nearSolid(x, z, pad) {
   return SOLIDS.some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
 }
-let solidY = null;              // while the skier steps, her height: a box top is ground only from above
+let solidY = null;              // skier height during a step: box tops are ground only from above
 function solidTop(x, z, out) {
   for (const b of SOLIDS) {
     const dx = x - b.x, dz = z - b.z;
@@ -272,23 +252,20 @@ function solidTop(x, z, out) {
   }
   return out;
 }
-// ---------- Kickers (Jack picked these 2026-10-22) ----------
-// Terrain-park kickers in three sizes, after the Wii Fit ski jump: groomed snow curving up to a lip with red and
-// white mats across it. They stand where the 25/26 trail map paints Snowmass's freestyle terrain: the orange
-// strip down Cabin, beside Coney Express, sized by the map's own labels (M/L up top, S/M at the bottom).
-// The kicker is part of the snow, so Momentum launches Goldie off the lip at whatever speed she brings.
-// Profile in the kicker's own frame: u down the fall line from its foot, w up; v across, sides at 45 degrees.
+// ---------- Kickers ----------
+// Three sizes on Cabin's freestyle strip, part of the snow so physics launches off the lip.
+// Kicker frame: u down the fall line from its foot, v across (45 degree sides), w up.
 const KICK_SIZES = {
   small: { h: 1.0, a: 22, w: 4 },                              // about 11 m of air at 25 mph
   medium: { h: 2.0, a: 27, w: 6 },                             // about 14 m
-  large: { h: 3.5, a: 32, w: 8, table: 8, land: 20 },          // a table and a built landing: clears it from about 31 mph
+  large: { h: 3.5, a: 32, w: 8, table: 8, land: 20 },          // table + landing: clears from about 31 mph
 };
-const KICK_AT = [                                              // meters down Cabin's line from its top
+const KICK_AT = [                                              // m down the run from its top
   { run: 'Cabin', d: 330, size: 'medium' },
   { run: 'Cabin', d: 720, size: 'large' },
   { run: 'Cabin', d: 1290, size: 'small' },
 ];
-const KICK_LIP = 1.2;                                          // m of red and white mat up to the lip
+const KICK_LIP = 1.2;                                          // m of mat up to the lip
 const KICKERS = [];
 {
   const kB = { h: 0, gx: 0, gz: 0 };
@@ -300,7 +277,7 @@ const KICKERS = [];
       const [ax, az] = run.points[i], [bx, bz] = run.points[i + 1], L = Math.hypot(bx - ax, bz - az), f = Math.min(1, left / L);
       x = ax + (bx - ax) * f; z = az + (bz - az) * f; left -= L;
     }
-    // the fall line, averaged over 20 m so a bump doesn't swing it
+    // fall line averaged over 20 m
     let gx = 0, gz = 0;
     for (let a = -10; a <= 10; a += 5) for (let b = -10; b <= 10; b += 5) { sampleBase(x + a, z + b, kB); gx += kB.gx; gz += kB.gz; }
     const g = Math.hypot(gx, gz) || 1, S = KICK_SIZES[at.size], A = S.a * Math.PI / 180;
@@ -314,7 +291,6 @@ const KICKERS = [];
     KICKERS.push(k);
   }
 }
-// how high a kicker lifts the snow at (x, z)
 function kickH(k, x, z) {
   const dx = x - k.x, dz = z - k.z, u = dx * k.fx + dz * k.fz;
   if (u <= 0 || u >= k.end) return 0;
@@ -354,7 +330,7 @@ const offMap = (x, z) => x < X0 + EDGE_MARGIN || x > X1 - EDGE_MARGIN || z < Z0 
 const stage = document.getElementById('stage');
 const fadeEl = document.getElementById('fade');
 
-// no antialiasing: the 320x180 look wants hard pixel edges
+// no antialiasing: hard pixel edges for the 320x180 look
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -362,15 +338,14 @@ stage.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.5, 45000);
 
-// Snowlight, the noon light from the World Kit. Every custom shader works on raw colors and writes them
-// straight to the screen, as the cast page and World Kit do.
+// Snowlight: shaders light raw colors and write them straight to the screen.
 const SUN_DIR = new THREE.Vector3(-0.8, 0.75, 0.25).normalize();
 const SUN_COLOR = new THREE.Vector3(1.0, 0.98, 0.92);
 const SKY_COLOR = new THREE.Vector3(0.42, 0.55, 0.85);
 const SNOW_ALBEDO = new THREE.Vector3(0.95, 0.97, 1.0);
 const FOG = new THREE.Vector3(217 / 255, 228 / 255, 238 / 255);
 const BOUNCE = SUN_COLOR.clone().multiplyScalar(Math.max(0, SUN_DIR.y)).addScaledVector(SKY_COLOR, 0.6).multiply(SNOW_ALBEDO);
-// The World Kit's four times of day. fog is [near, far] in meters for the haze.
+// fog is [near, far] in meters
 const TIMES = {
   noon:   { name: 'Noon', sun: [-0.8, 0.75, 0.25], sunC: [1.0, 0.98, 0.92], sky: [0.42, 0.55, 0.85], snow: [0.95, 0.97, 1.0], fogC: [217, 228, 238], fog: [1500, 70000], lamp: [0, 0, 0] },
   golden: { name: 'Golden hour', sun: [0.85, 0.3, -0.45], sunC: [1.25, 0.72, 0.38], sky: [0.36, 0.34, 0.6], snow: [1.0, 0.9, 0.84], fogC: [228, 179, 163], fog: [1300, 60000], lamp: [0, 0, 0] },
@@ -378,7 +353,7 @@ const TIMES = {
   storm:  { name: 'Storm', sun: [-0.1, 1.0, 0.25], sunC: [0.32, 0.33, 0.36], sky: [0.66, 0.69, 0.75], snow: [0.93, 0.95, 0.98], fogC: [176, 184, 194], fog: [40, 900], lamp: [0, 0, 0] },
 };
 let timeOfDay = 'noon';
-// Shadows are painted top down onto a canvas that follows the camera: SH_SIZE meters across.
+// Shadows are painted top down on a canvas SH_SIZE meters across that follows the camera.
 const SH_PX = 1024, SH_SIZE = 768;
 const LIGHT = {
   uSun: { value: SUN_DIR }, uSunC: { value: SUN_COLOR }, uSky: { value: SKY_COLOR }, uSnow: { value: SNOW_ALBEDO },
@@ -391,9 +366,9 @@ const LIGHT_GLSL = /* glsl */ `
   uniform float uFogNear, uFogFar, uTreeFar;
   uniform sampler2D uShadow; uniform vec2 uShO; uniform vec3 uLamps[4];
   float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
-  float band0(float v) { return floor(v * 4.0 + 0.5) / 4.0; }   // no floor: unlit stays unlit
+  float band0(float v) { return floor(v * 4.0 + 0.5) / 4.0; }
   float hash(vec2 p) { return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453); }
-  // 1 where something blocks the sun, from the painted shadow canvas around the camera
+  // 1 where the shadow canvas blocks the sun
   float shade(vec3 p) {
     vec2 uv = (p.xz - uShO) / ${SH_SIZE}.0;
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
@@ -407,7 +382,7 @@ const LIGHT_GLSL = /* glsl */ `
   vec3 finish(vec3 alb, vec3 l, float dist, float cap) {
     float m = max(max(l.r, l.g), max(l.b, 0.001));
     l = l / m * band(min(cap, m));
-    // haze thickens with distance, so far ridges go pale blue the way they do from a real summit
+    // distance haze
     float f = smoothstep(uFogNear, uFogFar, dist);
     return mix(min(alb * l * 1.1, 1.0), uFog, sqrt(f) * 0.92);
   }`;
@@ -429,16 +404,14 @@ const [cordT, cordN, powT, powN, skyT, goldieT, goldieN, ...skyRest] = await Pro
   loadTex('sky_golden', { pixel: false }), loadTex('sky_night', { pixel: false }), loadTex('sky_storm', { pixel: false }),
 ]);
 const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
-// the station atlas: color and normal map tiles for the lift stations (lifts/textures/make_textures.py)
 const [stationT, stationN] = await Promise.all([loadTex('station_atlas'), loadTex('station_atlas_n')]);
 const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });
 const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n']).map(loadImg));
-// in a storm the spruce slot of the atlas shows the storm-plastered spruce instead
+// storm: the snow-plastered spruce replaces the spruce
 const stormImgs = await Promise.all(['storm_spruce', 'storm_spruce_n'].map(loadImg));
 
-// Sky: the World Kit noon strip on an open cylinder that rides with the camera, drawn first and behind
-// everything. The strip's painted peaks are trimmed off, since the real ones are in the scene.
+// Sky strip on an open cylinder that rides with the camera, drawn behind everything.
 const sky = (() => {
   for (const t of Object.values(SKIES)) {
     t.colorSpace = THREE.SRGBColorSpace;
@@ -453,18 +426,18 @@ const sky = (() => {
   m.frustumCulled = false;
   m.userData.h = HS;
   scene.add(m);
-  // below the strip, the haze color, so a camera looking down never sees past the terrain to nothing
+  // below the strip, the haze color
   scene.background = new THREE.Color().setRGB(FOG.x, FOG.y, FOG.z, THREE.SRGBColorSpace);
   return m;
 })();
 
-// ---------- Terrain: flat-shaded, N64 style, lit by Snowlight ----------
-// Each vertex carries its cover: powder (0 groomed, 1 powder), rock, and forest density for the far tint.
+// ---------- Terrain: flat shaded, lit by Snowlight ----------
+// aCov per vertex: groomed edge distance, rock, conifer and aspen density (far tint).
 const terrainMat = new THREE.ShaderMaterial({
   uniforms: Object.assign({ uCord: { value: cordT }, uCordN: { value: cordN }, uPow: { value: powT }, uPowN: { value: powN },
     uRock: { value: new THREE.Vector3(0.5, 0.48, 0.45) }, uForest: { value: new THREE.Vector3(0.15, 0.26, 0.21) },
     uAspen: { value: new THREE.Vector3(0.46, 0.44, 0.4) },
-    // where the detailed runs' 2 m mesh takes over, the 10 m ground is cut away
+    // the 10 m ground is cut away under the 2 m run mesh
     uPMask: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uPMin: { value: new THREE.Vector2() }, uPSize: { value: new THREE.Vector2(1, 1) },
     uPOn: { value: 0 }, uPFar: { value: 0 } }, LIGHT),
   vertexShader: /* glsl */ `
@@ -475,8 +448,7 @@ const terrainMat = new THREE.ShaderMaterial({
       vec4 w = modelMatrix * vec4(position, 1.0);
       vP = w.xyz; vCov = aCov; vN = aN;
       vec4 mv = viewMatrix * w;
-      // skirts sit a hair behind the ground along the view ray: same pixels, so they still fill cracks,
-      // but the ground always wins the tie along shared edges and no seam lines show from above
+      // skirts sit just behind the ground so the ground wins depth ties and no seams show
       if (dot(aN, aN) > 0.0) mv.xyz *= 1.003;
       vD = -mv.z;
       gl_Position = projectionMatrix * mv;
@@ -494,23 +466,23 @@ const terrainMat = new THREE.ShaderMaterial({
         if (pm.x > 0.0 && pm.y > 0.0 && pm.x < 1.0 && pm.y < 1.0 && texture2D(uPMask, pm).r > 0.5) discard;
       }
 #else
-      if (distance(vP.xz, cameraPosition.xz) > uPFar) discard;   // the 10 m ground takes over out there
+      if (distance(vP.xz, cameraPosition.xz) > uPFar) discard;
 #endif
       vec3 fn = normalize(cross(dFdx(vP), dFdy(vP)));
-      if (dot(vN, vN) > 1e-8) fn = normalize(vN);            // a skirt: lit like the ground at its top edge
+      if (dot(vN, vN) > 1e-8) fn = normalize(vN);            // skirt: lit like the ground above it
       vec2 uv = vec2(vP.x, -vP.z) / 8.0;
-      float dith = (hash(vP.xz * 0.5) - 0.5) * 0.6;          // ragged 2 m blocks where groomed meets powder or rock
+      float dith = (hash(vP.xz * 0.5) - 0.5) * 0.6;          // ragged 2 m blocks at groomed / powder / rock edges
 #ifdef PATCH
-      dith *= 0.3;                                           // the detailed runs know their edge to the meter: keep it crisp
+      dith *= 0.3;                                           // crisper edge on the 2 m runs
 #endif
-      float edge = vCov.x + dith * 2.5;                      // meters from the groomed run's edge
+      float edge = vCov.x + dith * 2.5;                      // m from the groomed edge
       bool groomed = edge < 0.0;
       vec3 alb = (groomed ? texture2D(uCord, uv).rgb : texture2D(uPow, uv).rgb) * uSnow;
       vec3 tn = (groomed ? texture2D(uCordN, uv).rgb : texture2D(uPowN, uv).rgb) * 2.0 - 1.0;
-      float near = 1.0 - smoothstep(60.0, 300.0, vD);        // snow texture lighting fades out with distance
+      float near = 1.0 - smoothstep(60.0, 300.0, vD);        // texture lighting fades with distance...
       vec3 n = normalize(fn + vec3(tn.x, 0.0, -tn.y) * (groomed ? 0.12 : 0.18) * near);
-      alb = mix(uSnow, alb, 0.45 * near);                    // and so does its pattern, so distant snow isn't static
-      // the groomer's edge: a bright windrow just off the corduroy, with a thin shadow line beyond it
+      alb = mix(uSnow, alb, 0.45 * near);                    // ...and so does the pattern
+      // windrow just off the groomed edge, then a thin shadow line
       if (edge > 0.0 && edge < 1.6) { alb = mix(alb, vec3(1.0), 0.35); n = normalize(n + vec3(0.0, 0.25, 0.0)); }
       else if (edge >= 1.6 && edge < 2.4) alb *= 0.82;
       if (vCov.y + dith > 0.5) alb = uRock;
@@ -522,8 +494,7 @@ const terrainMat = new THREE.ShaderMaterial({
     }`,
 });
 
-// Chunks of 32 x 32 cells near the camera, merged 4 x 4 into one piece farther out, each built at its sizes on
-// demand. Skirts hang off every edge so cracks between neighbors at different sizes never show sky.
+// 320 m chunks near the camera, merged 4 x 4 far away, each LOD built on demand. Skirts hide cracks between LODs.
 const NCX = Math.ceil((NX - 1) / CHUNK), NCZ = Math.ceil((NZ - 1) / CHUNK);
 const chunks = [];
 function buildChunk(ch, level) {
@@ -542,7 +513,7 @@ function buildChunk(ch, level) {
     pos[v * 3] = X0 + i * CELL; pos[v * 3 + 1] = H[k] - drop; pos[v * 3 + 2] = Z0 + j * CELL;
     cov[v * 4] = runDist(k); cov[v * 4 + 1] = isRock(k); cov[v * 4 + 2] = conifer(k); cov[v * 4 + 3] = aspen(k);
     if (skirt) {
-      // skirt vertices carry the ground's normal, so a crack's sliver is lit like the ground beside it
+      // skirt normals match the ground beside them
       nrm[v * 3] = -(gridH(i + 1, j) - gridH(i - 1, j)) / (2 * CELL);
       nrm[v * 3 + 1] = 1;
       nrm[v * 3 + 2] = -(gridH(i, j + 1) - gridH(i, j - 1)) / (2 * CELL);
@@ -557,7 +528,7 @@ function buildChunk(ch, level) {
       else idx.push(v, v + nx, v + nx + 1, v, v + nx + 1, v + 1);
     }
   }
-  // skirt: walk the edge loop, copy each edge vertex and drop a second copy below it
+  // skirt: copy the edge loop and drop a second copy below it
   const loop = [];
   for (let a = 0; a < nx; a++) loop.push(a);
   for (let b = 1; b < nz; b++) loop.push(b * nx + nx - 1);
@@ -570,7 +541,7 @@ function buildChunk(ch, level) {
   });
   for (let q = 0; q < ring; q++) {
     const a = nx * nz + q, b = nx * nz + (q + 1) % ring, a2 = a + ring, b2 = b + ring;
-    idx.push(a, a2, b, b, a2, b2, a, b, a2, b, b2, a2);   // both windings, so it shows from either side
+    idx.push(a, a2, b, b, a2, b2, a, b, a2, b, b2, a2);   // both windings
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -594,13 +565,12 @@ for (let sj = 0; sj < NCZ; sj += SUPER) {
     chunks.push(sup);
   }
 }
-// horizontal distance from the camera to the nearest point of a piece
 const pieceDist = (p, cx, cz) => Math.hypot(Math.max(0, X0 + p.i0 * CELL - cx, cx - X0 - p.i1 * CELL), Math.max(0, Z0 + p.j0 * CELL - cz, cz - Z0 - p.j1 * CELL));
 function showPiece(p, level) {
   if (level === p.level) return;
   if (level >= 0 && !p.meshes[level]) p.meshes[level] = buildChunk(p, level);
   p.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
-  // the finest size is big: let it go once the piece is well away
+  // free the finest LOD once the piece is well away
   if (level !== 0 && level !== 1 && p.meshes[0]) { scene.remove(p.meshes[0]); p.meshes[0].geometry.dispose(); p.meshes[0] = null; }
   p.level = level;
 }
@@ -621,9 +591,8 @@ function updateTerrain() {
   }
 }
 
-// The surrounding peaks out to about 25 km, from the 100 m data, with a hole where the 10 m mountain sits.
-// Coarser with distance from the mountain: 200 m triangles within 3 km of it, 400 m to 8 km, 800 m past that.
-// Built in blocks of 1.6 km, with skirts where blocks of two sizes meet, and drawn as one piece.
+// Surrounding peaks to ~25 km from the 100 m data, with a hole under the 10 m mountain: 200 m triangles within 3 km,
+// 400 m to 8 km, 800 m past that. 1.6 km blocks, skirts where sizes differ, one draw.
 {
   const S = 2, nx = Math.floor((FAR.nx - 1) / S) + 1, nz = Math.floor((FAR.nz - 1) / S) + 1, cell = FAR.cell * S, B = 8;
   const inner = (x, z, m) => x > X0 + m && x < X1 - m && z > Z0 + m && z < Z1 - m;
@@ -632,7 +601,7 @@ function updateTerrain() {
   const put = (i, j, drop, skirt) => {
     const x = FAR.x0 + i * cell, z = FAR.z0 + j * cell, h = hk(i, j);
     const gx = (hk(i + 1, j) - hk(i - 1, j)) / (2 * cell), gz = (hk(i, j + 1) - hk(i, j - 1)) / (2 * cell), slope = Math.hypot(gx, gz);
-    // tucked a little under the 10 m mountain where the two overlap, easing back up outside it
+    // tucked under the 10 m mountain where they overlap
     const out = Math.hypot(Math.max(X0 - x, 0, x - X1), Math.max(Z0 - z, 0, z - Z1));
     pos.push(x, h - 14 * clamp(1 - out / 800, 0, 1) - drop, z);
     cov.push(60, slope > 0.85 ? 1 : 0, h < 3300 && slope < 0.8 ? 0.75 : h < 3500 ? 0.3 : 0, 0);
@@ -662,7 +631,7 @@ function updateTerrain() {
           idx.push(v, v + w, v + 1, v + 1, v + w, v + w + 1);
         }
       }
-      // a skirt only along edges where the neighbor's triangles are another size, so a crack there never shows sky
+      // skirt only where the neighbor block is another size
       const drop = step * cell * 0.6 + 20;
       const skirt = (pts) => {
         const top = pts.map(([i, j]) => put(i, j, 0, true)), bot = pts.map(([i, j]) => put(i, j, drop, true));
@@ -688,16 +657,12 @@ function updateTerrain() {
   scene.add(m);
 }
 
-// ---------- Trees: World Kit sprites where the photo shows forest ----------
-// One atlas, one draw call. Each tree is a billboard that turns to face the camera but stays upright,
-// lit per pixel from its normal map like Goldie. Trees are made page by page (320 m squares) from the
-// cover map, the same way every time, so the ones you see are the ones you hit.
+// ---------- Trees ----------
+// Camera-facing upright billboards from one atlas, lit from normal maps. Built per 320 m page from the cover map
+// with fixed hashes, so the trees you see are the trees you hit.
 const SLOT = 80;
-// Clumps: the same tree sprites bunched up on one sprite, for forest past TREE_NEAR.
-// Each tree is [kind, scale, x, rise] in sprite pixels; drawn in order, back row first.
-// The three conifer clumps are laid out by hand so each has its own outline (Jack 2026-10-21):
-// A an even spruce stand, B one tall fir off to the right with the rest trailing off to the left,
-// C a tall group, an opening, then a low pair. Here trees are [kind, scale, center x, rise].
+// Clumps: several tree sprites on one sprite for forest past TREE_NEAR. Conifer clumps are hand laid out,
+// each tree [kind, scale, center x, rise] in sprite pixels, back row first.
 const CLUMP_W = 168;
 const CONIFER_CLUMPS = [
   [[0, 0.556, 10, 22], [0, 0.58, 47, 22], [0, 0.604, 78, 22], [0, 0.568, 115, 22], [0, 0.592, 146, 22], [0, 0.732, 29, 11], [0, 0.696, 60, 11], [0, 0.72, 97, 11], [0, 0.744, 128, 11], [0, 0.708, 165, 11], [0, 0.848, 14, 0], [0, 0.872, 55, 0], [0, 0.836, 90, 0], [0, 0.86, 131, 0]],
@@ -709,7 +674,7 @@ const CLUMPS = [
     const dw = Math.round(treeImgs[n * 2].width * scale);
     return [n, scale, Math.round(clamp(cx - dw / 2, 0, CLUMP_W - dw)), rise];
   }) })),
-  // aspen and snow ghost clumps: three rows, the back ones smaller and standing higher
+  // aspen and snow ghost clumps: three rows, back rows smaller and higher
   ...[{ kind: 'aspen', mix: [2] }, { kind: 'snowghost', mix: [3] }].map((c, k) => {
     const m = k + 3, trees = [];
     [[0.56, 0.17], [0.74, 0.08], [0.94, 0]].forEach(([sc, rise], row) => {
@@ -717,7 +682,7 @@ const CLUMPS = [
         const r = (u) => hash2(m * 7 + row * 4 + q, u);
         const n = c.mix[Math.floor(r(1) * c.mix.length)], scale = sc + (r(2) - 0.5) * 0.12;
         const w = treeImgs[n * 2].width * scale, h = treeImgs[n * 2].height;
-        // evenly spread with a little jitter, each row set half a gap over from the one behind
+        // rows offset half a gap, with jitter
         const room = CLUMP_W - w, x = Math.round(clamp(room * (q + (row === 1 ? 0.25 : row === 2 ? 0.6 : 0) + (r(3) - 0.5) * 0.35) / 3.6, 0, room));
         trees.push([n, scale, x, Math.round(h * (rise + r(4) * 0.04))]);
       }
@@ -733,7 +698,7 @@ const atlas = (() => {
     return t;
   };
   const rects = [];
-  // paints one sheet (colors or normals); the storm sheet has the storm spruce squeezed into the spruce's size
+  // paints one sheet (color or normal); the storm sheet swaps in the storm spruce
   const paint = (normal, storm) => {
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = 128;
@@ -764,8 +729,8 @@ const atlas = (() => {
 const CLUMP_IDS = { conifer: [], aspen: [], snowghost: [] };
 atlas.rects.forEach((r, n) => { if (r.clump) CLUMP_IDS[r.clump].push(n); });
 const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5 };
-const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0];      // trunk-and-branches radius as a share of height
-const PAGE = 32;                              // cells per tree page
+const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0];      // trunk radius as a share of height
+const PAGE = 32;
 const pages = new Map();
 const treeCells = new Map();                  // 8 m cells -> trees, for collisions
 const cellKey = (ix, iz) => (ix + 4096) * 8192 + (iz + 4096);
@@ -782,8 +747,8 @@ function makePage(pi, pj) {
   for (let j = pj * PAGE; j < Math.min((pj + 1) * PAGE, NZ); j++) {
     for (let i = pi * PAGE; i < Math.min((pi + 1) * PAGE, NX); i++) {
       const k = j * NX + i, h = H[k];
-      if (LIFT_CUT[k]) continue;                       // lift lines are cut through the forest
-      // ...and so are the groomed runs, to 2 m past the edge (to the meter on the detailed runs)
+      if (LIFT_CUT[k]) continue;                       // lift lines are cut through the forest...
+      // ...and so are groomed runs, to 2 m past the edge
       const pe = patchEdge(X0 + i * CELL, Z0 + j * CELL);
       if (pe === undefined ? RUNF[k] < 4 : pe < -4) continue;
       const clear = (x, z, r) => pe === undefined || patchEdge(x, z) > r + 1.5;
@@ -798,9 +763,8 @@ function makePage(pi, pj) {
       }
       const c = conifer(k), a = aspen(k);
       if (c + a < 0.05) continue;
-      if (RUN_AREA && RUN_AREA[k] < EDGE_TREES * 2) continue;   // near a run: the real trees stand there (edge trees)
-      // up to two trees a cell: a second, set across the cell from the first, where the forest is thick.
-      // Heights are real Colorado ones (spruce 15-24 m, fir 12-20 m, aspen 10-15 m), so the runs read at true size.
+      if (RUN_AREA && RUN_AREA[k] < EDGE_TREES * 2) continue;   // edge trees stand here instead
+      // Up to two trees a cell where the forest is thick. Real Colorado heights (spruce 15-24 m, fir 12-20, aspen 10-15).
       for (let q = 0; q < 2; q++) {
         const o = q * 7001;
         const r1 = hash2(i + o, j), r2 = hash2(i + 7919, j + o), r3 = hash2(i + o, j + 7919), r4 = hash2(i + 3571 + o, j + 1597);
@@ -823,15 +787,14 @@ function makePage(pi, pj) {
       }
     }
   }
-  // run props (rope poles, boundary signs) placed by the art pass, bucketed by page
+  // run props, bucketed by page
   for (const t of PROPS.get(key) || []) list.push(t);
   pg = Object.assign({ list, rocks }, pageData(list, pi, pj));
   pages.set(key, pg);
   return pg;
 }
-// What the page draws. near: every tree, sorted into 4 x 4 squares of 80 m (sub[q] .. sub[q + 1] are square q's)
-// so only the squares near the camera are sent. far: one clump per 32 m square holding three or more trees, at
-// their middle, as tall as the tallest of the main kind there; squares with fewer keep their trees, as do props.
+// near: every tree, sorted into 4 x 4 squares of 80 m (sub[q]..sub[q + 1]) so only nearby squares are sent.
+// far: one clump per 32 m square of 3+ trees, as tall as its tallest main-kind tree; smaller squares and props stay single.
 function pageData(all, pi, pj) {
   const P = PAGE * CELL, px = X0 + pi * P, pz = Z0 + pj * P, SQ = P / 4;
   const inst = (t, r, aspect) => [t.x, t.y, t.z, t.height, r.u0, r.u1, aspect, r.v1];
@@ -843,7 +806,7 @@ function pageData(all, pi, pj) {
     for (let q = 1; q <= 16; q++) sub[q] = Math.max(sub[q], sub[q - 1]);
     return { near, sub };
   };
-  // the packed fill among the run-edge trees is its own layer, drawn only within FILL_NEAR and never in a clump
+  // the packed edge fill is its own layer, near only, never clumped
   const list = all.filter((t) => !t.fill), { near, sub } = squares(list), fill = squares(all.filter((t) => t.fill));
   const cells = new Map(), far = [];
   for (const t of list) {
@@ -852,7 +815,7 @@ function pageData(all, pi, pj) {
     if (!cells.has(k)) cells.set(k, []);
     cells.get(k).push(t);
   }
-  // thick squares are halved across their longer side, two clumps standing one behind the other like the forest's depth
+  // thick squares split across their longer side into two clumps, one behind the other
   const groups = [];
   for (const [k, ts] of cells) {
     if (ts.length < 8) { groups.push([k, ts]); continue; }
@@ -870,15 +833,14 @@ function pageData(all, pi, pj) {
     for (const t of ts) { x += t.x; z += t.z; y = Math.min(y, t.y); x0 = Math.min(x0, t.x); x1 = Math.max(x1, t.x); z0 = Math.min(z0, t.z); z1 = Math.max(z1, t.z); }
     for (const t of own) h = Math.max(h, t.height);
     const ids = CLUMP_IDS[name], r = atlas.rects[ids[Math.floor(hash2(k + 31 * pi, 17 * pj) * ids.length)]];
-    // stretched a little to the spread of the trees it stands for, so neighboring clumps close up like the forest does
+    // stretched to the trees' spread so neighbor clumps close up
     const spread = Math.max(x1 - x0, z1 - z0) + h * 0.4;
     far.push(inst({ x: x / ts.length, y, z: z / ts.length, height: h }, r, r.aspect * clamp(spread / (h * r.aspect), 0.85, 1.3)));
   }
   return { near, sub, fnear: fill.near, fsub: fill.sub, far: new Float32Array(far.flat()) };
 }
 const TREE_MAX = 60000;
-// Two layers in one atlas: single trees near the camera, clumps past TREE_NEAR. Each fades out across TREE_NEAR
-// by the same per-pixel dither the other fades in with, so every pixel shows exactly one of them.
+// Near trees and far clumps fade across TREE_NEAR by the same per-pixel dither, so each pixel shows exactly one.
 function treeLayer(layer) {
   const geo = new THREE.InstancedBufferGeometry();
   const base = new THREE.PlaneGeometry(1, 1);
@@ -899,7 +861,7 @@ const treeShaders = {
     attribute vec4 iPos, iTex;
     varying vec2 vUv; varying vec3 vRight; varying float vD; varying vec3 vBase; varying float vUp;
     void main() {
-      // shade is read just sunward of the trunk, so a tree is never darkened by its own shadow
+      // shade sampled sunward of the trunk so a tree never shades itself
       vec2 sunXZ = normalize(uSun.xz + vec2(1e-4));
       vBase = iPos.xyz + vec3(sunXZ.x, 0.0, sunXZ.y) * (iPos.w * iTex.z * 0.5 + 0.8); vUp = position.y;
       vec3 right = normalize(vec3(viewMatrix[0][0], 0.0, viewMatrix[2][0]));
@@ -910,7 +872,7 @@ const treeShaders = {
       vec4 mv = viewMatrix * vec4(p, 1.0);
       vD = -mv.z;
       gl_Position = projectionMatrix * mv;
-      // wholly outside its layer's distances: no pixels at all
+      // outside this layer's range: no pixels
       float d = -(viewMatrix * vec4(iPos.xyz, 1.0)).z;
       if (uLayer < 0.5 ? d > uNear.y + 40.0 : d < uNear.x - 40.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     }`,
@@ -921,14 +883,14 @@ const treeShaders = {
     void main() {
       float hsh = hash(gl_FragCoord.xy), f = smoothstep(uNear.x, uNear.y, vD);
       if (uLayer < 0.5 ? hsh < f : hsh >= f) discard;
-      // thin out by dithering toward the edge of tree range, where the ground tint takes over
+      // dither out toward TREE_FAR, where the ground tint takes over
       if (hsh < smoothstep(uTreeFar * 0.75, uTreeFar, vD)) discard;
       vec4 a = texture2D(uA, vUv);
       if (a.a < 0.5) discard;
       vec3 s = texture2D(uN, vUv).rgb * 2.0 - 1.0;
       vec3 toward = vec3(-vRight.z, 0.0, vRight.x);
       vec3 n = normalize(vRight * s.x + vec3(0.0, s.y, 0.0) + toward * s.z);
-      // a tree in another tree's shadow is shaded at the base, fading out up the trunk
+      // shaded at the base, fading up the trunk
       float lit = 1.0 - shade(vBase) * (1.0 - smoothstep(0.0, 0.8, vUp));
       vec3 l = uSunC * band(max(0.0, dot(n, uSun))) * lit + uSky * (0.35 + 0.35 * n.y)
              + uBounce * band(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 * (1.0 - 0.6 * shade(vBase)) + lamps(vBase + vec3(0.0, 2.0, 0.0), n) * 1.4 + 0.05;
@@ -938,11 +900,11 @@ const treeShaders = {
 const treeMat = new THREE.ShaderMaterial(Object.assign({
   uniforms: Object.assign({ uA: { value: atlas.map }, uN: { value: atlas.normal }, uNear: { value: new THREE.Vector2(...TREE_NEAR) }, uLayer: { value: 0 } }, LIGHT),
 }, treeShaders));
-// the clump layer shares the tree layer's uniforms (atlas, lighting), all but which layer it is
+// clumps share the tree uniforms except uLayer
 const clumpMat = new THREE.ShaderMaterial(Object.assign({
   uniforms: Object.assign({}, treeMat.uniforms, { uLayer: { value: 1 } }),
 }, treeShaders));
-// the fill layer: single trees like the near layer, faded out across FILL_NEAR instead
+// fill: single trees, faded across FILL_NEAR
 const fillMat = new THREE.ShaderMaterial(Object.assign({
   uniforms: Object.assign({}, treeMat.uniforms, { uNear: { value: new THREE.Vector2(...FILL_NEAR) } }),
 }, treeShaders));
@@ -971,7 +933,7 @@ function updateTrees(force) {
       inRange.push(pg);
       const d = boxDist(x0, z0, P);
       if (d > TREE_FAR) continue;
-      // near: only the 80 m squares that can come within TREE_NEAR before the next pick
+      // near: only squares that can come within TREE_NEAR before the next pick
       if (d < TREE_NEAR[1] + TREE_STEP + 20) {
         for (let q = 0; q < 16; q++) {
           if (boxDist(x0 + (q % 4) * P / 4, z0 + Math.floor(q / 4) * P / 4, P / 4) > TREE_NEAR[1] + TREE_STEP + 20) continue;
@@ -1001,11 +963,9 @@ function updateTrees(force) {
   if (newPage || force) fillRocks(inRange);
 }
 
-// ---------- World Kit models: low poly, flat shaded, colored per vertex, lit by the same Snowlight ----------
-// aH is each vertex's height above its own model's base, so shadows on the snow only darken the bottom.
-// Parts can carry a tile of the station atlas (aT: u, v in tiles, tile + 1; 0 = plain color). A textured part's
-// color is its vertex color times the tile's, and the tile's normal map bends the face normal, so seams, plank
-// gaps and battens catch the four Snowlight bands. Up close only: past ~300 m it fades to the tile's average.
+// ---------- Kit models: low poly, flat shaded, vertex colored, lit by Snowlight ----------
+// aH: height above the model's base, so ground shadows only darken the bottom. aT: atlas tile (u, v in tiles, tile + 1;
+// 0 = plain color); the tile's color and normal map apply up close and fade to the tile's average past ~300 m.
 const TILES = { hood: 0, deck: 1, siding: 2, window: 3, roofSnow: 4, concrete: 5, cabin: 6, steel: 7, pad: 8, metalRoof: 9,
   darkPanel: 10, cedar: 11, stone: 12, curtain: 13, posterA: 14, posterB: 15, posterC: 16 };
 const TILE_AVG = [[0.14, 0.276, 0.588], [0.448, 0.352, 0.271], [0.469, 0.337, 0.225], [0.297, 0.307, 0.353], [0.943, 0.962, 1.0], [0.598, 0.579, 0.541],
@@ -1042,10 +1002,10 @@ const modelMat = new THREE.ShaderMaterial({
       if (vT.z > 0.5) {
         int t = int(vT.z - 0.5);
         float tf = float(t);
-        vec2 cell = vec2(mod(tf, 8.0), 3.0 - floor(tf / 8.0));   // the image's top row is the texture's upper half
+        vec2 cell = vec2(mod(tf, 8.0), 3.0 - floor(tf / 8.0));   // atlas rows run top down
         vec2 auv = (cell + (fract(vT.xy) * 62.0 + 1.0) / 64.0) / vec2(8.0, 4.0);
         vec3 tc = texture2D(uAtlas, auv).rgb, tn = texture2D(uAtlasN, auv).rgb * 2.0 - 1.0;
-        // bend the face normal along the tile's own axes, found from how the tile coordinates run across the screen
+        // bend the normal along the tile's axes, from screen-space derivatives
         vec3 q0 = dFdx(vP), q1 = dFdy(vP); vec2 s0 = dFdx(vT.xy), s1 = dFdy(vT.xy);
         vec3 q1p = cross(q1, n), q0p = cross(n, q0);
         vec3 T = q1p * s0.x + q0p * s1.x, B = q1p * s0.y + q0p * s1.y;
@@ -1066,8 +1026,7 @@ const modelMat = new THREE.ShaderMaterial({
 });
 const STEEL = [0.46, 0.48, 0.52], DARK = [0.2, 0.21, 0.25], CONC = [0.62, 0.6, 0.56], PAD = [0.78, 0.12, 0.1],
   SEAT = [0.16, 0.2, 0.36], WALL = [0.5, 0.36, 0.24], SNOWCAP = [0.92, 0.95, 1.0], CABIN = [0.75, 0.6, 0.2], GLASS = [0.15, 0.2, 0.3];
-// A part: a simple geometry with one color, placed by an optional matrix.
-// With a tile (TILES), each face gets atlas coordinates projected along its main axis, 4 m to a tile, v up the walls.
+// A one-color part with an optional matrix. With a tile, each face gets atlas coords projected on its main axis, 4 m a tile.
 function part(g, col, m, tile = -1) {
   g = g.index ? g.toNonIndexed() : g;
   const n = g.attributes.position.count, c = new Float32Array(n * 3), h = new Float32Array(n), t = new Float32Array(n * 3);
@@ -1120,7 +1079,7 @@ function merge(parts) {
   g.computeBoundingSphere();
   return g;
 }
-// place a model-local part list in the world: base at (x, y, z), local z along `yaw`
+// place model-local parts: base at (x, y, z), local z along yaw
 const placeM = (x, y, z, yaw) => new THREE.Matrix4().makeRotationY(yaw).setPosition(x, y, z);
 function placed(parts, m) {
   return parts.map((g) => {
@@ -1131,12 +1090,12 @@ function placed(parts, m) {
   });
 }
 
-// ---------- Rocks: the kit's displaced icosahedra, snow on the faces that point up ----------
+// ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 const ROCK_VARIANTS = 6, ROCK_MAX = 2500;
 function rockGeo(k) {
   const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position, v = new THREE.Vector3();
   const sx = 0.8 + hash2(k, 1) * 0.6, sy = 0.6 + hash2(k, 2) * 0.6, sz = 0.7 + hash2(k, 3) * 0.6;
-  // displace shared corners the same way so faces stay closed
+  // displace shared corners alike so faces stay closed
   for (let i = 0; i < p.count; i++) {
     v.fromBufferAttribute(p, i);
     const d = 0.75 + hash2(Math.round(v.x * 50) + k * 977, Math.round(v.y * 50) + Math.round(v.z * 50) * 7) * 0.5;
@@ -1177,11 +1136,10 @@ function fillRocks(pagesInRange) {
   for (const m of rockMeshes) m.instanceMatrix.needsUpdate = true;
 }
 
-// New chairlift terminal (Jack 2026-10-21): a hood over the wheel on four thin legs, the wheel on its own center post,
-// a wooden deck and an operator hut. Local frame: wheel center at x = z = 0, ground y = 0, the line off toward -z.
+// Chairlift terminal: hood on four legs over the wheel post, a deck and an operator hut.
+// Frame: wheel at x = z = 0, ground y = 0, line toward -z.
 const TCOL = { STEEL, DARK, CONC, WALL, SNOWCAP, GLASS, CANOPY: [0.14, 0.28, 0.6], UNDER: [0.1, 0.13, 0.22], DECK: [0.42, 0.31, 0.21] };
-// the canopy: a rounded hood over the wheel, open to the line; three outlines stacked, each the same plan shape
-// (straight sides, a half circle around the wheel's back) at its own size, joined by sloped walls, capped top and bottom
+// hood: three stacked outlines (straight sides, half circle behind the wheel) joined by sloped walls, open to the line
 function canopy(R, L, y0, seg = 8) {
   const ring = (w, y, front) => {
     const p = [[w, front]];
@@ -1203,7 +1161,7 @@ function canopy(R, L, y0, seg = 8) {
   cap(rings[2], true);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  // the underside, dark, so the hood reads as a shell from below
+  // dark underside
   const u = [];
   const f = THREE.ShapeUtils.triangulateShape(rings[0].map((v) => new THREE.Vector2(v.x, v.z)), []);
   for (const [a, b, c] of f) for (const v of [rings[0][a], rings[0][c], rings[0][b]]) u.push(v.x, v.y + 0.02, v.z);
@@ -1211,7 +1169,7 @@ function canopy(R, L, y0, seg = 8) {
   ug.setAttribute('position', new THREE.Float32BufferAttribute(u, 3));
   return [g, ug];
 }
-// a gable roof: width across, length along z, ridge height; overhangs come from width/length past the walls
+// gable roof: width across, length along z, ridge height
 function gable(w, l, h) {
   const a = [-w / 2, 0], b = [w / 2, 0], c = [0, h], pos = [];
   const v = (p, z) => [p[0], p[1], z];
@@ -1224,8 +1182,7 @@ function gable(w, l, h) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   return g;
 }
-// The snow apron around a station: a grid in the station's frame over the deck plus its apron, heights from
-// stationH, the outer ring tucked just under the ground so it meets the mountain without a seam.
+// Station apron: a grid over the deck and apron with stationH heights, outer ring tucked under the ground.
 function apron(sd, base) {
   const step = 2.0, pos = [], A = sd.A;
   const us = [], vs = [];
@@ -1248,47 +1205,45 @@ function apron(sd, base) {
   g.applyMatrix4(placeM(sd.x, base, sd.z, sd.yaw));
   return g;
 }
-// the deck's footprint in the station's frame: [u0, u1] across, [v0, v1] along (the line off toward -v)
-// side: which side of the line the hut stands (+1 = +x); it moves to the other side when another lift's station is in the way
+// deck footprint in the station frame: [u0, u1] across, [v0, v1] along; side: which side the hut is on (+1 = +x)
 const deckRect = (arm, side = 1) => side > 0 ? [-(arm + 2.0), arm + 5.0, -7.5, 1.5] : [-(arm + 5.0), arm + 2.0, -7.5, 1.5];
 function chairTerminal(H = 5, arm = 3, foot = 3, side = 1) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile)), W = [1, 1, 1];
   const R = arm + 1.0, L = 7, top = H - 0.35;
-  // the wheel's own post: footing, tapered column, the drive box the wheel turns on
+  // wheel post: footing, tapered column, drive box
   add(new THREE.BoxGeometry(2.2, 0.5, 2.2).translate(0, 0.25, 0), W, TILES.concrete);
   add(new THREE.CylinderGeometry(0.42, 0.6, H - 0.7, 8).translate(0, 0.5 + (H - 0.7) / 2, 0), TCOL.STEEL);
   add(new THREE.CylinderGeometry(arm, arm, 0.3, 14).translate(0, H, 0), TCOL.DARK);
-  // the hood and its four thin legs, standing just outside the chairs' path
+  // hood and legs, just outside the chairs' path
   const [hood, under] = canopy(R, L, top);
   add(hood, W, TILES.hood); add(under, TCOL.UNDER);
   for (const [x, z] of [[-(arm + 1.55), 1.2], [arm + 1.55, 1.2], [-(arm + 1.55), -L + 0.9], [arm + 1.55, -L + 0.9]]) {
     const h = top - 0.5;
     add(new THREE.BoxGeometry(0.2, h, 0.2).translate(x, 0.5 + h / 2, z), TCOL.STEEL);
   }
-  // the deck: a wooden platform under the hood where the chairs come round, flush with the snow around it
+  // deck, flush with the snow
   const [xl, xr, d0, d1] = deckRect(arm, side);
   add(new THREE.BoxGeometry(xr - xl, 0.5, d1 - d0).translate((xl + xr) / 2, 0.25, (d0 + d1) / 2), W, TILES.deck);
-  add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate((xl + xr) / 2, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);   // footing, down to the snow
-  // the operator hut on the deck, beside the chairs, windows all round so the operator sees the loading
+  add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate((xl + xr) / 2, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);   // footing
+  // operator hut
   const hx = side * (arm + 3.4), hz = -L + 3.2, hb = 0.5;
   add(new THREE.BoxGeometry(3.0, 2.6, 3.0).translate(hx, hb + 1.3, hz), W, TILES.siding);
   add(new THREE.BoxGeometry(3.06, 0.9, 2.4).translate(hx, hb + 1.75, hz), W, TILES.window);
   add(new THREE.BoxGeometry(2.4, 0.9, 3.06).translate(hx, hb + 1.75, hz), W, TILES.window);
-  // a gable roof under snow, running along the line
+  // snowy gable roof
   const roof = gable(3.8, 3.8, 1.0).translate(hx, hb + 2.6, hz);
   add(roof, W, TILES.roofSnow);
   add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(hx - side * 1.6, hb + 2.2, hz - 1.6), TCOL.DARK);   // lamp post
   return P;
 }
 
-// Gondola terminal (Jack 2026-10-21, from the Snowmass photos): a long hall the cabins run into, glass sides between
-// dark steel bands, a barrel roof under snow, open at the line end. Same frame as the chairlift: wheel at the origin,
-// the line off toward -z, the floor (deck) top at y = 0.5.
+// Gondola terminal: a glass hall with steel bands and a snowy barrel roof, open at the line end.
+// Same frame as the chairlift; floor top at y = 0.5.
 const gondolaDeck = (arm) => [-(arm + 4.0), arm + 4.0, -20.0, 5.0];
-const GW = (arm) => arm + 3.6;                       // the side walls, either side of the wheel
+const GW = (arm) => arm + 3.6;                       // side walls
 const W = [1, 1, 1];
 function barrel(w, l, z0, y0, rise, seg = 8) {
-  // a barrel vault across x, length l along z from z0 toward -z; outer shell and a dark underside
+  // barrel vault across x, length l from z0 toward -z: shell plus dark underside
   const pos = [], under = [], arc = [];
   for (let k = 0; k <= seg; k++) { const a = Math.PI * (1 - k / seg); arc.push([Math.cos(a) * w / 2, y0 + Math.sin(a) * rise]); }
   const quad = (out, A, B, C, D) => out.push(...A, ...B, ...C, ...A, ...C, ...D);
@@ -1298,7 +1253,7 @@ function barrel(w, l, z0, y0, rise, seg = 8) {
     quad(parts[top], [xa, ya, z0], [xb, yb, z0], [xb, yb, z0 - l], [xa, ya, z0 - l]);
     quad(under, [xa, ya - 0.05, z0], [xa, ya - 0.05, z0 - l], [xb, yb - 0.05, z0 - l], [xb, yb - 0.05, z0]);
   }
-  const ends = [[], []];                             // the arched ends: 0 at the line end, 1 at the back
+  const ends = [[], []];                             // arched ends: 0 line end, 1 back
   for (let k = 0; k < seg; k++) {
     const [xa, ya] = arc[k], [xb, yb] = arc[k + 1];
     ends[0].push(0, y0, z0 - l + 0.3, xb, yb, z0 - l + 0.3, xa, ya, z0 - l + 0.3);
@@ -1310,13 +1265,13 @@ function barrel(w, l, z0, y0, rise, seg = 8) {
 function gondolaTerminal(H, arm, foot) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
   const [xl, xr, d0, d1] = gondolaDeck(arm), wx = GW(arm), zf = -19.0, zb = 4.5, eave = 6.0;
-  // floor and its footing down to the snow
+  // floor and footing
   add(new THREE.BoxGeometry(xr - xl, 0.5, d1 - d0).translate(0, 0.25, (d0 + d1) / 2), W, TILES.concrete);
   add(new THREE.BoxGeometry(xr - xl - 0.2, foot, d1 - d0 - 0.2).translate(0, -foot / 2, (d0 + d1) / 2), W, TILES.concrete);
-  // the wheel on its post, inside at the back
+  // wheel post
   add(new THREE.CylinderGeometry(0.5, 0.7, H - 0.9, 8).translate(0, 0.5 + (H - 0.9) / 2, 0), TCOL.STEEL);
   add(new THREE.CylinderGeometry(arm, arm, 0.3, 16).translate(0, H + 0.1, 0), TCOL.DARK);
-  // side walls: a dark band at the floor, glass, a dark band at the eaves; the back wall all dark
+  // side walls: dark band, glass, dark band; back wall dark
   for (const sx of [-1, 1]) {
     const x = sx * wx, len = zb - zf, zc = (zb + zf) / 2;
     add(new THREE.BoxGeometry(0.3, 1.0, len).translate(x, 1.0, zc), W, TILES.darkPanel);
@@ -1325,53 +1280,51 @@ function gondolaTerminal(H, arm, foot) {
   }
   add(new THREE.BoxGeometry(2 * wx, eave - 0.5, 0.3).translate(0, 0.5 + (eave - 0.5) / 2, zb), W, TILES.darkPanel);
   add(new THREE.BoxGeometry(2 * wx + 0.3, 0.6, 0.4).translate(0, eave - 0.3, zf), W, TILES.darkPanel);   // header over the opening
-  // the barrel roof, snow along its crown, standing-seam metal down its sides, overhanging both ends
+  // barrel roof: snow crown, metal sides
   const r = barrel(2 * wx + 1.4, zb - zf + 1.6, zb + 0.8, eave, 2.6);
   add(r.snow, W, TILES.roofSnow); add(r.metal, W, TILES.metalRoof); add(r.under, TCOL.UNDER);
   add(r.front, W, TILES.curtain); add(r.back, W, TILES.darkPanel);
   add(new THREE.BoxGeometry(0.16, 4.4, 0.16).translate(wx + 1.2, 2.7, zf - 0.6), TCOL.DARK);   // lamp post
   return P;
 }
-// The Elk Camp Gondola top (Jack's summer photo): the terminal in the middle, the Elk Camp restaurant on one side,
-// level with the terminal floor and standing on a stone foundation built into the slope, with a sun deck facing
-// down the line; a smaller wood maintenance and hosting building on the other side. The restaurant wall that faces
-// the terminal carries the three après posters. Footprints in the terminal's frame: [x0, x1, z0, z1].
+// Elk Camp Gondola top: the terminal, the restaurant (stone foundation, sun deck, posters on the wall facing the terminal)
+// and a maintenance building. Footprints in the terminal frame: [x0, x1, z0, z1].
 const ELK_REST = (arm) => [-(GW(arm) + 22.0), -(GW(arm) + 6.0), -15.0, 9.0];
-const ELK_REST_DECK = 5.0;                           // the sun deck, out from the restaurant's line-end side
+const ELK_REST_DECK = 5.0;                           // sun deck depth
 const ELK_SHOP = (arm) => [GW(arm) + 6.0, GW(arm) + 17.0, -12.0, 3.0];
 function elkCampTop(arm, lowRest, lowShop) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
   // restaurant
   {
     const [x0, x1, z0, z1] = ELK_REST(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0, dz0 = z0 - ELK_REST_DECK;
-    const fd = 0.5 - lowRest + 0.4;                  // the foundation, from the floor down past the lowest snow
+    const fd = 0.5 - lowRest + 0.4;                  // foundation down past the lowest snow
     add(new THREE.BoxGeometry(w + 0.4, fd, z1 - dz0 + 0.4).translate(xc, 0.5 - fd / 2, (z1 + dz0) / 2), W, TILES.stone);
     add(new THREE.BoxGeometry(w, 0.4, ELK_REST_DECK).translate(xc, 0.3, z0 - ELK_REST_DECK / 2), W, TILES.deck);
-    // the hall: dark steel panels, a cedar band at the floor, glass along the line end and the far side
+    // hall: dark panels, cedar band, glass on two sides
     add(new THREE.BoxGeometry(w, 4.5, l).translate(xc, 0.5 + 2.25, zc), W, TILES.darkPanel);
     add(new THREE.BoxGeometry(w + 0.1, 1.0, l + 0.1).translate(xc, 1.0, zc), W, TILES.cedar);
     add(new THREE.BoxGeometry(w - 1.0, 3.2, 0.2).translate(xc, 3.1, z0 - 0.05), W, TILES.curtain);
     add(new THREE.BoxGeometry(0.2, 3.2, l - 6.0).translate(x0 - 0.05, 3.1, zc - 1.0), W, TILES.curtain);
-    // a flat roof slab overhanging all round and out over the deck, a cedar soffit under it, snow on top
+    // roof slab over the deck, cedar soffit, snow on top
     const rx = w + 5.0, rz = l + ELK_REST_DECK + 3.0, rzc = (z1 + 1.5 + dz0 - 0.5) / 2 + 0.5;
     add(new THREE.BoxGeometry(rx, 0.6, rz).translate(xc, 5.3, rzc), W, TILES.darkPanel);
     add(new THREE.BoxGeometry(rx - 0.3, 0.06, rz - 0.3).translate(xc, 4.98, rzc), W, TILES.cedar);
     add(new THREE.BoxGeometry(rx - 0.6, 0.45, rz - 0.6).translate(xc, 5.8, rzc), W, TILES.roofSnow);
     for (const x of [x0 + 0.6, xc, x1 - 0.6]) add(new THREE.BoxGeometry(0.3, 4.4, 0.3).translate(x, 2.7, dz0 + 0.4), TCOL.DARK);
-    // the deck's glass rail
+    // glass rail
     add(new THREE.BoxGeometry(w, 1.0, 0.06).translate(xc, 1.0, dz0 + 0.1), TCOL.GLASS);
     add(new THREE.BoxGeometry(w, 0.08, 0.12).translate(xc, 1.52, dz0 + 0.1), TCOL.DARK);
     for (const x of [x0 + 0.05, x1 - 0.05]) {
       add(new THREE.BoxGeometry(0.06, 1.0, ELK_REST_DECK).translate(x, 1.0, z0 - ELK_REST_DECK / 2), TCOL.GLASS);
       add(new THREE.BoxGeometry(0.12, 0.08, ELK_REST_DECK).translate(x, 1.52, z0 - ELK_REST_DECK / 2), TCOL.DARK);
     }
-    // the posters, on the wall that faces the terminal: about 1 x 1.5 m each, a little apart
+    // posters, about 1 x 1.5 m
     [TILES.posterA, TILES.posterB, TILES.posterC].forEach((t, k) => {
       const g = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 + 0.03, 2.4, zc - 2.4 + k * 2.4);
       P.push(partUV(g, W, t, 11 / 64, 53 / 64, 0, 1));
     });
   }
-  // maintenance and hosting building: wood siding, a band of windows, a garage door, a low snowy gable roof
+  // maintenance building
   {
     const [x0, x1, z0, z1] = ELK_SHOP(arm), xc = (x0 + x1) / 2, w = x1 - x0, zc = (z0 + z1) / 2, l = z1 - z0;
     const fd = 0.5 - lowShop + 0.4;
@@ -1383,14 +1336,13 @@ function elkCampTop(arm, lowRest, lowShop) {
   }
   return P;
 }
-// A gondola tower (Jack's Snowmass photo): a tall round galvanized column with a ladder up it, a wide crossarm
-// with a railed walkway, and a train of sheaves under the cable at each end. Base at y = 0, the line along z.
+// Gondola tower: galvanized column with a ladder, crossarm with a railed walkway, sheave trains. Base y = 0, line along z.
 function gondolaTower(th, arm) {
   const P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile)), wide = arm * 2 + 2.6;
   add(new THREE.BoxGeometry(2.6, 1.2, 2.6).translate(0, 0.3, 0), W, TILES.concrete);
   add(new THREE.CylinderGeometry(0.5, 0.62, th, 8).translate(0, th / 2, 0), W, TILES.steel);
   add(new THREE.CylinderGeometry(1.05, 1.05, 2.6, 8).translate(0, 1.9, 0), W, TILES.pad);
-  add(new THREE.BoxGeometry(0.42, th - 3.4, 0.06).translate(0, 3.0 + (th - 3.4) / 2, 0.62), TCOL.STEEL);   // the ladder
+  add(new THREE.BoxGeometry(0.42, th - 3.4, 0.06).translate(0, 3.0 + (th - 3.4) / 2, 0.62), TCOL.STEEL);   // ladder
   add(new THREE.BoxGeometry(wide, 0.6, 0.7).translate(0, th, 0), W, TILES.steel);
   add(new THREE.BoxGeometry(wide, 0.08, 2.0).translate(0, th + 0.34, 0), TCOL.STEEL);                     // walkway
   for (const z of [-1.0, 1.0]) add(new THREE.BoxGeometry(wide, 0.06, 0.06).translate(0, th + 1.35, z), TCOL.STEEL);
@@ -1401,8 +1353,7 @@ function gondolaTower(th, arm) {
   }
   return P;
 }
-// A gondola station: the hall on its deck and apron, its walls solid, trees cleared; at the Elk Camp Gondola top
-// the restaurant and the maintenance building beside it, standing on foundations down to the snow.
+// Gondola station: hall, deck and apron, solid walls, trees cleared; at the Elk Camp top, the restaurant and maintenance building.
 function gondolaStation(sd, arm, hh, base, m, elkTop) {
   apronGeos.push(apron(sd, base));
   STATIONS.push(sd);
@@ -1431,7 +1382,7 @@ function gondolaStation(sd, arm, hh, base, m, elkTop) {
       if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
   casters.push({ x: sd.x, z: sd.z, h: 7, w: wx }, { ...(([x, z]) => ({ x, z }))(toW(0, -12)), h: 7, w: wx });
   if (!elkTop) return;
-  // the lowest snow under each building, in the station's frame (floor top at 0.5)
+  // lowest snow under each building, station frame
   const low = ([u0, u1, v0, v1]) => {
     let lo = 1e9;
     for (let v = v0; v <= v1 + 0.01; v += 2) for (let u = u0; u <= u1 + 0.01; u += 2) { const [x, z] = toW(u, v); lo = Math.min(lo, groundY(x, z)); }
@@ -1449,9 +1400,8 @@ function gondolaStation(sd, arm, hh, base, m, elkTop) {
     const [x, z] = toW(u, v); casters.push({ x, z, h: 6, w });
   }
 }
-// ---------- Chairlifts on the real lift lines (OpenStreetMap, in lifts.json) ----------
-// The kit's towers, cable and chairs. OSM's points along a line are its towers where mapped; long gaps
-// get towers about every 110 m. Each tower is as tall as it needs to be for the chairs to clear the snow.
+// ---------- Lifts on the real lines (OpenStreetMap) ----------
+// OSM points are towers where mapped; long gaps get one about every 110 m. Towers grow until the chairs clear the snow.
 const UP_Y = new THREE.Vector3(0, 1, 0);
 const LIFT_STYLE = {
   chair_lift: { arm: 3.0, tower: 11, term: 5, clear: 7, carrier: 'chair', gap: 24, speed: 5 },
@@ -1468,7 +1418,7 @@ const liftPaths = [];
 const LIFT_ENDS = LIFTS.flatMap((l) => [l.points[0], l.points[l.points.length - 1]].map((p) => ({ lift: l, x: p[0], z: p[1] })));
 for (const lift of LIFTS) {
   const st = LIFT_STYLE[lift.kind] || LIFT_STYLE.chair_lift;
-  // stations: terminals at the ends, towers between; drop points bunched up near a terminal
+  // terminals at the ends, towers between; drop points bunched near a terminal
   const raw = lift.points.map((p) => [p[0], p[1]]);
   const pts = [raw[0]];
   for (let i = 1; i < raw.length; i++) {
@@ -1485,14 +1435,13 @@ for (const lift of LIFTS) {
   const N = pts.length;
   const g = pts.map(([x, z]) => groundY(x, z));
   const c = g.map((y, i) => y + (i === 0 || i === N - 1 ? st.term : st.tower));
-  // chairlift stations: the deck sits at the highest snow under it, the apron eases the ground to it,
-  // and the cable runs 3.15 m over the deck so the seats pass about half a meter above it
+  // deck at the highest snow under it; cable 3.15 m above the deck so seats clear it by about half a meter
   const stn = {};
   const isGondola = lift.kind === 'gondola';
   if (lift.kind === 'chair_lift' || isGondola || !LIFT_STYLE[lift.kind]) for (const i of [0, N - 1]) {
     const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N - 1, i + 1)];
     const yaw = Math.atan2(b[0] - a[0], b[1] - a[1]) + (i === 0 ? Math.PI : 0), cs = Math.cos(yaw), sn = Math.sin(yaw);
-    // the hut goes on the side away from any other lift's end within 20 m
+    // hut goes away from any other lift's end within 20 m
     const hut = LIFT_ENDS.some((q) => q.lift !== lift && Math.hypot(q.x - pts[i][0], q.z - pts[i][1]) < 20 && cs * (q.x - pts[i][0]) - sn * (q.z - pts[i][1]) > 0) ? -1 : 1;
     const [u0, u1, v0, v1] = isGondola ? gondolaDeck(st.arm) : deckRect(st.arm, hut);
     let hi = -1e9, lo = 1e9;
@@ -1509,7 +1458,7 @@ for (const lift of LIFTS) {
   }
   const sagOf = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) * 0.012;
   const cableAt = (i, f) => c[i] + (c[i + 1] - c[i]) * f - sagOf(i) * Math.sin(Math.PI * f);
-  // raise towers until every span clears the snow under it
+  // raise towers until every span clears the snow
   for (let pass = 0; pass < 8; pass++) {
     let ok = true;
     for (let i = 0; i < N - 1; i++) {
@@ -1522,7 +1471,7 @@ for (const lift of LIFTS) {
       }
       if (worst <= 0.1) continue;
       ok = false;
-      // lift the ends of the span in proportion to how close the low spot is to each; terminals stay put
+      // lift each end by how close the low spot is to it; terminals stay put
       const ia = i, ib = i + 1, ta = ia === 0, tb = ib === N - 1;
       const wa = ta ? 0 : tb ? 1 : 1 - wf, wb = tb ? 0 : ta ? 1 : wf;
       const scale = worst / Math.max(0.25, wa * (1 - wf) + wb * wf);
@@ -1535,7 +1484,6 @@ for (const lift of LIFTS) {
     const a = pts[Math.max(0, i - 1)], b = pts[Math.min(N - 1, i + 1)];
     return Math.atan2(b[0] - a[0], b[1] - a[1]);
   };
-  // towers
   for (let i = 1; i < N - 1; i++) {
     const th = c[i] - g[i] - 0.55, arm = st.arm, yaw = dirAt(i);
     const parts = isGondola ? gondolaTower(th, arm) : [
@@ -1551,7 +1499,6 @@ for (const lift of LIFTS) {
     casters.push({ x: pts[i][0], z: pts[i][1], h: th, w: 0.8 });
     addObstacle({ x: pts[i][0], z: pts[i][1], y: g[i], r: 1.1, height: th });
   }
-  // terminals: a bullwheel on legs, and a snow-capped operator hut with a lamp
   for (const i of [0, N - 1]) {
     const sd = stn[i], yaw = sd ? sd.yaw : dirAt(i) + (i === 0 ? Math.PI : 0), arm = st.arm;
     const base = sd ? sd.y - 0.5 : g[i] - 0.3, hh = c[i] - base;
@@ -1573,16 +1520,16 @@ for (const lift of LIFTS) {
     else if (sd) {
       apronGeos.push(apron(sd, base));
       STATIONS.push(sd);
-      // the post, the four legs and the hut stop you; the deck and apron are snow you ride on
+      // post, legs and hut are solid; deck and apron are snow
       const L = 7, toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
       for (const [u, v, r] of [[0, 0, 0.6], [-(arm + 1.55), 1.2, 0.2], [arm + 1.55, 1.2, 0.2], [-(arm + 1.55), -L + 0.9, 0.2], [arm + 1.55, -L + 0.9, 0.2]]) {
         const [x, z] = toW(u, v);
         addObstacle({ x, z, y: sd.y, r, height: hh });
       }
-      // the hut is a solid box (3 x 3 m, 2.6 m tall on the deck): slide along its walls, bail off it fast, land on its roof
+      // hut: solid 3 x 3 x 2.6 m box
       const [hutX, hutZ] = toW(sd.hut * (arm + 3.4), -L + 3.2);
       SOLIDS.push({ x: hutX, z: hutZ, y: sd.y + 1.0, hx: 1.5, hy: 1.6, hz: 1.5, c: sd.c, s: sd.s });
-      // no trees on the station or its apron
+      // no trees on the station or apron
       for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
         for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
           if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
@@ -1590,7 +1537,7 @@ for (const lift of LIFTS) {
     if (!isGondola) casters.push({ x: pts[i][0], z: pts[i][1], h: hh, w: arm + 1 });
     lampList.push((neu && isGondola ? new THREE.Vector3(GW(arm) + 1.2, 4.9, -19.6) : neu ? new THREE.Vector3(sd.hut * (arm + 3.4 - 1.6), 4.9, -7 + 3.2 - 1.6) : new THREE.Vector3(arm + 1.6, 5.6, -1.2)).applyMatrix4(m));
   }
-  // the cable: a dense path along the tower tops with sag, plus its length along the way
+  // cable: dense sagging path along the tower tops, with distance along it
   const path = [];
   for (let i = 0; i < N - 1; i++) {
     const len = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]), n = Math.max(2, Math.ceil(len / 6));
@@ -1623,7 +1570,7 @@ for (const lift of LIFTS) {
   for (let d = 0; d < 2 * L; d += st.gap) carriers[st.carrier].push({ lp, s0: d });
 }
 scene.add(new THREE.Mesh(merge(liftParts), modelMat));
-// the stations' snow aprons: groomed snow drawn like the ground, a hair in front of it
+// station aprons: groomed snow, drawn just in front of the ground
 if (apronGeos.length) {
   const n = apronGeos.reduce((a, g) => a + g.attributes.position.count, 0), p = new Float32Array(n * 3), cov = new Float32Array(n * 4);
   let o = 0;
@@ -1639,13 +1586,12 @@ if (apronGeos.length) {
   });
   scene.add(new THREE.Mesh(geo, mat));
 }
-// the kickers: groomed snow drawn like the ground, a hair in front of it, and the lip mats. Each is rebuilt when the
-// snow under it changes (the 2 m run tiles load in or drop out) so it always sits on the ground the skier rides.
+// Kicker snow and lip mats, rebuilt when the 2 m tiles under them load or drop so they sit on the snow the skier rides.
 const kickSnowMat = new THREE.ShaderMaterial({
   uniforms: Object.assign({}, terrainMat.uniforms, { uPFar: { value: 1e9 } }), vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
   defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
 });
-// the mats are drawn like the lift models, pulled in front of the kicker's snow they lie on
+// mats drawn in front of the kicker snow
 const kickMatMat = modelMat.clone();
 Object.assign(kickMatMat, { uniforms: modelMat.uniforms, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
 const KICK_RED = [0.78, 0.12, 0.1], KICK_WHITE = [0.95, 0.96, 1.0];
@@ -1653,7 +1599,7 @@ function buildKicker(k) {
   const kB = { h: 0, gx: 0, gz: 0 }, step = 0.5, side = k.hw + k.h + step, y0 = sampleBase(k.x, k.z, kB).h;
   const toW = (u, v) => [k.x + k.fx * u - k.fz * v, k.z + k.fz * u + k.fx * v];
   const ground = (u, v) => { const [x, z] = toW(u, v); return [x, sampleBase(x, z, kB).h, z]; };
-  // the snow: a grid over the kicker's footprint, cells the kicker doesn't lift left out
+  // snow grid over the footprint, unlifted cells left out
   const pos = [], us = [], vs = [];
   for (let u = 0; u < k.end + step; u += step) us.push(Math.min(u, k.end));
   for (let v = -side; v <= side + 1e-6; v += step) vs.push(v);
@@ -1662,7 +1608,7 @@ function buildKicker(k) {
     return [x - k.x, y + lift + 0.03 - y0, z - k.z, lift];
   }));
   const tri = (a, b, c) => {
-    // wound to face up
+    // face up
     const ux = b[0] - a[0], uz = b[2] - a[2], wx = c[0] - a[0], wz = c[2] - a[2];
     if (uz * wx - ux * wz < 0) pos.push(...a.slice(0, 3), ...c.slice(0, 3), ...b.slice(0, 3));
     else pos.push(...a.slice(0, 3), ...b.slice(0, 3), ...c.slice(0, 3));
@@ -1680,7 +1626,7 @@ function buildKicker(k) {
   geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
   const group = new THREE.Group();
   group.add(new THREE.Mesh(geo, kickSnowMat));
-  // the lip mats: red panels across the last KICK_LIP m, each with a white chevron pointing down the hill
+  // lip mats: red panels over the last KICK_LIP m, each with a white chevron
   const mats = [], panels = Math.max(2, Math.round(k.hw * 2 / 1.4)), pw = k.hw * 2 / panels, u0 = k.L - KICK_LIP;
   const at = (u, v, lift) => { const [x, y, z] = ground(u, v); return [x - k.x, y + k.prof(u) + lift - y0, z - k.z]; };
   const poly = (pts, col) => {
@@ -1697,16 +1643,16 @@ function buildKicker(k) {
   for (let i = 0; i < panels; i++) {
     const va = -k.hw + i * pw + pw * 0.04, vb = -k.hw + (i + 1) * pw - pw * 0.04, vm = (va + vb) / 2, q = (vb - va) * 0.42;
     const U = (f) => u0 + KICK_LIP * f;
-    // the red panel, in strips so it follows the curve of the face
+    // red panel in strips that follow the curve
     for (let s = 0; s < 4; s++) poly([at(U(s / 4), va, 0.06), at(U((s + 1) / 4), va, 0.06), at(U((s + 1) / 4), vb, 0.06), at(U(s / 4), vb, 0.06)], KICK_RED);
-    // the chevron's two arms
+    // chevron arms
     for (const sgn of [-1, 1]) poly([at(U(0.35), vm + sgn * q, 0.09), at(U(0.95), vm, 0.09), at(U(0.65), vm, 0.09), at(U(0.05), vm + sgn * q, 0.09)], KICK_WHITE);
   }
   group.add(new THREE.Mesh(merge(mats), kickMatMat));
   group.position.set(k.x, y0, k.z);
   return group;
 }
-// the snow under a kicker: 1 where the 2 m run tiles cover it all, 0 on the 10 m ground
+// 1 where 2 m tiles cover the kicker, 0 on the 10 m ground
 function kickGround(k) {
   if (!PATCH || !patchOn) return 0;
   const t = { h: 0, gx: 0, gz: 0 }, s = k.hw + k.h;
@@ -1724,17 +1670,15 @@ function updateKickers() {
     scene.add(k.mesh);
   }
 }
-// ---------- Run art pass: trail signs, rope lines and a fence on the real runs ----------
-// Every named run gets a trail sign where it begins. Sunnyside and Max Park, which start together at the top of
-// Village Express, get rope lines down both edges of their first stretch, and the top terminal gets a rail fence.
+// ---------- Run props: trail signs, rope lines, fence ----------
 const RUNS = MAP.runs || [];
-const PROPS = new Map();                       // tree page -> props (run-edge trees, rope poles), merged into that page's trees
+const PROPS = new Map();                       // tree page -> props, merged into that page's trees
 function addProp(t) {
   const P = PAGE * CELL, key = Math.floor((t.x - X0) / P) * 1000 + Math.floor((t.z - Z0) / P);
   if (!PROPS.has(key)) PROPS.set(key, []);
   PROPS.get(key).push(t);
 }
-// a point and direction some distance down a run's line
+// point and direction some distance down a run
 function alongRun(run, dist) {
   const p = run.points;
   let left = dist;
@@ -1748,17 +1692,14 @@ function alongRun(run, dist) {
   }
 }
 // ---------- The runs on a 2 m grid ----------
-// The 10 m mountain is too coarse for a groomed run: no crisp edge, no windrow, every 10 m bump shows. Every run
-// (expert runs too, as natural snow) is on a 2 m height grid, shaped ahead of time from the traced outlines, which
-// the physics samples and a fine mesh draws, blending back into the 10 m mountain over BLEND meters past its edge;
-// the 10 m ground is cut away underneath it.
+// Every run is a 2 m height grid shaped offline from the traced outlines. Physics samples it; a fine mesh draws it,
+// blending back to the 10 m mountain over BLEND m past the edge, with the 10 m ground cut away underneath.
 const PCELL = 2, BLEND = 18, BERM_W = 1.6;
-// The 2 m grid is kept in tiles of 64 x 64 points (128 m), only where a run reaches, and drawn as meshes of
-// 2 x 2 tiles (256 m): 2 m cells within PATCH_NEAR of the camera, 4 m cells out to PATCH_FAR, and past that the
-// 10 m ground draws the runs, cut by the same edges. The physics always uses the 2 m grid.
+// 64 x 64-point tiles (128 m) only where runs reach, meshed 2 x 2 tiles at a time: 2 m cells within PATCH_NEAR,
+// 4 m to PATCH_FAR, then the 10 m ground draws the runs. Physics always uses the 2 m grid.
 const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 2, PATCH_NEAR = 250, PATCH_FAR = 800;
 const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-// the 10 m mesh's own surface at any point: the same two triangles per cell that buildChunk draws up close
+// the 10 m mesh's own surface: the same two triangles per cell buildChunk draws
 function meshY(x, z) {
   const fx = clamp((x - X0) / CELL, 0, NX - 1.001), fz = clamp((z - Z0) / CELL, 0, NZ - 1.001);
   const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
@@ -1766,13 +1707,10 @@ function meshY(x, z) {
   if ((i + j) & 1) return tx + tz <= 1 ? h00 + tx * (h10 - h00) + tz * (h01 - h00) : h11 + (1 - tx) * (h01 - h11) + (1 - tz) * (h10 - h11);
   return tx >= tz ? h00 + tx * (h10 - h00) + tz * (h11 - h10) : h00 + tz * (h01 - h00) + tx * (h11 - h01);
 }
-// The whole-mountain runs, shaped ahead of time from the traced outlines (runs-build/scripts). runs.js holds the index,
-// the run-edge trees, the stand-in blocks and two 10 m fields; the 2 m tiles stream in by distance from
-// runs/<ca>_<cj>.json, 4 x 4 tiles to a file (Jack's choice 8). For each point a file has the shaped height's change
-// from the 10 m mountain's smooth surface (mm, as steps along each row) and the distances to the groomed edge and to
-// the edge of any run (int8 steps). Physics heights are put back together as a file loads; mesh heights and blend
-// weights tile by tile as meshes need them.
-const RUN_LOAD = 1200, RUN_DROP = 1700;          // m: chunks nearer the camera than this load, ones further are let go
+// runs.js: index, edge trees, stand-in blocks and two 10 m fields. runs/<ca>_<cj>.json: 4 x 4 tiles each, streamed by
+// distance, holding per point the height change from the 10 m surface (mm, row deltas) and int8 distances to the
+// groomed edge and any run's edge. Physics heights rebuild on load; mesh heights and blend weights per tile on demand.
+const RUN_LOAD = 1200, RUN_DROP = 1700;          // m: load nearer than this, drop farther than that
 let runStream = null;
 if (RUN_DATA) {
   const B = RUN_DATA, x0 = B.x0, z0 = B.z0, tx = B.nx / TILE, tz = B.nz / TILE, CH = B.chunk, step = B.edge_step;
@@ -1784,7 +1722,7 @@ if (RUN_DATA) {
     const t = tileOf[(j >> TILE_BITS) * tx + (a >> TILE_BITS)];
     return t < 0 ? -1 : t * TT + ((j & (TILE - 1)) << TILE_BITS) + (a & (TILE - 1));
   };
-  // tile slots, grown as more are needed
+  // tile slots, grown as needed
   let cap = 0;
   const free = [], slotTile = [];
   const grow = (n) => {
@@ -1796,7 +1734,7 @@ if (RUN_DATA) {
     cap = n;
   };
   grow(64);
-  // a tile's mesh heights and blend weights: shaped snow near the runs, the 10 m mesh where it has blended back
+  // mesh heights and blend weights: shaped snow near runs, the 10 m mesh where blended back
   const base = { h: 0, gx: 0, gz: 0 };
   const fill = (t) => {
     if (P.done[t]) return;
@@ -1809,14 +1747,14 @@ if (RUN_DATA) {
       P.hr[c] = P.hp[c] + w * (meshY(x, z) - sampleGrid(H, NX, NZ, X0, Z0, CELL, x, z, base).h);
     }
   };
-  // the tiles of a group and the ones around it (its skirts look one point past its border)
+  // a group's tiles and their neighbors (skirts read one point past the border)
   P.ready = (g) => {
     for (const tl of g.tiles) for (let dj = -1; dj <= 1; dj++) for (let da = -1; da <= 1; da++) {
       const c = P.at(tl.a0 + da * TILE, tl.j0 + dj * TILE);
       if (c >= 0) fill((c / TT) | 0);
     }
   };
-  // the files, and the groups of 2 x 2 tiles the meshes are built for
+  // files, and the 2 x 2 tile groups meshes are built for
   const chunks = new Map(), side = TILE * CH * PCELL;
   for (const [ca, cj] of B.chunks) {
     chunks.set(ca * 1000 + cj, { ca, cj, x0: x0 + ca * side, z0: z0 + cj * side, x1: x0 + (ca + 1) * side, z1: z0 + (cj + 1) * side, state: 0, tiles: [], groups: [] });
@@ -1826,7 +1764,7 @@ if (RUN_DATA) {
     for (let dj = -1; dj <= 1; dj++) for (let da = -1; da <= 1; da++) if (da || dj) out.push(chunks.get((ch.ca + da) * 1000 + ch.cj + dj));
     return out;
   };
-  // a cell at a tile's edge reads the next tile, so a group builds once its file and the ones around it are in
+  // edge cells read the next tile, so a group builds once its file and its neighbors are in
   const inAround = (ch) => ch.state === 2 && around(ch).every((n) => !n || n.state === 2);
   P.groupOk = (g) => inAround(g.chunk);
   const groups = new Map();
@@ -1848,7 +1786,7 @@ if (RUN_DATA) {
     for (let l = 0; l < 2; l++) if (g.meshes[l]) { scene.remove(g.meshes[l]); g.meshes[l].geometry.dispose(); g.meshes[l] = null; }
     g.level = -1;
   };
-  // The 10 m ground is cut away in 4 m blocks wherever the fine mesh covers the whole block.
+  // The 10 m ground is cut away in 4 m blocks the fine mesh fully covers.
   const mw = P.nx / 2, mh = P.nz / 2, mask = new Uint8Array(mw * mh);
   const tex = new THREE.DataTexture(mask, mw, mh, THREE.RedFormat, THREE.UnsignedByteType);
   tex.magFilter = tex.minFilter = THREE.NearestFilter;
@@ -1877,14 +1815,14 @@ if (RUN_DATA) {
       J = await (await fetch(new URL(`runs/${ch.ca}_${ch.cj}.json`, document.baseURI))).json();
       bytes = await inflate(J.data);
     } catch (e) { console.warn('Golden Ski: run tiles failed to load', ch.ca, ch.cj, e); ch.state = 0; return; }
-    if (ch.state !== 1) return;                     // let go while it loaded
+    if (ch.state !== 1) return;                     // dropped while loading
     const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length), n = J.tiles.length / 2, N = n * TT;
     const dh = new Int16Array(buf, 0, N), e8 = new Int8Array(buf, N * 2, N), a8 = new Int8Array(buf, N * 3, N);
     if (free.length < n) grow(cap + Math.max(n, 64));
     for (let k = 0; k < n; k++) {
       const tl = { a0: J.tiles[2 * k], j0: J.tiles[2 * k + 1] }, t = free.pop();
       tl.slot = t; slotTile[t] = tl; ch.tiles.push(tl); P.done[t] = 0;
-      // sampleGrid's surface at the tile's points, its column weights worked out once per tile
+      // sampleGrid's surface at the tile's points, column weights once per tile
       for (let a = 0; a < TILE; a++) {
         const f = clamp((x0 + (tl.a0 + a) * PCELL - X0) / CELL, 0, NX - 1.001), i = Math.floor(f);
         ix[a] = i; crw(f - i, wx, a * 4);
@@ -1912,7 +1850,7 @@ if (RUN_DATA) {
     ch.state = 2;
     const near = around(ch).filter((c) => c && c.state === 2);
     maskTiles([ch, ...near].flatMap((c) => c.tiles));
-    // the meshes beside it were built without its edge points: build them again
+    // neighbor meshes were built without these edge points: rebuild them
     for (const c of near) for (const g of c.groups) dropMeshes(g);
   }
   function unloadChunk(ch) {
@@ -1946,12 +1884,11 @@ if (RUN_DATA) {
   terrainMat.uniforms.uPFar.value = PATCH_FAR;
   terrainMat.uniforms.uPOn.value = 1;
   PATCH = P;
-  // the 10 m ground draws the runs with the same groomed edges wherever no tiles are loaded
+  // the 10 m ground draws the same groomed edges where no tiles are loaded
   const [runfB, areaB, treeB] = await Promise.all([inflate(B.runf), inflate(B.area), inflate(B.trees)]);
   for (let k = 0; k < RUNF.length; k++) { RUNF[k] = (runfB[k] << 24) >> 24; POWDER[k] = RUNF[k] < 0 ? 0 : 1; }
-  // the run area the game's own forest keeps clear of, and the trees along every run's edges and in its tree islands:
-  // where the real ones stand, as dense as the 1 m tree-height map shows, packed so they can still be skied through.
-  // The packed fill (kind + 128) is drawn only near the camera (FILL_NEAR); every tree is solid wherever it is.
+  // Run area (the generated forest keeps clear) and the real edge and island trees from the 1 m canopy map.
+  // The packed fill (kind + 128) draws only within FILL_NEAR; every tree is solid.
   RUN_AREA = new Int8Array(areaB.buffer, areaB.byteOffset, areaB.length);
   const dv = new DataView(treeB.buffer, treeB.byteOffset, treeB.length);
   for (let n = 0; n < B.ntrees; n++) {
@@ -1961,8 +1898,7 @@ if (RUN_DATA) {
     addProp(t);
     addObstacle(t);
   }
-  // Plain stand-in blocks on the building footprints until real buildings are made (Jack's choice 4). They are
-  // placeholders for the concept thread to replace; any that overlap a station or something already built are left out.
+  // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
   const parts = [];
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
@@ -1988,7 +1924,7 @@ function buildGroupMesh(P, g, level) {
       cov.push(edge[c], isRock(k) && edge[c] > 3 ? 1 : 0, conifer(k), aspen(k));
       if (drop === undefined) nrm.push(0, 0, 0);
       else {
-        // skirt vertices carry the ground's normal, so a crack's sliver is lit like the run beside it
+        // skirt normals match the run beside them
         const hl = h(a - 1, j) ?? hr[c], hx = h(a + 1, j) ?? hr[c], hu = h(a, j - 1) ?? hr[c], hd = h(a, j + 1) ?? hr[c];
         nrm.push(-(hx - hl) / (2 * PCELL), 1, -(hd - hu) / (2 * PCELL));
       }
@@ -1997,7 +1933,7 @@ function buildGroupMesh(P, g, level) {
   };
   const skirt = (a1, j1, a2, j2) => {
     const p = v(a1, j1, false), q = v(a2, j2, false), p2 = v(a1, j1, true), q2 = v(a2, j2, true);
-    idx.push(p, p2, q, q, p2, q2, p, q, p2, q, q2, p2);   // both windings, so it shows from either side
+    idx.push(p, p2, q, q, p2, q2, p, q, p2, q, q2, p2);   // both windings
   };
   for (const tl of g.tiles) {
     for (let j = tl.j0; j < tl.j0 + TILE; j += s) {
@@ -2031,7 +1967,7 @@ function buildGroupMesh(P, g, level) {
   scene.add(mesh);
   return mesh;
 }
-// signed meters to the nearest groomed edge where the detailed runs are, undefined elsewhere
+// signed m to the nearest groomed edge on the 2 m tiles, undefined elsewhere
 function patchEdge(x, z) {
   const P = PATCH;
   if (!patchOn || !P) return undefined;
@@ -2040,8 +1976,7 @@ function patchEdge(x, z) {
   if (c00 < 0 || c10 < 0 || c01 < 0 || c11 < 0) return undefined;
   return (E[c00] * (1 - tx) + E[c10] * tx) * (1 - tz) + (E[c01] * (1 - tx) + E[c11] * tx) * tz;
 }
-// 2 m cells near the camera, 4 m out to PATCH_FAR, none past it (the shaders cut both sides at exactly
-// PATCH_FAR). A group's 2 m mesh is let go once it is out past PATCH_FAR.
+// 2 m near, 4 m to PATCH_FAR, none past it (the shaders cut at PATCH_FAR). Free the 2 m mesh past PATCH_FAR.
 function updatePatch() {
   if (!PATCH) return;
   const cx = camera.position.x, cz = camera.position.z;
@@ -2062,15 +1997,13 @@ function setPatch(on) {
   terrainMat.uniforms.uPOn.value = on && PATCH ? 1 : 0;
 }
 const onGroomed = (x, z) => { const e = patchEdge(x, z); return e === undefined ? RUNF[cellAt(x, z)] < 0 : e < 0; };
-// sign boards: every sign drawn once onto one canvas, the run's difficulty symbol on a light patch at the left
-// (green circle, blue square, black diamond, double black diamond) and its name in light lettering on dark wood.
-// The name is fitted to the board: the board is as long as the name needs, up to SIGN_MAX px, and only names too
-// long for that are set smaller.
+// Sign boards on one canvas: difficulty symbol on a light patch, name on dark wood. Boards grow to fit the name
+// up to SIGN_MAX px; only longer names shrink.
 const SIGN_W = 256, SIGN_H = 32, SIGN_COLS = 4, SIGN_MIN = 120, SIGN_MAX = 181, SIGN_M = 0.6 / SIGN_H;   // m per px
 const SIGNS = (RUN_DATA && RUN_DATA.signs) || [];
 const signCanvas = document.createElement('canvas');
 signCanvas.width = SIGN_W * SIGN_COLS; signCanvas.height = SIGN_H * Math.max(1, Math.ceil(SIGNS.length / SIGN_COLS));
-const signPx = [];                             // each sign's board length in px
+const signPx = [];                             // board length in px
 {
   const g = signCanvas.getContext('2d'), P = SIGN_H, pad = 3;
   SIGNS.forEach(([name, diff], n) => {
@@ -2084,7 +2017,6 @@ const signPx = [];                             // each sign's board length in px
     g.strokeStyle = '#1c120a'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, w - 2, SIGN_H - 2);
     g.fillStyle = '#f1e6c8'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(name, x + P + 3 + (w - P - 3) / 2, y + SIGN_H / 2 + 1);
-    // the symbol
     const cx = x + P / 2 + 1, cy = y + SIGN_H / 2;
     g.fillStyle = '#f1e6c8'; g.fillRect(x + pad + 1, y + pad, P - 2 * pad, SIGN_H - 2 * pad);
     const diamond = (dx, r) => { g.beginPath(); g.moveTo(cx + dx, cy - r); g.lineTo(cx + dx + r, cy); g.lineTo(cx + dx, cy + r); g.lineTo(cx + dx - r, cy); g.closePath(); g.fill(); };
@@ -2123,16 +2055,15 @@ const signMat = new THREE.ShaderMaterial({
 });
 const WOOD = [0.36, 0.25, 0.15], WOOD_DARK = [0.24, 0.16, 0.1];
 const runParts = [], facePos = [], faceUv = [], faceNrm = [], signSpots = [];
-// each name's highest piece of the mapped lines (the starts below use them)
+// each name's highest mapped line piece (for starts)
 const signRuns = new Map();
 for (const r of RUNS) {
   if (!r.name || r.area || r.points.length < 2) continue;
   const h = groundY(r.points[0][0], r.points[0][1]), best = signRuns.get(r.name);
   if (!best || h > best.h) signRuns.set(r.name, { run: r, h });
 }
-// The signs stand where each run begins (runs-build/scripts/signs.py): just off the snow in the fork with the run it
-// splits from, or at its edge, or where the split is in open snow, on the snow at the split; turned to face skiers
-// arriving. The first of its spots that is clear of station huts and the stand-in blocks.
+// Signs stand where each run begins (runs-build/scripts/signs.py), facing arriving skiers,
+// at the first candidate spot clear of huts and stand-in blocks.
 SIGNS.forEach(([name, , spots], n) => {
   const spot = spots.find(([x, z]) => !nearSolid(x, z, 1.5));
   if (!spot) return;
@@ -2142,7 +2073,7 @@ SIGNS.forEach(([name, , spots], n) => {
   signSpots.push({ x, z, name, yaw });
   const m = placeM(x, y - 0.3, z, yaw);
   runParts.push(...placed([
-    // the posts behind the board, clear of its face
+    // posts behind the board
     part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(-post, 1.15, -0.12), WOOD_DARK),
     part(new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(post, 1.15, -0.12), WOOD_DARK),
     part(new THREE.BoxGeometry(w + 0.1, 0.68, 0.08).translate(0, 1.95, 0), WOOD),
@@ -2166,8 +2097,7 @@ SIGNS.forEach(([name, , spots], n) => {
   g.computeBoundingSphere();
   scene.add(new THREE.Mesh(g, signMat));
 }
-// rope lines on bamboo poles down both edges of the first 170 m of Sunnyside and Max Park, kept where kit v18
-// had them (runs-build/ropes.json), standing on the shaped snow
+// rope lines down both edges of the first 170 m of Sunnyside and Max Park (runs-build/ropes.json)
 const ropePts = [];
 for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
   for (let k = 0; k < line.length; k += 3) {
@@ -2181,7 +2111,7 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ropePts), 3));
   scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xc8261c })));
 }
-// a wooden rail fence behind the Village Express top terminal, where the ridge drops away
+// rail fence behind the Village Express top terminal
 {
   const ve = LIFTS.find((l) => l.name === 'Village Express');
   if (ve) {
@@ -2206,8 +2136,7 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
   }
 }
 if (runParts.length) scene.add(new THREE.Mesh(merge(runParts), modelMat));
-// FreePlay starts at the top of Village Express, a little way down Sunnyside, facing down it.
-// The Tab menu can move the start (and every trip back up) to the top or bottom of any lift.
+// FreePlay starts a little way down Sunnyside from the Village Express top. The Tab menu moves the start to any lift top or bottom.
 const STARTS = [];
 {
   const run = signRuns.get('Sunnyside')?.run;
@@ -2216,17 +2145,15 @@ const STARTS = [];
     Object.assign(META.start, { x: p.x, z: p.z, heading: Math.atan2(q.x - p.x, -(q.z - p.z)), name: 'Village Express, top' });
   }
 }
-// the run tiles around the start, before the first frame
+// run tiles around the start before the first frame
 if (runStream) await Promise.all(runStream(META.start.x, META.start.z, true));
-// and the top of every lift, for getting round the mountain quickly: on the groomed run that leaves the top,
-// a little way down it and facing down it; where no run starts there, off to one side of the top terminal
-// where the snow falls away most steeply, facing down the fall line
+// every lift top: a little way down the groomed run leaving it, else beside the terminal facing down the fall line
 const fallAt = (x, z, r) => {
   let gx = 0, gz = 0;
   for (let k = 0; k < 8; k++) { const s = sample(x + r * Math.cos(k * Math.PI / 4), z + r * Math.sin(k * Math.PI / 4)); gx += s.gx / 8; gz += s.gz / 8; }
   return { gx, gz, slope: Math.hypot(gx, gz) };
 };
-// the run's line from its top down, as [x, z, distance along]
+// run line from the top down, as [x, z, distance]
 function downLine(run) {
   let p = run.points;
   if (groundY(...p[0]) < groundY(...p[p.length - 1])) p = p.slice().reverse();
@@ -2246,7 +2173,7 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
     if (L[L.length - 1][2] < 80) continue;
     let best = 1e9, s0 = 0;
     for (const q of L) { const d = Math.hypot(q[0] - top[0], q[1] - top[1]); if (d < best) { best = d; s0 = q[2]; } }
-    // the run that starts nearest the top (it must start up here, not just pass by lower down)
+    // the run that starts nearest the top
     if (best < 70 && s0 < 120 && (!run || best < run.best)) run = { L, s0, best };
   }
   if (run) {
@@ -2255,11 +2182,11 @@ for (const lift of [...LIFTS].sort((a, b) => a.name.localeCompare(b.name))) {
     const a = lineAt(run.L, run.s0 + o), b = lineAt(run.L, run.s0 + o + 33);
     STARTS.push({ label: `Start: ${lift.name} top`, x: a[0], z: a[1], heading: Math.atan2(b[0] - a[0], -(b[1] - a[1])) });
   } else besideTerminal(top, prev, `Start: ${lift.name} top`);
-  // and its bottom, beside the bottom terminal
+  // and beside the bottom terminal
   besideTerminal(up ? p[p.length - 1] : p[0], up ? p[p.length - 2] : p[1], `Start: ${lift.name} bottom`);
 }
-// a start off to one side of a terminal (end, with prev the next point along the lift line) where the snow falls
-// away most steeply, facing down the fall line, clear of buildings and not facing the terminal or the forest
+// beside a terminal (end, prev = next lift point) where the snow falls away most; clear of buildings,
+// not facing the terminal or the forest
 function besideTerminal(end, prev, label) {
   const d = Math.hypot(end[0] - prev[0], end[1] - prev[1]) || 1, ux = (end[0] - prev[0]) / d, uz = (end[1] - prev[1]) / d;
   let pick = null;
@@ -2268,7 +2195,7 @@ function besideTerminal(end, prev, label) {
     if (offMap(x, z) || nearSolid(x, z, 5)) continue;
     const f = fallAt(x, z, 10), k = cellAt(x, z), tx = end[0] - x, tz = end[1] - z, tl = Math.hypot(tx, tz);
     if ((-f.gx * tx - f.gz * tz) / (f.slope * tl || 1) > 0.7) continue;     // not facing the terminal
-    let ahead = 0;                                                         // and not straight into the forest
+    let ahead = 0;                                                         // or the forest
     for (let m = 15; m <= 75; m += 15) { const q = cellAt(x - f.gx / (f.slope || 1) * m, z - f.gz / (f.slope || 1) * m); ahead += (conifer(q) + aspen(q)) / 5; }
     const score = f.slope + (onGroomed(x, z) ? 0.15 : 0) - (conifer(k) + aspen(k)) * 0.5 - ahead * 0.5;
     if (!pick || score > pick.score) pick = { x, z, f, score };
@@ -2276,31 +2203,30 @@ function besideTerminal(end, prev, label) {
   if (pick) STARTS.push({ label, x: pick.x, z: pick.z, heading: Math.atan2(-pick.f.gx, pick.f.gz) });
 }
 
-// ---------- The lift ride (Jack 2026-10-22) ----------
-// A ring of light on every chairlift's loading deck. Ski into it: fade to black, ride a chair up at the lift's
-// real speed, fade to black, and stand on the top deck where the chair lets you off. A tap or Space skips to
-// that last fade. Each lift's top start in the Tab menu is that same spot.
-const RING_R = 2.5, LOAD = 4.5;      // m across the ring's middle / 2; m from the wheel to load and unload
+// ---------- The lift ride ----------
+// A ring of light on every chairlift's loading deck: ski in, fade, ride a chair up at the lift's real speed, fade,
+// stand on the unload deck. Tap or Space skips to the last fade. The Tab menu's lift-top starts use the same spot.
+const RING_R = 2.5, LOAD = 4.5;      // m across the ring / 2; m from the wheel to load and unload
 const RIDES = [];
 for (const lp of liftPaths) {
   if (lp.kind !== 'chair_lift') continue;
   const N = lp.pts.length, b = lp.g[0] <= lp.g[N - 1] ? 0 : N - 1, t = N - 1 - b;
   const sb = lp.stn[b], st = lp.stn[t];
   if (!sb || !st) continue;
-  // uphill along the line at each end; loaded chairs ride on the right of it, looking up
+  // uphill along the line at each end; loaded chairs ride on its right
   const along = (i, j) => { const dx = lp.pts[j][0] - lp.pts[i][0], dz = lp.pts[j][1] - lp.pts[i][1], l = Math.hypot(dx, dz) || 1; return [dx / l, dz / l]; };
   const [bx, bz] = along(b, b ? b - 1 : 1), [tx, tz] = along(t ? t - 1 : 1, t);
   const ring = { x: sb.x + bx * LOAD + bz * lp.arm, z: sb.z + bz * LOAD - bx * lp.arm, y: sb.y };
   const top = { x: st.x - tx * LOAD + tz * lp.arm, z: st.z - tz * LOAD - tx * lp.arm };
-  // off the chair she faces the way down the run the old top start faced from (a little way down it)
+  // off the chair she faces down the run
   const old = STARTS.find((q) => q.label === `Start: ${lp.name} top`);
   top.heading = old ? Math.atan2(old.x - top.x, -(old.z - top.z)) : Math.atan2(tx, -tz);
   if (old) Object.assign(old, top);
-  // the ride in carrier distance (see carrierAt): from the loading spot to the unloading spot
+  // the ride in carrier distance: load spot to unload spot
   const d0 = (b ? lp.L : 0) + LOAD, d1 = (b ? lp.L : 0) + lp.L - LOAD;
   RIDES.push({ lp, ring, top, d0, d1, chair: carriers.chair.find((c) => c.lp === lp) });
 }
-// the ring: wisps of green light winding round a soft cyan glow, lying on the deck (Jack's reference image)
+// ring: green wisps around a soft cyan glow on the deck
 const ringMat = new THREE.ShaderMaterial({
   uniforms: { time: { value: 0 } },
   transparent: true, depthWrite: false,
@@ -2337,7 +2263,7 @@ for (const R of RIDES) {
 }
 const ride = { lp: null, chair: null, d: 0, t: 0, R: null };
 
-// Physics lab: start on Powderhorn, the long test run.
+// Physics lab start: Powderhorn
 {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cablePts), 3));
@@ -2345,29 +2271,28 @@ const ride = { lp: null, chair: null, d: 0, t: 0, R: null };
   lines.frustumCulled = false;
   scene.add(lines);
 }
-// carriers: chairs, gondola cabins and T-bar hangers, each one instanced mesh, hanging below the cable
-// a square tube from a to b (model-local points), for the chair's frame
+// carriers: chairs, cabins and T-bar hangers, one instanced mesh each, hanging below the cable
+// square tube from a to b, for the chair frame
 function tube(a, b, r, col) {
   const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A);
   const g = new THREE.BoxGeometry(r, d.length(), r);
   g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(UP_Y, d.clone().normalize()));
   return part(g.translate((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2), col);
 }
-// The chair (Jack's photo, a detachable quad): grip, hanger and a galvanized frame bowing down to both ends of
-// the seat, four dark cushions, a back, armrests and the safety bar raised. Faces +z; the cable is at y = 0.
+// Detachable quad chair: grip, hanger, frame, four cushions, back, armrests, bar raised. Faces +z; cable at y = 0.
 const FRAME = [0.62, 0.64, 0.68], CUSH = [0.17, 0.18, 0.21];
-const CHAIR_NEAR = 200, CHAIR_FAR = 2500;           // m: the full chair or cabin, then a plain one, then none at all
-// the frame's side: down from the top bar's rounded corner, bowing out, to the seat's end and under it to the back
+const CHAIR_NEAR = 200, CHAIR_FAR = 2500;           // m: full model, then plain, then none
+// frame side: down from the top bar, bowing out, to the seat end and under it to the back
 const chairSide = (sx) => [
   tube([sx * 0.98, -1.2, -0.34], [sx * 1.16, -1.3, -0.34], 0.09, FRAME),
   tube([sx * 1.16, -1.3, -0.34], [sx * 1.25, -1.75, -0.36], 0.08, FRAME),
   tube([sx * 1.25, -1.75, -0.36], [sx * 1.24, -2.25, -0.34], 0.08, FRAME),
   tube([sx * 1.24, -2.25, -0.34], [sx * 1.2, -2.66, -0.1], 0.08, FRAME),
   tube([sx * 1.22, -2.3, -0.2], [sx * 1.22, -2.3, 0.38], 0.06, FRAME),                 // armrest
-  tube([sx * 1.16, -1.3, -0.34], [sx * 1.14, -1.42, 0.3], 0.06, FRAME),                 // restraint bar arm, raised
+  tube([sx * 1.16, -1.3, -0.34], [sx * 1.14, -1.42, 0.3], 0.06, FRAME),                 // safety bar, raised
 ];
-// the Snowmass cabin (Jack's photos): rounded, black below the belt and tinted glass above, the white swoosh and
-// SNOWMASS on both sides, a grey sill under the floor, hung from a curved hanger. Faces +z; cable at y = 0.
+// Snowmass cabin: rounded, black below the belt, tinted glass above, logo on both sides, grey sill, curved hanger.
+// Faces +z; cable at y = 0.
 function roundRing(a, b, r, y, seg = 3) {
   const out = [];
   for (const [cx, cz, t0] of [[a - r, b - r, 0], [-(a - r), b - r, 0.5], [-(a - r), -(b - r), 1], [a - r, -(b - r), 1.5]])
@@ -2383,7 +2308,7 @@ function cabinGeo() {
     const yc = (A[1] + B[1] + C[1]) / 3, side = Math.abs(n.x) > 0.75 && yc < -1.9;
     for (const P of [A, B, C]) {
       pos.push(...P);
-      if (side) {   // the logo side: the tile once across the side, its top at the roof line
+      if (side) {   // logo tile once across the side, top at the roof line
         col.push(1, 1, 1);
         tt.push(clamp(0.5 - Math.sign(n.x) * P[2] / 2.0, 0.002, 0.998), clamp((P[1] - yF) / (yT - yF), 0.002, 0.998), TILES.cabin + 1);
       } else { col.push(...(yc > -2.95 && yc < -1.95 ? TINT : BODY)); tt.push(0, 0, 0); }
@@ -2406,7 +2331,7 @@ function cabinGeo() {
     g,
     part(new THREE.BoxGeometry(0.28, 0.32, 0.62).translate(0, -0.12, 0), DARK),                   // grip
     tube([0, -0.28, 0], [0.42, -0.75, 0], 0.1, FRAME), tube([0.42, -0.75, 0], [0.38, -1.35, 0], 0.1, FRAME),
-    tube([0.38, -1.35, 0], [0, -1.66, 0], 0.1, FRAME),                                            // hanger, round to the roof
+    tube([0.38, -1.35, 0], [0, -1.66, 0], 0.1, FRAME),                                            // hanger
     part(new THREE.BoxGeometry(1.5, 0.12, 1.4).translate(0, -4.02, 0), [0.42, 0.43, 0.46]),        // sill
   ]);
 }
@@ -2419,9 +2344,9 @@ const CARRIER_GEO = {
     part(new THREE.BoxGeometry(2.42, 0.07, 0.55).translate(0, -2.72, 0.1), FRAME),
     ...[-0.9, -0.3, 0.3, 0.9].map((x) => part(new THREE.BoxGeometry(0.56, 0.13, 0.52).translate(x, -2.62, 0.12), CUSH)),
     part(new THREE.BoxGeometry(2.3, 0.5, 0.11).rotateX(-0.18).translate(0, -2.26, -0.24), CUSH),
-    tube([-1.14, -1.42, 0.3], [1.14, -1.42, 0.3], 0.06, FRAME),                                  // the raised bar
+    tube([-1.14, -1.42, 0.3], [1.14, -1.42, 0.3], 0.06, FRAME),                                  // raised bar
     tube([-0.35, -1.42, 0.3], [-0.38, -1.95, 0.5], 0.05, FRAME), tube([0.35, -1.42, 0.3], [0.38, -1.95, 0.5], 0.05, FRAME),
-    tube([-0.72, -1.95, 0.5], [0.72, -1.95, 0.5], 0.06, FRAME),                                  // its footrest
+    tube([-0.72, -1.95, 0.5], [0.72, -1.95, 0.5], 0.06, FRAME),                                  // footrest
   ]),
   // past CHAIR_NEAR: hanger, seat and back only
   chairFar: merge([
@@ -2458,8 +2383,7 @@ function pathAt(lp, d, out) {
   out.dx = b[0] - a[0]; out.dz = b[2] - a[2];
   return out;
 }
-// a carrier d along the loop (0..L up the path's order, L..2L back): its spot on its side of the cable and the
-// way its riders face
+// carrier at d along the loop (0..L up, L..2L back): its spot beside the cable and its facing
 function carrierAt(lp, d, out) {
   const up = d < lp.L;
   pathAt(lp, up ? d : 2 * lp.L - d, out);
@@ -2472,7 +2396,7 @@ function carrierAt(lp, d, out) {
 const cp = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function placeCarriers(t) {
   const cx = camera.position.x, cz = camera.position.z;
-  // the chair Goldie rides: its lift's chairs all shift so that one is where the ride has got to
+  // the ride chair: shift its lift's chairs so one is where the ride is
   if (ride.lp && ride.chair) ride.lp.shift = ride.d - (ride.chair.s0 + t * ride.lp.speed);
   for (const k of Object.keys(carriers)) {
     const m = carrierMeshes[k], e = m.instanceMatrix.array, fm = FAR_OF[k] && carrierMeshes[FAR_OF[k]], fe = fm && fm.instanceMatrix.array;
@@ -2481,7 +2405,6 @@ function placeCarriers(t) {
       const lp = c.lp, d = (((c.s0 + t * lp.speed + lp.shift) % (2 * lp.L)) + 2 * lp.L) % (2 * lp.L);
       carrierAt(lp, d, cp);
       const x = cp.x, z = cp.z, fx = cp.fx, fz = cp.fz;
-      // chairs and cabins: the full model near, a plain one farther, none past CHAIR_FAR
       let out = e, n = nNear;
       if (fm) {
         const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
@@ -2497,7 +2420,7 @@ function placeCarriers(t) {
   }
 }
 
-// ---------- Lamps: one on every terminal hut, lit at night ----------
+// ---------- Lamps: one per terminal hut, lit at night ----------
 const bulbMat = new THREE.MeshBasicMaterial({ color: 0x2a2a2a });
 {
   const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 0.5, 0.9), bulbMat, Math.max(1, lampList.length));
@@ -2510,7 +2433,7 @@ function updateLamps() {
   for (let i = 0; i < 4; i++) LIGHT.uLamps.value[i].copy(near[i] || new THREE.Vector3(0, -1e5, 0));
 }
 
-// ---------- Shadows: trees, rocks and lift towers painted top down along the sun, around the camera ----------
+// ---------- Shadows: trees, rocks and towers painted top down around the camera ----------
 const shCanvas = document.createElement('canvas');
 shCanvas.width = shCanvas.height = SH_PX;
 const shCtx = shCanvas.getContext('2d', { willReadFrequently: true });
@@ -2549,7 +2472,7 @@ function paintShadows(force) {
   shTex.needsUpdate = true;
   shPix = g.getImageData(0, 0, SH_PX, SH_PX).data;
 }
-// how much sun reaches a point, for Goldie
+// sun reaching a point, for Goldie
 function sunAt(x, z) {
   if (!shPix) return 1;
   const u = Math.floor((x - LIGHT.uShO.value.x) / SH_SIZE * SH_PX), v = Math.floor((z - LIGHT.uShO.value.y) / SH_SIZE * SH_PX);
@@ -2585,7 +2508,7 @@ function updateFlakes(dt) {
 }
 
 // ---------- Time of day and the pixel look ----------
-let pixelLook = false;           // full resolution by default; the 320x180 look is a Tab toggle
+let pixelLook = false;           // 320x180 look is a Tab toggle
 function applyTime(key) {
   timeOfDay = key;
   const T = TIMES[key];
@@ -2614,11 +2537,9 @@ function updateWorld(dt) {
   updateFlakes(dt);
 }
 
-// ---------- The skier: one camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
-// The sheet (rendered from her 3D model) has 10 pose columns and 5 camera-angle rows: 0 = behind her,
-// 45, 90 (her right side), 135, 180 = in front. Cameras on her left use the mirrored frame.
-// Snowlight: each sprite pixel is lit from its normal map by the sun, the sky above
-// and the sunlit snow below, then snapped to four bands.
+// ---------- The skier: a camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
+// Sheet: 10 pose columns x 5 angle rows (0 behind, 45, 90 her right, 135, 180 in front); her left side is mirrored.
+// Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
 const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8, sit: 9 };
 const POSE_COLS = 10, ANGLE_ROWS = 5;
 const SPRITE_H = 2.0, SPRITE_W = 2.5;
@@ -2699,19 +2620,16 @@ const sprayPoints = (() => {
 })();
 
 // ---------- Input ----------
-// Keyboard: Left/Right or A/D steer, Up or W pushes with the poles (Momentum only), Down or S brakes,
-// Shift tucks, Space jumps (in Momentum, hold to load and release to pop).
-// Touch or mouse: drag sideways to steer, hold still to tuck, swipe down to push with the poles,
-// swipe up to brake, tap to jump.
-// The newest finger down steers; lifting it hands steering back to any finger still down.
+// Keys: Left/Right or A/D steer, Up/W poles, Down/S brakes, Shift tucks, Space jumps (hold to load an ollie).
+// Touch: drag to steer, rest to tuck, swipe down to pole, swipe up to brake, tap to jump. The newest finger steers.
 const input = { steer: 0, tuck: false, brake: false, pole: false, jump: false };
 const keys = new Set();
 let keySteer = 0;
 const STEER_PX = 70;
 const ptr = { id: null, x0: 0, x: 0, y: 0, t0: 0, travel: 0, lastMove: 0, steer: 0, woke: false, hist: [], passive: false, topY: 0 };
-const touches = new Map();      // every finger down: id -> [x, y]
-let hockeyStop = false;         // a swipe up starts a stop that holds until you've stopped
-let poleSwipe = false;          // a swipe down asks for one push with the poles
+const touches = new Map();      // finger id -> [x, y]
+let hockeyStop = false;         // swipe up: stop held until stopped
+let poleSwipe = false;          // swipe down: one pole push
 const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'pole', KeyW: 'pole', ArrowDown: 'brake', KeyS: 'brake', ShiftLeft: 'tuck', ShiftRight: 'tuck', Space: 'jump' };
 window.addEventListener('keydown', (e) => {
   if (debugKey(e)) return;
@@ -2735,8 +2653,8 @@ function anchor(id, x, y, handedOver) {
   ptr.id = id;
   ptr.x0 = ptr.x = x; ptr.y = y;
   ptr.t0 = ptr.lastMove = performance.now();
-  ptr.travel = handedOver ? Infinity : 0;  // a finger that was already down can't count as a tap
-  ptr.passive = handedOver;                // ...or tuck by resting until it moves
+  ptr.travel = handedOver ? Infinity : 0;  // a finger already down can't tap
+  ptr.passive = handedOver;                // ...or tuck until it moves
   ptr.steer = 0;
   ptr.hist = [[ptr.t0, x, y]];
   ptr.topY = y;
@@ -2759,18 +2677,17 @@ canvas.addEventListener('pointermove', (e) => {
   ptr.travel += Math.hypot(dx, dy);
   if (Math.hypot(dx, dy) > 1.5) { ptr.lastMove = now; ptr.passive = false; }
   ptr.x = e.clientX; ptr.y = e.clientY;
-  // Hockey stop: a quick, mostly upward flick (40 px within a quarter second).
-  // Pulling the thumb back down cancels it.
+  // Hockey stop: a quick upward flick (40 px within 0.25 s); pulling back down cancels it.
   ptr.hist.push([now, ptr.x, ptr.y]);
   while (now - ptr.hist[0][0] > 250) ptr.hist.shift();
   const up = ptr.hist[0][2] - ptr.y, side = Math.abs(ptr.x - ptr.hist[0][1]);
   if (dy < 0 && up > 40 && up > 1.5 * side) { hockeyStop = true; ptr.topY = ptr.y; }
   ptr.topY = Math.min(ptr.topY, ptr.y);
   if (hockeyStop && ptr.y - ptr.topY > 20) hockeyStop = false;
-  // Poles: a quick, mostly downward flick, one push per flick.
+  // Poles: a quick downward flick, one push each.
   const down = ptr.y - ptr.hist[0][2];
   if (dy > 0 && down > 40 && down > 1.5 * side) { poleSwipe = true; ptr.hist = [[now, ptr.x, ptr.y]]; }
-  // keep the anchor within one full steer of the thumb so reversing responds at once
+  // keep the anchor within one full steer of the thumb so reversing is instant
   if (ptr.x - ptr.x0 > STEER_PX) ptr.x0 = ptr.x - STEER_PX;
   if (ptr.x0 - ptr.x > STEER_PX) ptr.x0 = ptr.x + STEER_PX;
   ptr.steer = clamp((ptr.x - ptr.x0) / STEER_PX, -1, 1);
@@ -2782,7 +2699,7 @@ function endPointer(e) {
   if (quick && e.type === 'pointerup' && !ptr.woke) input.jump = true;
   const rest = [...touches];
   if (rest.length) {
-    // Another finger is still down: it takes over steering from where it is.
+    // Another finger still down takes over steering.
     const [id, [x, y]] = rest[rest.length - 1];
     anchor(id, x, y, true);
   } else {
@@ -2793,32 +2710,30 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// ---------- Debug menu (Tab), for testing on a laptop ----------
-// One list of settings. Freecam is a noclip camera: WASD flies where you look, the mouse looks around,
-// Shift goes faster. Goldie holds still while it's on.
+// ---------- Debug menu (Tab) ----------
+// Freecam: WASD flies where you look, mouse looks, Shift is faster; Goldie holds still.
 const debugEl = document.getElementById('debug');
 const free = { on: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0, keys: new Set(), drag: false };
 const FREE_SPEED = 30;          // m/s
-const FREE_FAST = 10;           // Shift multiplies speed by this
-const FREE_LOOK = 0.0022;       // radians per pixel of mouse movement
+const FREE_FAST = 10;           // Shift multiplier
+const FREE_LOOK = 0.0022;       // rad per pixel
 const FREE_KEYS = { KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right', ShiftLeft: 'fast', ShiftRight: 'fast' };
-// on by default for now, for testing (Jack 2026-10-21); the Tab menu still turns it off
+// on for testing; Tab turns it off
 const speedEl = Object.assign(document.createElement('div'), { hidden: false });
 speedEl.style.cssText = 'position:fixed;top:12px;right:14px;font:600 15px ui-monospace,Menlo,monospace;color:#fff;text-shadow:0 1px 2px #13244d;pointer-events:none';
 document.body.append(speedEl);
 
-// ---------- HUD map (Jack 2026-10-22: minimap + full map, in the style of the Snowmass trail map) ----------
-// One painted image of the mountain is made once at load, north up (x right, z down): hillshade, forest from the
-// cover grid, open snow on the traced runs. The minimap (top-left) turns it so Goldie's heading points up; the full
-// map (M, or a two-finger tap) turns it half around so the summit is at the top, as the trail map is drawn.
+// ---------- HUD map: minimap and full map in the trail-map style ----------
+// One image painted at load, north up (x right, z down). The minimap turns it heading-up; the full map (M, or
+// a two-finger tap) shows it summit-up.
 const HUDMAP = {
-  MPP: 4,                       // m per pixel of the painted image
+  MPP: 4,                       // m per image pixel
   MINI_SPAN: 1500,              // m across the minimap
-  MINI_PX: 160,                 // minimap size, px (116 on small screens)
+  MINI_PX: 160,                 // px (116 on small screens)
   RUN: { green: '#2e9e48', blue: '#1f7fd6', black: '#141414', expert: '#141414', none: '#7c8794' },
   LIFT: '#d8202f',              // chairs and gondolas
   SURFACE: '#6a3fb5',           // T-bar and platters
-  // the trail map's labelled points and its published elevations (ft, m); lift top unless marked bottom
+  // trail map labels and elevations (ft, m); lift top unless marked bottom
   PEAKS: [['CIRQUE T-BAR', 'Cirque T-Bar', 12510, 3813], ['HIGH ALPINE', 'High Alpine', 11880, 3612], ['BIG BURN', 'Big Burn', 11835, 3607],
     ["SAM'S KNOB", "Sam's Knob", 10630, 3240], ['ELK CAMP', 'Elk Camp', 11325, 3452], ['BASE VILLAGE', 'Village Express', 8400, 2560, 'bottom'],
     ['VILLAGE MALL', 'Sky Cab', 8606, 2623], ['TWO CREEKS', 'Two Creeks', 8110, 2472, 'bottom'], ['CAMPGROUND', 'Campground', 8235, 2510, 'bottom']],
@@ -2833,13 +2748,13 @@ fullEl.append(fullMap, fullMe);
 document.body.append(miniEl, fullEl);
 const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Arial,sans-serif`;
 
-// The painted image, a band of rows at a time so the first seconds of skiing don't stutter.
+// Painted a band of rows at a time so skiing doesn't stutter.
 (async function paintHudMap() {
   const t0 = performance.now(), areaB = await inflate(RUN_DATA.area);
   const AREA = new Int8Array(areaB.buffer, areaB.byteOffset, areaB.length);   // half meters to the nearest run, < 0 on it
   let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
   for (const r of [...MAP.runs, ...MAP.lifts]) for (const [x, z] of r.points) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
-  x0 -= 400; z0 -= 300; x1 += 400; z1 += 600;   // more room above the summit for its label
+  x0 -= 400; z0 -= 300; x1 += 400; z1 += 600;   // room above the summit for its label
   const M = HUDMAP.MPP, W = Math.ceil((x1 - x0) / M), Hp = Math.ceil((z1 - z0) / M);
   const cv = Object.assign(document.createElement('canvas'), { width: W, height: Hp }), g = cv.getContext('2d');
   const img = g.createImageData(W, Hp), px = img.data;
@@ -2849,7 +2764,7 @@ const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Ar
   };
   const hash = (i, j) => { let h = (i * 374761393 + j * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
   const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-  // light from the top-left of the summit-up view (from +x, +z), 40 degrees up; slopes a little exaggerated
+  // light from the summit-up view's top left, 40 degrees up; slopes slightly exaggerated
   const LX = 0.54, LY = 0.64, LZ = 0.54, EX = 1.5;
   const SNOW_D = [118, 150, 196], SNOW_L = [250, 252, 255], TREE_D = [10, 38, 30], TREE_L = [52, 98, 66], ASP_D = [96, 98, 104], ASP_L = [176, 174, 168], ROCK = [120, 118, 122];
   for (let j = 0; j < Hp; j++) {
@@ -2860,7 +2775,7 @@ const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Ar
       const lit = Math.max(0, (-gx * LX + LY - gz * LZ) / Math.hypot(gx, 1, gz)), t = clamp((lit - 0.25) / 0.75, 0, 1);
       let c = mix(SNOW_D, SNOW_L, t);
       if (bil(AREA, fx, fz) > 4) {
-        // painted trees: a stipple of crowns, denser where the forest is thicker; none on the runs
+        // tree stipple, denser in thicker forest, none on runs
         const k = clamp(Math.round(fz), 0, NZ - 1) * NX + clamp(Math.round(fx), 0, NX - 1), cov = COVER[k];
         const con = (cov & 15) / 15, asp = ((cov >> 4) & 7) / 7, r = hash(i, j), r2 = hash(i >> 1, j >> 1);
         if (cov >> 7) c = mix(c, ROCK, 0.45);
@@ -2872,11 +2787,11 @@ const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Ar
     }
   }
   g.putImageData(img, 0, 0);
-  // the minimap's copy has the runs and lifts painted in, at the width they show at minimap scale
+  // minimap copy with runs and lifts painted at minimap width
   hudMap.x0 = x0; hudMap.z0 = z0;
   drawMapLines(g, HUDMAP.MINI_PX / (HUDMAP.MINI_SPAN / M), 2.2);
   hudMap.base = cv;
-  // the full map draws its own lines at its own scale, on a plain copy
+  // the full map draws its own lines on a plain copy
   hudMap.plain = document.createElement('canvas');
   hudMap.plain.width = W; hudMap.plain.height = Hp;
   hudMap.plain.getContext('2d').putImageData(img, 0, 0);
@@ -2884,8 +2799,8 @@ const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Ar
   if (hudMap.full) drawFullMap();
 })();
 
-// Runs as coloured lines with a white casing, lifts as red (purple for surface lifts) with a dot at each end.
-// g is in image pixels; k is screen px per image px, so lw stays in screen px.
+// Runs as colored lines with a white casing, lifts red (purple for surface lifts) with end dots.
+// g is in image px; k is screen px per image px, so lw stays in screen px.
 function drawMapLines(g, k, lw) {
   const P = (x, z) => [(x - hudMap.x0) / HUDMAP.MPP, (z - hudMap.z0) / HUDMAP.MPP];
   const line = (pts) => { g.beginPath(); pts.forEach(([x, z], n) => { const p = P(x, z); g[n ? 'lineTo' : 'moveTo'](p[0], p[1]); }); };
@@ -2915,7 +2830,7 @@ function mapArrow(g, s) {
 }
 const mapWhere = () => {
   const p = free.on ? free.pos : sk.pos, e = camera.matrixWorld.elements;
-  return { x: p.x, z: p.z, yaw: Math.atan2(-e[8], e[10]) };   // yaw 0 = facing north (-z), clockwise
+  return { x: p.x, z: p.z, yaw: Math.atan2(-e[8], e[10]) };   // yaw 0 = north (-z), clockwise
 };
 function sizeHudMap() {
   const S = Math.min(innerWidth, innerHeight) < 500 ? 116 : HUDMAP.MINI_PX, d = Math.min(window.devicePixelRatio || 1, 2);
@@ -2940,8 +2855,7 @@ function drawMiniMap() {
   g.beginPath(); g.arc(R, R, R - 0.5, 0, 7); g.lineWidth = 1; g.strokeStyle = 'rgba(19,36,77,.8)'; g.stroke();
   g.translate(R, R); mapArrow(g, 8);
 }
-// The full map: the whole mountain, summit at the top, with run, lift, peak and base labels. Drawn once when it
-// opens (or the window changes size); only Goldie's arrow is redrawn each frame.
+// Full map: whole mountain, summit up, with labels. Drawn when it opens or the window resizes; only the arrow redraws.
 function drawFullMap() {
   if (!hudMap.plain) return;
   const B = hudMap.plain, d = hudMap.dpr, small = Math.min(innerWidth, innerHeight) < 500, m = small ? 8 : 16;
@@ -2961,8 +2875,7 @@ function drawFullMap() {
     const l = MAP.lifts.find((q) => q.name === lift), p = end === 'bottom' ? l.points[0] : l.points[l.points.length - 1];
     return [name, ft, me, ...S(p[0], p[1]), end === 'bottom'];
   });
-  // the peak and base labels go on last but claim their room first
-  // bases hang their label below the point, peaks above it
+  // peak and base labels draw last but claim room first; bases label below, peaks above
   const placed = ends.map(([, , , x, y, low]) => (low ? [x - 50, y, x + 50, y + fs * 2.2 + 8] : [x - 50, y - fs * 2.2 - 8, x + 50, y]));
   const tag = (label, pts, fill, font) => {
     const n = pts.length >> 1, a = S(...pts[n - 1]), b = S(...pts[n + 1]), mid = S(...pts[n]);
@@ -2981,7 +2894,7 @@ function drawFullMap() {
     g.restore();
   };
   for (const l of MAP.lifts) {
-    // a two-point lift line gets a midpoint so its label can sit on it
+    // two-point lift lines get a midpoint for the label
     const [a, b] = [l.points[0], l.points[l.points.length - 1]];
     const pts = l.points.length > 2 ? l.points : [a, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], b];
     tag(l.name, pts, surfaceLift(l) ? HUDMAP.SURFACE : HUDMAP.LIFT, mapFont(nfs + 1, 700, 'italic '));
@@ -3012,14 +2925,14 @@ function setFullMap(on) {
   miniEl.hidden = on;
   if (on) drawFullMap();
 }
-// called from render(): the minimap every other frame, the full map's arrow every frame
+// minimap every other frame, full-map arrow every frame
 function updateHudMap() {
   if (hudMap.full) drawFullMe();
   else if (hudMap.frame++ & 1) drawMiniMap();
 }
 window.addEventListener('resize', sizeHudMap);
 sizeHudMap();
-// M opens and closes the full map; on phones, a quick two-finger tap does.
+// M toggles the full map; on phones, a two-finger tap.
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyM' && !e.repeat) setFullMap(!hudMap.full); });
 {
   let t0 = 0, most = 0;
@@ -3070,19 +2983,19 @@ function openMenu(open) {
   if (open && document.pointerLockElement) document.exitPointerLock();
   drawMenu();
 }
-// Toggling a setting closes the menu, so turning freecam on puts you straight into flying.
+// Toggling a setting closes the menu, so freecam starts flying at once.
 function toggleItem(k) {
   DEBUG_ITEMS[k].set(!DEBUG_ITEMS[k].get());
   openMenu(false);
 }
-// Keys the debug menu and freecam claim before the skier sees them.
+// Keys the menu and freecam claim before the skier.
 function debugKey(e) {
   if (e.code === 'Tab') {
     e.preventDefault();
     if (!e.repeat) openMenu(debugEl.hidden);
     return true;
   }
-  // With the menu open, Enter toggles the highlighted row; the skiing keys keep working.
+  // With the menu open, Enter toggles the highlighted row.
   if (!debugEl.hidden && e.code === 'Enter') {
     e.preventDefault();
     if (!e.repeat) toggleItem(menuSel);
@@ -3093,10 +3006,10 @@ function debugKey(e) {
   if (f) { e.preventDefault(); free.keys.add(f); }
   return true;
 }
-// Phones have no Tab key: a three-finger tap opens and closes the menu.
+// Phones: a three-finger tap toggles the menu.
 canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 3) openMenu(debugEl.hidden); }, { passive: true });
 function lockPointer() {
-  // Some embeds don't allow pointer lock; dragging with the button held looks around instead.
+  // Without pointer lock, drag with the button held to look.
   try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* drag to look */ }
 }
 function setFreecam(on) {
@@ -3155,13 +3068,12 @@ const sk = {
   edge: 0, spin: 0, yawRate: 0, charge: 0, poleCD: 0, poleT: 0, pole: false,
   edgeA: 0, latA: 0, roll: 0, kappa: 0, lean: 0,
 };
-let phase = 'ready';            // ready (standing at the summit) -> skiing -> back (fading to the summit)
+let phase = 'ready';            // ready -> skiing -> back (fading to the summit)
 let simTime = 0, backT = 0, trips = 0;
 let cameraSnap = true;
 const tmpN = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
-// FreePlay starts at the top of the real Big Burn chair, the highest chairlift, facing down its line.
 
 function placeSkier(x, z, heading, speed) {
   sk.pos.set(x, groundY(x, z), z);
@@ -3182,7 +3094,7 @@ function toSummit(at = META.start) {
   if (at === META.start) fadeEl.classList.remove('black');
   placeSkier(at.x, at.z, at.heading, 0);
   hockeyStop = false;
-  // a start whose run tiles aren't in yet stays behind the fade until they are, then stands on them
+  // a start whose run tiles aren't loaded waits behind the fade
   const loads = runStream ? runStream(at.x, at.z, true) : [];
   if (!loads.length) { fadeEl.classList.remove('on'); return; }
   fadeEl.classList.add('on');
@@ -3191,8 +3103,8 @@ function toSummit(at = META.start) {
     fadeEl.classList.remove('on');
   });
 }
-// The lift ride: fade to black, ride (the camera follows her chair, see render), then fade to black and stand
-// at the top. ride.t counts up from -FADE while the screen goes black, then through the ride.
+// Lift ride: fade, ride (the camera follows her chair), fade, stand at the top.
+// ride.t counts up from -FADE while the screen goes black, then through the ride.
 const FADE = 0.45;
 function startRide(R) {
   phase = 'ride';
@@ -3219,7 +3131,7 @@ function rideStep(dt) {
   const was = ride.t;
   ride.t += dt;
   if (was < 0 && ride.t >= 0) {
-    // black: put her on the chair at the loading spot and fade in
+    // black: seat her at the loading spot and fade in
     ride.lp = R.lp; ride.chair = R.chair;
     fadeEl.classList.remove('on');
     cameraSnap = true;
@@ -3240,7 +3152,7 @@ function wake() {
     input.jump = false;
   }
 }
-// The trip back up: fade out, then stand at the summit again (stand-in for the lift cutscene).
+// The trip back up: fade out, then stand at the summit again.
 function sendBack() {
   if (phase !== 'skiing') return;
   phase = 'back';
@@ -3262,7 +3174,7 @@ function groundStep(dt) {
   const surf = surfaceAt(sk.pos.x, sk.pos.z);
   const nAcc = G * n.y;
 
-  // Steering turns the skis; the snow decides how much of that the skier's path follows.
+  // Steering turns the skis; the snow decides how much the path follows.
   sk.heading += sk.steer * TURN_RATE * (sk.tuck ? TUCK_TURN : 1) * dt;
   const slope = Math.hypot(s0.gx, s0.gz);
   if (slope > 0.03) {
@@ -3272,7 +3184,6 @@ function groundStep(dt) {
   sk.heading = wrapAngle(sk.heading);
   const f = skiDir(n, tmpF);
 
-  // Gravity along the slope.
   sk.vel.x += nAcc * n.x * dt;
   sk.vel.y += (-G + nAcc * n.y) * dt;
   sk.vel.z += nAcc * n.z * dt;
@@ -3281,13 +3192,12 @@ function groundStep(dt) {
   let speed = sk.vel.length();
   sk.skid = 0;
   if (speed < 0.3) {
-    // Nearly stopped: skis don't slide sideways, and you can't slide backwards.
+    // Nearly stopped: no sideways slide, no sliding backwards.
     const along = sk.vel.dot(f);
     sk.vel.copy(f).multiplyScalar(Math.max(0, along));
     speed = sk.vel.length();
   } else {
-    // Edge grip bends the velocity toward the skis. Within the grip limit that's a carve;
-    // whatever is left over is a skid that bleeds speed.
+    // Edge grip bends velocity toward the skis; within the limit it's a carve, the rest a skid that bleeds speed.
     tmpA.copy(sk.vel).divideScalar(speed);
     const cosA = tmpA.dot(f);
     const sinA = tmpB.crossVectors(tmpA, f).dot(n);
@@ -3304,14 +3214,14 @@ function groundStep(dt) {
   if (speed > 0) {
     const drag = DRAG * (sk.tuck ? TUCK_DRAG : 1) * speed * speed + (speed > SPEED_CAP ? CAP_DRAG * (speed - SPEED_CAP) ** 2 : 0);
     let fric = surf.friction * nAcc;
-    // Nearly stopped, friction never quite beats the slope, so pointing downhill always gets you going.
+    // Nearly stopped, friction never quite beats the slope, so pointing downhill always restarts you.
     if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
     const decel = fric + drag + SKID * sk.skid * nAcc + (sk.brake ? BRAKE : 0);
     const next = Math.max(0, speed - decel * dt);
     sk.vel.multiplyScalar(next / speed);
   }
 
-  // Jump: pop off the snow along the slope normal.
+  // Jump: pop along the slope normal.
   sk.popCD = Math.max(0, sk.popCD - dt);
   let popped = false;
   if (input.jump && sk.popCD === 0) {
@@ -3323,7 +3233,7 @@ function groundStep(dt) {
   sk.pos.addScaledVector(sk.vel, dt);
   const s1 = sample(sk.pos.x, sk.pos.z);
   const gap = sk.pos.y - s1.h;
-  // If the ground falls away faster than gravity can pull you down onto it, you're in the air.
+  // Ground falling away faster than gravity can follow: airborne.
   if (popped || gap > 0.5 * nAcc * dt * dt + TAKEOFF_MARGIN) {
     sk.grounded = false;
     sk.airTime = 0;
@@ -3388,12 +3298,11 @@ function groundStepM(dt) {
   let speed = sk.vel.length();
   const yaw0 = travelYaw();
 
-  // Rolling onto an edge takes a moment, and the skis pivot slower the faster you're going.
+  // Edging takes a moment; the skis pivot slower the faster you go.
   sk.edge += (Math.abs(sk.steer) - sk.edge) * Math.min(1, MO.EDGE_IN * dt);
   sk.heading = wrapAngle(sk.heading + sk.steer * (MO.PIVOT / (1 + speed / MO.PIVOT_FALL)) * (sk.tuck ? TUCK_TURN : 1) * dt);
   const f = skiDir(n, tmpF);
 
-  // Gravity along the slope.
   sk.vel.x += nAcc * n.x * dt;
   sk.vel.y += (-G + nAcc * n.y) * dt;
   sk.vel.z += nAcc * n.z * dt;
@@ -3406,8 +3315,7 @@ function groundStepM(dt) {
     sk.vel.copy(f).multiplyScalar(Math.max(0, along));
     speed = sk.vel.length();
   } else {
-    // The edge can only push sideways so hard (grip times the snow holding you up, more the further
-    // you lean). That sideways push is what bends your momentum; ask for more and the rest is a skid.
+    // Sideways push is capped at grip x normal force (more with lean); it bends momentum, the excess is a skid.
     tmpA.copy(sk.vel).divideScalar(speed);
     const alpha = Math.atan2(tmpB.crossVectors(tmpA, f).dot(n), tmpA.dot(f));
     const grip = surf.grip * A.grip * (1 + MO.EDGE_GRIP * sk.edge) * (sk.tuck ? TUCK_GRIP : 1);
@@ -3429,7 +3337,7 @@ function groundStepM(dt) {
     speed = next;
   }
 
-  // Poles: a double-pole push adds speed along the skis. Strong from a standstill, nothing once you're moving.
+  // Poles: a push along the skis, strong from a standstill, none once moving.
   sk.poleCD = Math.max(0, sk.poleCD - dt);
   if (sk.pole && sk.poleCD === 0 && speed < MO.POLE_MAX) {
     sk.vel.addScaledVector(f, MO.POLE * (1 - speed / MO.POLE_MAX));
@@ -3437,10 +3345,10 @@ function groundStepM(dt) {
     sk.poleT = 0.22;
   }
 
-  // How fast your path is turning right now: carried into the air as spin.
+  // Path turn rate, carried into the air as spin.
   sk.yawRate += (wrapAngle(travelYaw() - yaw0) / dt - sk.yawRate) * 0.3;
 
-  // Ollie: load by holding jump, pop on release, partly off the slope and partly straight up.
+  // Ollie: hold jump to load, release to pop, partly off the slope and partly straight up.
   sk.popCD = Math.max(0, sk.popCD - dt);
   let popped = false;
   if (input.jump && sk.popCD === 0) {
@@ -3469,7 +3377,7 @@ function groundStepM(dt) {
   if (sp1 > 1e-6) sk.vel.multiplyScalar(sp / sp1);
 }
 
-// ---------- Carve model (proposal) ----------
+// ---------- Carve model ----------
 function groundStepC(dt) {
   const A = assist();
   const s0 = sample(sk.pos.x, sk.pos.z);
@@ -3479,14 +3387,13 @@ function groundStepC(dt) {
   let speed = sk.vel.length();
   const yaw0 = travelYaw();
 
-  // Steering asks for a share of the tightest clean turn at this speed: 7 m slow, wider with v^2 fast.
+  // Steering asks for a share of the tightest clean turn at this speed: 7 m slow, wider with v^2.
   const latMax = surf.grip * CV.LAT_GRIP * (A.grip > 1 ? 1.1 : 1) * (sk.tuck ? TUCK_GRIP : 1) * nAcc;
   const kMax = Math.min(1 / CV.R_MIN, (CV.CLEAN * latMax) / Math.max(speed * speed, 1)) * (sk.tuck ? CV.TUCK_TURN : 1);
-  // Rolling from one edge to the other takes a moment.
+  // Edge changes take a moment.
   if (physics.weight) {
-    // Weight: the stick sets how far she wants to lean; her body gets there over a split second.
-    // The lean, not the stick, bends the ski: radius = v^2 / (g tan lean). Hold a lean while the turn
-    // climbs uphill and bleeds speed, and the same lean bites tighter, so the turn finishes itself.
+    // The stick sets the wanted lean; the body follows with a lag. The lean bends the ski: radius = v^2 / (g tan lean),
+    // so a held lean tightens as the turn climbs and slows: the turn finishes itself.
     const leanMax = Math.atan2(kMax * speed * speed, nAcc);
     sk.lean += (clamp(sk.steer, -1, 1) * leanMax - sk.lean) * (1 - Math.exp(-dt / CV.LEAN_T));
     const kHold = Math.tan(sk.lean) * nAcc / Math.max(speed * speed, 1);
@@ -3497,17 +3404,16 @@ function groundStepC(dt) {
     sk.lean = Math.atan2(sk.kappa * speed * speed, nAcc);
   }
   let skiRate = sk.kappa * speed;
-  // Slow, the skis pivot under your feet instead; steering with the brake held throws them sideways.
+  // Slow, the skis pivot instead; brake + steer throws them sideways.
   skiRate += sk.steer * CV.PIVOT / (1 + speed / CV.PIVOT_V);
   const skidTurn = sk.brake && Math.abs(sk.steer) > 0.2;
   if (skidTurn) skiRate += sk.steer * CV.SKID_TURN;
   sk.heading = wrapAngle(sk.heading + skiRate * dt);
-  // How far she's leaning: just enough to balance the turn (for the sprite and the camera).
+  // Lean that balances the turn (sprite and camera).
   sk.edgeA = Math.atan2(sk.kappa * speed * speed, nAcc);
   sk.edge = Math.min(1, Math.abs(sk.edgeA) / 1.1);
   const f = skiDir(n, tmpF);
 
-  // Gravity along the slope.
   sk.vel.x += nAcc * n.x * dt;
   sk.vel.y += (-G + nAcc * n.y) * dt;
   sk.vel.z += nAcc * n.z * dt;
@@ -3520,8 +3426,7 @@ function groundStepC(dt) {
     sk.vel.copy(f).multiplyScalar(Math.max(0, along));
     speed = sk.vel.length();
   } else {
-    // The edge pushes sideways up to the snow's grip (about 1.6 g on a groomer). Within it your
-    // momentum follows the skis; past it the rest is a skid.
+    // The edge pushes sideways up to the snow's grip (about 1.6 g groomed); past it the rest is a skid.
     tmpA.copy(sk.vel).divideScalar(speed);
     const alpha = Math.atan2(tmpB.crossVectors(tmpA, f).dot(n), tmpA.dot(f));
     const omega = latMax / Math.max(speed, 1.5);
@@ -3538,8 +3443,7 @@ function groundStepC(dt) {
     let fric = surf.friction * (0.6 + 0.6 / (1 + speed / CV.GLIDE)) * nAcc;
     if (speed < 2) fric = Math.min(fric, 0.8 * G * Math.hypot(n.x, n.z));
     const brake = sk.brake ? (skidTurn ? CV.SKID_BRAKE : BRAKE) : 0;
-    // A clean carve costs only the extra snow friction from the load: pulling 1.5 g presses the skis
-    // into the snow 1.8x as hard. Skidding (the SKID term) is what really scrubs speed.
+    // A clean carve costs only the extra friction from the load (1.5 g sideways presses 1.8x harder). Skids scrub the real speed.
     const lat = Math.abs(sk.kappa) * speed * speed;
     const carveCost = physics.loadDrag ? (fric / nAcc) * (Math.hypot(nAcc, lat) - nAcc) : CV.CARVE_DRAG * lat;
     const decel = fric + drag + SKID * sk.skid * nAcc + brake + carveCost;
@@ -3555,7 +3459,7 @@ function groundStepC(dt) {
     sk.poleT = 0.22;
   }
 
-  // How fast your path is turning, and the sideways g you're pulling: spin for jumps, bank for the camera.
+  // Path turn rate and sideways g: spin for jumps, bank for the camera.
   sk.yawRate += (wrapAngle(travelYaw() - yaw0) / dt - sk.yawRate) * 0.3;
   sk.latA = sk.yawRate * speed;
 
@@ -3590,11 +3494,11 @@ function groundStepC(dt) {
 
 function airStepM(dt) {
   const A = assist();
-  // Steering in the air is torque on the spin you took off with; let go and the spin carries on.
+  // Air steering torques the spin; let go and it carries on.
   if (sk.steer) sk.spin += sk.steer * MO.SPIN_IN * dt;
   else {
     sk.spin *= Math.max(0, 1 - MO.SPIN_DAMP * dt);
-    // Assist: with nothing held and no big spin going, the skis drift back in line with your travel.
+    // Assist: with nothing held and little spin, the skis drift back in line with travel.
     if (A.align && Math.abs(sk.spin) < 2) {
       sk.spin *= Math.max(0, 1 - 3 * dt);
       sk.heading += clamp(wrapAngle(travelYaw() - sk.heading), -A.align * dt, A.align * dt);
@@ -3611,8 +3515,8 @@ function airStepM(dt) {
   if (sk.pos.y <= s.h) land(s);
 }
 
-// Landing keeps all the momentum along the slope; only the part going into the snow is absorbed.
-// Land on a steep downslope and you keep your speed; land flat from high up and the impact gets you.
+// Landing keeps the momentum along the slope and absorbs only the part into the snow:
+// steep landings keep speed, flat ones from high up hurt.
 function landM(s) {
   const A = assist();
   const n = normalFrom(s, tmpN);
@@ -3631,7 +3535,7 @@ function landM(s) {
   if (physics.crashes && (miss > BAIL.MISS * Math.PI / 180 || impact > BAIL.IMPACT)) {
     startBail(null, impact);
   } else if (miss > A.clean * Math.PI / 180 || impact > HARD_IMPACT) {
-    // The skis scrub off the part of your speed that isn't along them.
+    // The skis scrub off speed that isn't along them.
     sk.vel.multiplyScalar(Math.max(0.4, Math.cos(miss)));
     sk.landT = 0.45; sk.landQ = 'sloppy';
   } else {
@@ -3673,16 +3577,16 @@ const bodyAxis = new THREE.Vector3(), bodyHit = new THREE.Vector3(), bodyP = new
 const bqi = new THREE.Quaternion(), bQ = new THREE.Quaternion(), bR = new THREE.Vector3(), bP = new THREE.Vector3(), bV = new THREE.Vector3();
 const bN = new THREE.Vector3(), bT = new THREE.Vector3(), bA = new THREE.Vector3(), bJ = new THREE.Vector3(), bM = new THREE.Vector3();
 const bS = { h: 0, gx: 0, gz: 0 }, bMat = new THREE.Matrix4();
-// the pill's up axis: tipped into the turn by her lean
+// the pill's up axis, tipped by her lean
 function leanAxis(out) {
   const L = sk.grounded ? (sk.lean || sk.edgeA) : 0;
   return out.set(Math.cos(sk.heading) * Math.sin(L), Math.cos(L), Math.sin(sk.heading) * Math.sin(L));
 }
-// deepest overlap of a ball with any solid box: the depth (0 for none), and the push-out direction in n
+// deepest ball overlap with any solid box: depth (0 for none), push-out direction in n
 function ballVsSolids(px, py, pz, r, n) {
   let best = 0;
   for (const b of SOLIDS) {
-    // far from this box's footprint (hx + hz reaches past any corner): skip it, there are 1,700 of them
+    // quick reject: hx + hz reaches past any corner
     if (Math.abs(px - b.x) > b.hx + b.hz + r || Math.abs(pz - b.z) > b.hx + b.hz + r) continue;
     const dx = px - b.x, dz = pz - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz, y = py - b.y;
     let eu = u - clamp(u, -b.hx, b.hx), ey = y - clamp(y, -b.hy, b.hy), ev = v - clamp(v, -b.hz, b.hz), depth;
@@ -3690,7 +3594,7 @@ function ballVsSolids(px, py, pz, r, n) {
     if (d > 1e-6) {
       if (d >= r) continue;
       depth = r - d; eu /= d; ey /= d; ev /= d;
-    } else {                    // centre inside the box: out through the nearest face
+    } else {                    // centre inside: out through the nearest face
       const fu = b.hx - Math.abs(u), fy = b.hy - Math.abs(y), fv = b.hz - Math.abs(v);
       eu = ey = ev = 0;
       if (fu <= fy && fu <= fv) { eu = Math.sign(u) || 1; depth = fu + r; }
@@ -3701,8 +3605,7 @@ function ballVsSolids(px, py, pz, r, n) {
   }
   return best;
 }
-// The pill against walls and boxes, swept along this step's path so a fast skier can't pass through.
-// Glancing hits slide her along the face; only a square, fast hit bails.
+// The pill against walls and boxes, swept along the step so fast skiers can't tunnel. Glancing hits slide; square fast hits bail.
 function solidCollide() {
   if (!SOLIDS.length || sk.crashed) return;
   leanAxis(bodyAxis);
@@ -3726,8 +3629,8 @@ function solidCollide() {
     if (physics.crashes && -into > BAIL.HIT) { startBail(bodyHit, -into); return; }
     sk.vel.addScaledVector(bodyHit, -into);
     const along = sk.vel.length();
-    sk.vel.multiplyScalar(1 - 0.5 * (-into / (along - into)));   // square hits scrub more than glancing ones
-    // stopped against it on a slope, ease along it on the downhill side so she's never pinned
+    sk.vel.multiplyScalar(1 - 0.5 * (-into / (along - into)));   // square hits scrub more
+    // pinned on a slope: ease along the downhill side
     if (sk.grounded && Math.hypot(sk.vel.x, sk.vel.z) < 1) {
       const s = sample(sk.pos.x, sk.pos.z);
       const side = (-bodyHit.z * -s.gx + bodyHit.x * -s.gz) >= 0 ? 1 : -1;
@@ -3737,9 +3640,8 @@ function solidCollide() {
     return;
   }
 }
-// Knocked down: the pill and plate become one flat box where she stood, keeping her speed.
-// A hit (n = the face's outward direction) bounces her off it and flips her backward, away from it;
-// a bad landing pitches her forward over her skis and rolls her toward the side she was sliding.
+// Bail: the pill and plate become one flat box, keeping her speed. A wall hit (n = outward face normal) bounces
+// and flips her backward; a bad landing pitches her forward and rolls her toward her slide.
 function startBail(n, hit) {
   leanAxis(bodyAxis);
   bA.set(Math.cos(sk.heading), 0, Math.sin(sk.heading));
@@ -3768,7 +3670,7 @@ function invInertia(v, out) {
   out.set(out.x / BAIL_I.x, out.y / BAIL_I.y, out.z / BAIL_I.z);
   return out.applyQuaternion(bail.q);
 }
-// how much an impulse along d at r (from the centre) changes the point's speed along d
+// speed change along d at r (from the centre) per unit impulse along d
 function pointMass(r, d) {
   invInertia(bA.crossVectors(r, d), bA);
   return 1 + d.dot(bA.cross(r));
@@ -3777,7 +3679,7 @@ function push(r, J) {
   bail.vel.add(J);
   bail.w.add(invInertia(bA.crossVectors(r, J), bA));
 }
-// The flat box tumbling: a rigid body whose eight corners hit the snow (and box tops) with bounce and friction.
+// The bail box as a rigid body: eight corners hit snow and box tops with bounce and friction.
 function bailStep(dt) {
   sk.crashT += dt;
   const SUB = 3, h = dt / SUB;
@@ -3816,7 +3718,7 @@ function bailStep(dt) {
       }
     }
     if (deep > 0) bail.pos.addScaledVector(bM, deep * 0.8);
-    // walls and the sides of boxes
+    // walls and box sides
     const d = ballVsSolids(bail.pos.x, bail.pos.y, bail.pos.z, 0.35, bN);
     if (d) {
       bail.pos.addScaledVector(bN, d);
@@ -3877,12 +3779,11 @@ function treeCollide() {
         if (!sk.crashed && physics.crashes && -into > BAIL.HIT) {
           startBail(tmpB.set(nx, 0, nz), -into);
         } else {
-          // Brushing a trunk: lose the part of your speed going into it and slide round it.
-          // A real knock is still a hard stop.
+          // Brushing a trunk: lose the speed into it and slide round; a real knock is a hard stop.
           sk.vel.x -= into * nx;
           sk.vel.z -= into * nz;
           if (-into > 1) sk.vel.multiplyScalar(0.3);
-          // Stopped dead against it, ease round on the downhill side so you're never pinned.
+          // stopped dead against it: ease round on the downhill side
           if (!sk.crashed && sk.grounded && Math.hypot(sk.vel.x, sk.vel.z) < 1) {
             const s = sample(sk.pos.x, sk.pos.z);
             const side = (-nz * -s.gx + nx * -s.gz) >= 0 ? 1 : -1;
@@ -3894,7 +3795,7 @@ function treeCollide() {
     }
   }
 }
-// Collisions need the trees around the skier even before the camera has drawn them.
+// Collisions need the trees around the skier before the camera draws them.
 function ensureTreesNear(x, z) {
   const P = PAGE * CELL;
   const pi = Math.floor((x - X0) / P), pj = Math.floor((z - Z0) / P);
@@ -3936,7 +3837,7 @@ function step() {
   else airStep(dt);
   input.jump = false;
   if (hockeyStop && (sk.vel.length() < 1 || sk.crashed || !sk.grounded)) hockeyStop = false;
-  // A swipe's push waits out the pole cooldown, but not a fall or a jump.
+  // a swipe's push waits out the pole cooldown, not a fall or jump
   if (poleSwipe && (sk.poleT > 0 || sk.crashed || !sk.grounded || !physics.momentum)) poleSwipe = false;
   sk.landT = Math.max(0, sk.landT - dt);
   ensureTreesNear(sk.pos.x, sk.pos.z);
@@ -3944,15 +3845,14 @@ function step() {
   treeCollide();
   if (sk.crashed) { bail.pos.x = sk.pos.x; bail.pos.z = sk.pos.z; bail.vel.copy(sk.vel); }
   solidCollide();
-  // FreePlay never dead-ends: stalling on flat ground for a few seconds (the base, a flat cat track)
-  // or skiing off the edge of the map takes you back to the summit. Stopped on a slope, you can always
-  // point downhill and go, so that never counts.
+  // FreePlay never dead-ends: stalled on flat ground or off the map edge, you go back to the summit.
+  // Stopped on a slope never counts: you can point downhill and go.
   const under = sample(sk.pos.x, sk.pos.z);
   if (!sk.crashed && sk.grounded && sk.vel.length() < 1.5 && Math.hypot(under.gx, under.gz) < FLAT && !sk.pole) sk.stopT += dt;
   else sk.stopT = 0;
   if (sk.stopT > STOP_TIME || offMap(sk.pos.x, sk.pos.z)) sendBack();
   solidY = null;
-  // into a lift's ring of light: ride it up
+  // into a lift's ring: ride it up
   if (phase === 'skiing' && !sk.crashed) for (const R of RIDES) {
     if (Math.hypot(sk.pos.x - R.ring.x, sk.pos.z - R.ring.z) < RING_R - 0.3 && Math.abs(sk.pos.y - R.ring.y) < 2) { startRide(R); break; }
   }
@@ -3978,8 +3878,7 @@ function updateCamera(p, dt) {
   look.copy(p).addScaledVector(camDir, 4);
   look.y = p.y + 1.0;
   camera.lookAt(look);
-  // Motion feel: the camera banks into the turn with the sideways g you're pulling.
-  // Motion feel: the camera tilts gently with her lean (up to 6 deg), easing in so it never jolts.
+  // Motion feel: the camera tilts with her lean (up to 6 degrees), easing in.
   const bankTo = physics.feel && sk.grounded && !sk.crashed ? clamp((sk.lean || sk.edgeA) * 0.11, -0.105, 0.105) : 0;
   sk.roll += (bankTo - sk.roll) * (cameraSnap ? 1 : 1 - Math.exp(-2 * dt));
   camera.rotateZ(-sk.roll);
@@ -3989,15 +3888,14 @@ function updateCamera(p, dt) {
   cameraSnap = false;
 }
 
-// On the chair: behind it and a little above, looking up the line. Goldie sits on the seat in her sit frame;
-// RIDE_SEAT is her sprite's base (the tails of her hanging skis) below the cable, so her hips rest on the cushion.
+// On the chair: camera behind and above, looking up the line. RIDE_SEAT is her sprite's base below the cable.
 const RIDE_SEAT = -3.05, rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function rideCamera(p) {
   const fx = Math.sin(sk.heading), fz = -Math.cos(sk.heading);
   const R = ride.R, ahead = Math.min(ride.d + 30, R.d1 + LOAD);
   carrierAt(R.lp, ahead, rideLook);
   camera.position.set(p.x - fx * 4.5, p.y - 1.5, p.z - fz * 4.5);
-  // the sky is a band: never tip up so far that its top edge shows
+  // the sky is a band: don't tip up far enough to show its top edge
   const dist = Math.hypot(rideLook.x - camera.position.x, rideLook.z - camera.position.z);
   camera.lookAt(rideLook.x, Math.min(rideLook.y - 1.9, camera.position.y - dist * 0.02), rideLook.z);
   if (Math.abs(camera.fov - 60) > 0.05) { camera.fov = 60; camera.updateProjectionMatrix(); }
@@ -4060,7 +3958,7 @@ function updateFreecam(dt) {
   free.pos.addScaledVector(free.vel, dt);
   camera.position.copy(free.pos);
   camera.lookAt(look.copy(free.pos).add(freeF));
-  // high up, push the near plane out so far-off ground keeps its depth precision
+  // high up, push the near plane out for depth precision
   const near = clamp((free.pos.y - groundY(free.pos.x, free.pos.z)) * 0.05, 0.5, 25);
   if (Math.abs(near - camera.near) > 0.02 * camera.near) { camera.near = near; camera.updateProjectionMatrix(); }
 }
@@ -4082,18 +3980,18 @@ function render(alpha, dt) {
   updateTrees(snap);
   sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
 
-  // Sprite: turn to face the camera around the vertical axis only.
+  // Sprite faces the camera around the vertical axis only.
   skierMesh.position.copy(p);
   if (riding) skierMesh.position.y += RIDE_SEAT;
   const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
   skierMesh.rotation.y = yaw;
-  // Motion feel: Goldie leans into the turn as far as her skis are on edge (mirrored when seen from the front).
+  // Motion feel: she leans with her edge angle (mirrored seen from the front).
   skierMesh.rotation.z = physics.feel && sk.grounded && !sk.crashed ? -sk.edgeA * 0.55 * (facingCam(p) > 0.35 ? -1 : 1) : 0;
-  // Sun in the sprite's space: x along the sprite's right, z toward the camera.
+  // Sun in sprite space: x along its right, z toward the camera.
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   skierMat.uniforms.sunLocal.value.set(SUN_DIR.x * cy - SUN_DIR.z * sy, SUN_DIR.y, SUN_DIR.x * sy + SUN_DIR.z * cy);
   tmpA.set(camera.position.x - p.x, 0, camera.position.z - p.z).normalize();
-  // Camera angle round her: 0 behind, 180 in front, snapped to the sheet's 45 degree rows; her left side is mirrored.
+  // Camera angle round her (0 behind, 180 in front), snapped to the sheet's 45 degree rows; left side mirrored.
   const ahead = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
   const side = tmpA.x * Math.cos(sk.heading) + tmpA.z * Math.sin(sk.heading);
   const mirror = side < 0;
@@ -4103,7 +4001,7 @@ function render(alpha, dt) {
   const U = skierMat.uniforms;
   U.frameCol.value = frame; U.frameRow.value = row; U.mirror.value = mirror && !sk.crashed ? 1 : 0; sk.frame = frame;
   if (sk.crashed) {
-    // the behind-view wipeout frame turned so her body lies along the box (in the drawing her head points straight down), centred on it
+    // wipeout frame turned to lie along the bail box, centred on it
     bA.set(0, 0, 1).applyQuaternion(bail.q).transformDirection(camera.matrixWorldInverse);
     const th = Math.atan2(-bA.x, bA.y) - Math.PI, c = SPRITE_H / 2 - 0.04;
     skierMesh.rotation.z = th;
@@ -4129,7 +4027,7 @@ function render(alpha, dt) {
   updateHudMap();
 }
 
-// The collision shapes as wireframes (Tab menu: Show collision shapes)
+// Collision shapes as wireframes (Tab: Show collision shapes)
 const wire = (geo, color) => {
   const m = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1), new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
   m.renderOrder = 10; m.frustumCulled = false; m.visible = false; scene.add(m);
@@ -4150,7 +4048,7 @@ function updateShapes(p) {
   leanAxis(shapeU);
   pillWire.position.copy(p).addScaledVector(shapeU, BODY.H / 2);
   pillWire.quaternion.setFromUnitVectors(UP, shapeU);
-  // the plate lies on the snow along her skis, rolled onto its edge as she leans
+  // plate on the snow along her skis, rolled by her lean
   normalFrom(sample(p.x, p.z), shapeU);
   skiDir(shapeU, shapeF);
   shapeR.crossVectors(shapeF, shapeU).normalize();
@@ -4163,7 +4061,7 @@ function updateShapes(p) {
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
-  // the pixel look draws the short side at 180 pixels and scales up without smoothing, like the World Kit
+  // pixel look: short side at 180 px, upscaled without smoothing
   renderer.setPixelRatio(pixelLook ? 180 / Math.min(w, h) : Math.min(window.devicePixelRatio || 1, 2));
   canvas.style.imageRendering = pixelLook ? 'pixelated' : 'auto';
   renderer.setSize(w, h);
@@ -4171,14 +4069,14 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
-// A window dragged to a screen with a different pixel density may not fire resize.
+// A window moved to another pixel density may not fire resize.
 (function watchDensity() {
   matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener('change', () => { resize(); watchDensity(); }, { once: true });
 })();
 
 // ---------- Main loop ----------
 let manual = false, acc = 0, last = performance.now();
-let fps = 0, fpsN = 0, fpsT = 0;             // frames a second, counted over half a second for the speed readout
+let fps = 0, fpsN = 0, fpsT = 0;             // counted over half a second
 function frame(now) {
   requestAnimationFrame(frame);
   fpsN++; fpsT += now - last;
@@ -4211,7 +4109,7 @@ window.__golden = {
   get free() { return free; },
   get menuOpen() { return !debugEl.hidden; },
   freecam(on) { setFreecam(on); },
-  // run n fixed steps; `hold` overrides input each step: { steer, tuck, brake, jump }
+  // run n fixed steps; hold overrides input: { steer, tuck, brake, jump }
   step(n, hold) {
     testHold = hold || null;
     for (let k = 0; k < n; k++) {
