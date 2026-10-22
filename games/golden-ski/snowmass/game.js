@@ -240,9 +240,29 @@ const SOLIDS = [];
 function nearSolid(x, z, pad) {
   return SOLIDS.some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
 }
+// SOLIDS bucketed in 32 m cells, each box in every cell its reach (plus 1 m for the body) touches, in SOLIDS order;
+// rebuilt whenever boxes are added
+const SOLID_CELL = 32, solidGrid = new Map(), NO_SOLIDS = [];
+let solidGridN = -1;
+function solidsAt(x, z) {
+  if (solidGridN !== SOLIDS.length) {
+    solidGrid.clear();
+    SOLIDS.forEach((b) => {
+      const R = b.hx + b.hz + 1;
+      for (let j = Math.floor((b.z - R) / SOLID_CELL); j <= Math.floor((b.z + R) / SOLID_CELL); j++)
+        for (let i = Math.floor((b.x - R) / SOLID_CELL); i <= Math.floor((b.x + R) / SOLID_CELL); i++) {
+          const k = cellKey(i, j);
+          if (!solidGrid.has(k)) solidGrid.set(k, []);
+          solidGrid.get(k).push(b);
+        }
+    });
+    solidGridN = SOLIDS.length;
+  }
+  return solidGrid.get(cellKey(Math.floor(x / SOLID_CELL), Math.floor(z / SOLID_CELL))) || NO_SOLIDS;
+}
 let solidY = null;              // skier height during a step: box tops are ground only from above
 function solidTop(x, z, out) {
-  for (const b of SOLIDS) {
+  for (const b of solidsAt(x, z)) {
     const dx = x - b.x, dz = z - b.z;
     if (Math.abs(dx) > b.hx + b.hz || Math.abs(dz) > b.hx + b.hz) continue;
     const u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz;
@@ -374,9 +394,12 @@ const LIGHT_GLSL = /* glsl */ `
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
     return texture2D(uShadow, vec2(uv.x, 1.0 - uv.y)).r;
   }
+  // LAMPS is defined only at night (applyTime), so daytime shaders skip the loop
   vec3 lamps(vec3 p, vec3 n) {
     vec3 l = vec3(0.0);
+  #ifdef LAMPS
     for (int i = 0; i < 4; i++) { vec3 v = uLamps[i] - p; float d = length(v); l += uLampC * band0(max(0.0, dot(n, v / d)) / (1.0 + d * d / 160.0)); }
+  #endif
     return l;
   }
   vec3 finish(vec3 alb, vec3 l, float dist, float cap) {
@@ -565,6 +588,26 @@ for (let sj = 0; sj < NCZ; sj += SUPER) {
     chunks.push(sup);
   }
 }
+// ---------- Work queue ----------
+// Heavy builds (terrain sizes, run meshes, tree pages) wait here and run nearest first, WORK_MS a frame, so arriving
+// somewhere new is spread over frames. Whatever is showing stays until its replacement is built.
+const WORK_MS = 3, work = new Map();
+let workAll = false;            // a snapped camera (start, teleport) runs everything at once, behind the fade
+function queueWork(key, d, run) {
+  const w = work.get(key);
+  if (w) w.d = d; else work.set(key, { d, run });
+}
+// one queue key per (object, level)
+const workKey = (o, level) => ((o.workKeys ||= [])[level] ||= {});
+function runWork() {
+  const t0 = performance.now();
+  while (work.size && (workAll || performance.now() - t0 < WORK_MS)) {
+    let bk, bw;
+    for (const [k, w] of work) if (!bw || w.d < bw.d) { bk = k; bw = w; }
+    work.delete(bk);
+    bw.run();
+  }
+}
 const pieceDist = (p, cx, cz) => Math.hypot(Math.max(0, X0 + p.i0 * CELL - cx, cx - X0 - p.i1 * CELL), Math.max(0, Z0 + p.j0 * CELL - cz, cz - Z0 - p.j1 * CELL));
 function showPiece(p, level) {
   if (level === p.level) return;
@@ -574,19 +617,29 @@ function showPiece(p, level) {
   if (level !== 0 && level !== 1 && p.meshes[0]) { scene.remove(p.meshes[0]); p.meshes[0].geometry.dispose(); p.meshes[0] = null; }
   p.level = level;
 }
+// true once a piece's mesh at this level exists; otherwise queue it (or, with nothing of the area showing, build it now)
+function terrainReady(p, level, d, now) {
+  if (level < 0 || p.meshes[level]) return true;
+  if (now || workAll) { p.meshes[level] = buildChunk(p, level); return true; }
+  queueWork(workKey(p, level), d, () => { if (!p.meshes[level]) { p.meshes[level] = buildChunk(p, level); p.meshes[level].visible = false; } });
+  return false;
+}
 function updateTerrain() {
   const cx = camera.position.x, cz = camera.position.z;
   for (const sup of chunks) {
-    const d = pieceDist(sup, cx, cz);
+    const d = pieceDist(sup, cx, cz), kidsShown = sup.kids.some((k) => k.level >= 0);
     if (d >= LOD_DIST[1]) {
-      showPiece(sup, d < LOD_DIST[2] ? 2 : d < LOD_DIST[3] ? 3 : 4);
+      const level = d < LOD_DIST[2] ? 2 : d < LOD_DIST[3] ? 3 : 4;
+      if (!terrainReady(sup, level, d, sup.level < 0 && !kidsShown)) continue;
+      showPiece(sup, level);
       for (const k of sup.kids) showPiece(k, -1);
     } else {
+      const dk = sup.kids.map((k) => pieceDist(k, cx, cz)), lv = dk.map((v) => v < LOD_DIST[0] ? 0 : v < LOD_DIST[1] ? 1 : 2);
+      const ok = sup.kids.map((k, n) => terrainReady(k, lv[n], dk[n], sup.level < 0 && k.level < 0));
+      // the far piece stays until every kid can replace it
+      if (!kidsShown && sup.level >= 0 && !ok.every(Boolean)) continue;
       showPiece(sup, -1);
-      for (const k of sup.kids) {
-        const dk = pieceDist(k, cx, cz);
-        showPiece(k, dk < LOD_DIST[0] ? 0 : dk < LOD_DIST[1] ? 1 : 2);
-      }
+      sup.kids.forEach((k, n) => { if (ok[n]) showPiece(k, lv[n]); });
     }
   }
 }
@@ -732,6 +785,7 @@ const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5 };
 const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0];      // trunk radius as a share of height
 const PAGE = 32;
 const pages = new Map();
+let shAt = null, shDirty = false;              // shadow canvas centre; a page built inside it marks it for a repaint
 const treeCells = new Map();                  // 8 m cells -> trees, for collisions
 const cellKey = (ix, iz) => (ix + 4096) * 8192 + (iz + 4096);
 function addObstacle(t) {
@@ -791,6 +845,8 @@ function makePage(pi, pj) {
   for (const t of PROPS.get(key) || []) list.push(t);
   pg = Object.assign({ list, rocks }, pageData(list, pi, pj));
   pages.set(key, pg);
+  const P = PAGE * CELL, px = X0 + pi * P, pz = Z0 + pj * P;
+  if (shAt && Math.max(Math.abs(px + P / 2 - shAt.x), Math.abs(pz + P / 2 - shAt.z)) < SH_SIZE / 2 + P / 2 + 60) shDirty = true;
   return pg;
 }
 // near: every tree, sorted into 4 x 4 squares of 80 m (sub[q]..sub[q + 1]) so only nearby squares are sent.
@@ -929,9 +985,12 @@ function updateTrees(force) {
       if (a < 0 || b < 0 || a * PAGE >= NX || b * PAGE >= NZ) continue;
       const x0 = X0 + a * P, z0 = Z0 + b * P;
       if (Math.hypot(x0 + P / 2 - cx, z0 + P / 2 - cz) > TREE_FAR + P) continue;
-      const pg = makePage(a, b);
-      inRange.push(pg);
       const d = boxDist(x0, z0, P);
+      // pages not built yet are queued; when one lands the trees are picked again
+      let pg = pages.get(a * 1000 + b);
+      if (!pg && workAll) pg = makePage(a, b);
+      if (!pg) { queueWork(workKey(pages, a * 1000 + b), d, () => { if (!pages.has(a * 1000 + b)) { makePage(a, b); treeAt = null; treePage = ''; } }); continue; }
+      inRange.push(pg);
       if (d > TREE_FAR) continue;
       // near: only squares that can come within TREE_NEAR before the next pick
       if (d < TREE_NEAR[1] + TREE_STEP + 20) {
@@ -1417,6 +1476,7 @@ const carriers = { chair: [], cabin: [], bar: [] };
 const liftPaths = [];
 const LIFT_ENDS = LIFTS.flatMap((l) => [l.points[0], l.points[l.points.length - 1]].map((p) => ({ lift: l, x: p[0], z: p[1] })));
 for (const lift of LIFTS) {
+  lift.partsFrom = liftParts.length;
   const st = LIFT_STYLE[lift.kind] || LIFT_STYLE.chair_lift;
   // terminals at the ends, towers between; drop points bunched near a terminal
   const raw = lift.points.map((p) => [p[0], p[1]]);
@@ -1551,6 +1611,8 @@ for (const lift of LIFTS) {
   for (let k = 1; k < path.length; k++) s.push(s[k - 1] + Math.hypot(path[k][0] - path[k - 1][0], path[k][2] - path[k - 1][2]));
   const L = s[s.length - 1];
   const lp = { path, s, L, arm: st.arm, speed: st.speed, shift: 0, name: lift.name, kind: lift.kind, pts, g, stn };
+  const xs = path.map((q) => q[0]), zs = path.map((q) => q[2]);
+  lp.box = [Math.min(...xs) - st.arm, Math.max(...xs) + st.arm, Math.min(...zs) - st.arm, Math.max(...zs) + st.arm];
   liftPaths.push(lp);
   for (let k = 0; k < path.length - 1; k++) {
     const dx = path[k + 1][0] - path[k][0], dz = path[k + 1][2] - path[k][2], d = Math.hypot(dx, dz) || 1;
@@ -1569,7 +1631,11 @@ for (const lift of LIFTS) {
   }
   for (let d = 0; d < 2 * L; d += st.gap) carriers[st.carrier].push({ lp, s0: d });
 }
-scene.add(new THREE.Mesh(merge(liftParts), modelMat));
+// one mesh per lift, so the camera skips lifts out of view
+LIFTS.forEach((lift, n) => {
+  const parts = liftParts.slice(lift.partsFrom, n + 1 < LIFTS.length ? LIFTS[n + 1].partsFrom : liftParts.length);
+  if (parts.length) scene.add(new THREE.Mesh(merge(parts), modelMat));
+});
 // station aprons: groomed snow, drawn just in front of the ground
 if (apronGeos.length) {
   const n = apronGeos.reduce((a, g) => a + g.attributes.position.count, 0), p = new Float32Array(n * 3), cov = new Float32Array(n * 4);
@@ -1696,8 +1762,10 @@ function alongRun(run, dist) {
 // blending back to the 10 m mountain over BLEND m past the edge, with the 10 m ground cut away underneath.
 const PCELL = 2, BLEND = 18, BERM_W = 1.6;
 // 64 x 64-point tiles (128 m) only where runs reach, meshed 2 x 2 tiles at a time: 2 m cells within PATCH_NEAR,
-// 4 m to PATCH_FAR, then the 10 m ground draws the runs. Physics always uses the 2 m grid.
-const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 2, PATCH_NEAR = 250, PATCH_FAR = 800;
+// 4 m to PATCH_MID, 8 m to PATCH_FAR, then the 10 m ground draws the runs. Physics always uses the 2 m grid.
+const TILE_BITS = 6, TILE = 1 << TILE_BITS, TT = TILE * TILE, MESH_TILES = 2, PATCH_NEAR = 250, PATCH_MID = 400, PATCH_FAR = 800;
+const PATCH_STEP = [1, 2, 4];    // cell size per level, in 2 m points
+const PATCH_AHEAD = 120;         // m: meshes are built this far ahead of where they show
 const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 // the 10 m mesh's own surface: the same two triangles per cell buildChunk draws
 function meshY(x, z) {
@@ -1775,7 +1843,7 @@ if (RUN_DATA) {
     if (!groups.has(ga * 10000 + gj)) {
       const a0 = ga * TILE * MESH_TILES, j0 = gj * TILE * MESH_TILES, gs = TILE * MESH_TILES * PCELL;
       const chunk = chunks.get(Math.floor(tl.a0 / (TILE * CH)) * 1000 + Math.floor(tl.j0 / (TILE * CH)));
-      const g = { tiles: [], a0, j0, x0: x0 + a0 * PCELL, z0: z0 + j0 * PCELL, x1: x0 + a0 * PCELL + gs, z1: z0 + j0 * PCELL + gs, meshes: [null, null], level: -1, chunk };
+      const g = { tiles: [], a0, j0, x0: x0 + a0 * PCELL, z0: z0 + j0 * PCELL, x1: x0 + a0 * PCELL + gs, z1: z0 + j0 * PCELL + gs, meshes: [null, null, null], level: -1, chunk };
       groups.set(ga * 10000 + gj, g);
       chunk.groups.push(g);
     }
@@ -1783,7 +1851,7 @@ if (RUN_DATA) {
   }
   P.groups = [...groups.values()];
   const dropMeshes = (g) => {
-    for (let l = 0; l < 2; l++) if (g.meshes[l]) { scene.remove(g.meshes[l]); g.meshes[l].geometry.dispose(); g.meshes[l] = null; }
+    for (let l = 0; l < g.meshes.length; l++) if (g.meshes[l]) { scene.remove(g.meshes[l]); g.meshes[l].geometry.dispose(); g.meshes[l] = null; }
     g.level = -1;
   };
   // The 10 m ground is cut away in 4 m blocks the fine mesh fully covers.
@@ -1791,8 +1859,19 @@ if (RUN_DATA) {
   const tex = new THREE.DataTexture(mask, mw, mh, THREE.RedFormat, THREE.UnsignedByteType);
   tex.magFilter = tex.minFilter = THREE.NearestFilter;
   const covered = (a, j) => { const c = P.at(a, j); return c >= 0 && P.aedge[c] * step < BLEND; };
+  // only the changed rows are uploaded once the texture is on the GPU (the whole mask is about 8 MB)
+  const uploadMask = (r0, r1) => {
+    const gl = renderer.getContext(), tp = renderer.properties.get(tex);
+    if (!tp.__webglTexture || tp.__version !== tex.version) { tex.needsUpdate = true; return; }
+    renderer.state.bindTexture(gl.TEXTURE_2D, tp.__webglTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r0, mw, r1 - r0, gl.RED, gl.UNSIGNED_BYTE, mask, r0 * mw);
+  };
   const maskTiles = (list) => {
+    if (!list.length) return;
+    let r0 = mh, r1 = 0;
     for (const tl of list) {
+      r0 = Math.min(r0, tl.j0 / 2); r1 = Math.max(r1, (tl.j0 + TILE) / 2);
       for (let bj = tl.j0 / 2; bj < (tl.j0 + TILE) / 2; bj++) {
         for (let bi = tl.a0 / 2; bi < (tl.a0 + TILE) / 2; bi++) {
           let all = true;
@@ -1801,7 +1880,7 @@ if (RUN_DATA) {
         }
       }
     }
-    tex.needsUpdate = true;
+    uploadMask(r0, Math.min(r1, mh));
   };
   const crw = (t, w, o) => {
     const t2 = t * t, t3 = t2 * t;
@@ -1910,7 +1989,7 @@ if (RUN_DATA) {
 }
 function buildGroupMesh(P, g, level) {
   if (P.ready) P.ready(g);
-  const s = level ? 2 : 1, side = TILE * MESH_TILES, { hr, edge, wmin } = P;
+  const s = PATCH_STEP[level], side = TILE * MESH_TILES, { hr, edge, wmin } = P;
   const vert = new Map(), pos = [], cov = [], nrm = [], idx = [];
   const h = (a, j) => { const c = P.at(a, j); return c < 0 ? null : hr[c]; };
   const v = (a, j, drop) => {
@@ -1976,18 +2055,32 @@ function patchEdge(x, z) {
   if (c00 < 0 || c10 < 0 || c01 < 0 || c11 < 0) return undefined;
   return (E[c00] * (1 - tx) + E[c10] * tx) * (1 - tz) + (E[c01] * (1 - tx) + E[c11] * tx) * tz;
 }
-// 2 m near, 4 m to PATCH_FAR, none past it (the shaders cut at PATCH_FAR). Free the 2 m mesh past PATCH_FAR.
+// Levels by distance (none past PATCH_FAR, where the shaders cut). The level a group will need PATCH_AHEAD m sooner
+// is built in the work queue; one that has nothing showing yet builds at once. Finer meshes are freed once well away.
+const patchLevel = (d) => d >= PATCH_FAR ? -1 : d < PATCH_NEAR ? 0 : d < PATCH_MID ? 1 : 2;
 function updatePatch() {
   if (!PATCH) return;
   const cx = camera.position.x, cz = camera.position.z;
   if (runStream) runStream(cx, cz);
   for (const g of PATCH.groups) {
     const d = Math.hypot(Math.max(g.x0 - cx, 0, cx - g.x1), Math.max(g.z0 - cz, 0, cz - g.z1));
-    const level = !patchOn || d >= PATCH_FAR || (PATCH.groupOk && !PATCH.groupOk(g)) ? -1 : d < PATCH_NEAR ? 0 : 1;
+    const off = !patchOn || (PATCH.groupOk && !PATCH.groupOk(g));
+    const level = off ? -1 : patchLevel(d), ahead = off ? -1 : patchLevel(Math.max(0, d - PATCH_AHEAD));
+    if (ahead >= 0 && ahead !== level && !g.meshes[ahead] && !workAll) {
+      queueWork(workKey(g, ahead), d, () => { if (!g.meshes[ahead] && PATCH.groupOk(g)) g.meshes[ahead] = buildGroupMesh(PATCH, g, ahead); });
+    }
     if (level === g.level) continue;
-    if (level >= 0 && !g.meshes[level]) g.meshes[level] = buildGroupMesh(PATCH, g, level);
+    if (level >= 0 && !g.meshes[level]) {
+      if (g.level >= 0 && !workAll) {
+        queueWork(workKey(g, level), d, () => { if (!g.meshes[level] && PATCH.groupOk(g)) g.meshes[level] = buildGroupMesh(PATCH, g, level); });
+        continue;
+      }
+      g.meshes[level] = buildGroupMesh(PATCH, g, level);
+    }
     g.meshes.forEach((m, l) => { if (m) m.visible = l === level; });
-    if (level < 0 && g.meshes[0]) { scene.remove(g.meshes[0]); g.meshes[0].geometry.dispose(); g.meshes[0] = null; }
+    for (let l = 0; l < g.meshes.length; l++) {
+      if (g.meshes[l] && (level < 0 ? l < 2 : l < level - 1)) { scene.remove(g.meshes[l]); g.meshes[l].geometry.dispose(); g.meshes[l] = null; }
+    }
     g.level = level;
   }
 }
@@ -2401,7 +2494,11 @@ function placeCarriers(t) {
   for (const k of Object.keys(carriers)) {
     const m = carrierMeshes[k], e = m.instanceMatrix.array, fm = FAR_OF[k] && carrierMeshes[FAR_OF[k]], fe = fm && fm.instanceMatrix.array;
     let nNear = 0, nFar = 0;
+    // lifts wholly past CHAIR_FAR place no chairs or cabins
+    const far = new Set();
+    if (fm) for (const lp of liftPaths) if (Math.hypot(Math.max(lp.box[0] - cx, 0, cx - lp.box[1]), Math.max(lp.box[2] - cz, 0, cz - lp.box[3])) > CHAIR_FAR) far.add(lp);
     carriers[k].forEach((c) => {
+      if (far.has(c.lp)) return;
       const lp = c.lp, d = (((c.s0 + t * lp.speed + lp.shift) % (2 * lp.L)) + 2 * lp.L) % (2 * lp.L);
       carrierAt(lp, d, cp);
       const x = cp.x, z = cp.z, fx = cp.fx, fz = cp.fz;
@@ -2436,48 +2533,70 @@ function updateLamps() {
 // ---------- Shadows: trees, rocks and towers painted top down around the camera ----------
 const shCanvas = document.createElement('canvas');
 shCanvas.width = shCanvas.height = SH_PX;
-const shCtx = shCanvas.getContext('2d', { willReadFrequently: true });
+const shCtx = shCanvas.getContext('2d');
 const shTex = new THREE.CanvasTexture(shCanvas);
 shTex.magFilter = shTex.minFilter = THREE.NearestFilter; shTex.generateMipmaps = false;
 LIGHT.uShadow.value = shTex;
-let shAt = null, shPix = null;
+let shLast = 0;
+// a caster's shadow: an ellipse along the sun, as painted; shadowGeo() is shared with sunAt
+function shadowGeo() {
+  const s = SUN_DIR, flat = Math.hypot(s.x, s.z) || 1e-3, ang = Math.atan2(s.x, -s.z);
+  return { s, flat, dx: -s.x / flat, dz: -s.z / flat, ang, ca: Math.cos(ang), sa: Math.sin(ang) };
+}
+const shadowLen = (G, h) => Math.min(h * 4, h * G.flat / Math.max(0.15, G.s.y));
+// the tree pages a shadow pass reads: only built ones; a page built later marks the canvas for a repaint
+function forPages(x0, z0, x1, z1, fn) {
+  const P = PAGE * CELL;
+  for (let b = Math.floor((z0 - Z0) / P); b <= Math.floor((z1 - Z0) / P); b++) for (let a = Math.floor((x0 - X0) / P); a <= Math.floor((x1 - X0) / P); a++) {
+    const pg = pages.get(a * 1000 + b);
+    if (pg) fn(pg);
+  }
+}
 function paintShadows(force) {
-  const cx = camera.position.x, cz = camera.position.z;
-  if (!force && shAt && Math.hypot(cx - shAt.x, cz - shAt.z) < SH_SIZE * 0.18) return;
-  shAt = { x: cx, z: cz };
-  const ox = Math.round((cx - SH_SIZE / 2) / 8) * 8, oz = Math.round((cz - SH_SIZE / 2) / 8) * 8;
+  const cx = camera.position.x, cz = camera.position.z, now = performance.now();
+  const moved = !shAt || Math.hypot(cx - shAt.x, cz - shAt.z) >= SH_SIZE * 0.18;
+  if (!force && !moved && !(shDirty && now - shLast > 500)) return;
+  if (moved || force) shAt = { x: cx, z: cz };
+  shDirty = false; shLast = now;
+  const ox = Math.round((shAt.x - SH_SIZE / 2) / 8) * 8, oz = Math.round((shAt.z - SH_SIZE / 2) / 8) * 8;
   LIGHT.uShO.value.set(ox, oz);
-  const g = shCtx, k = SH_PX / SH_SIZE, s = SUN_DIR;
+  const g = shCtx, k = SH_PX / SH_SIZE, G = shadowGeo();
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.fillStyle = '#000'; g.fillRect(0, 0, SH_PX, SH_PX); g.fillStyle = '#fff';
-  const flat = Math.hypot(s.x, s.z) || 1e-3, dx = -s.x / flat, dz = -s.z / flat, ang = Math.atan2(s.x, -s.z);
   const one = (x, z, h, w) => {
-    const len = Math.min(h * 4, h * flat / Math.max(0.15, s.y));
-    const px = (x + dx * len / 2 - ox) * k, pz = (z + dz * len / 2 - oz) * k, r = (len / 2 + w * 0.3) * k;
+    const len = shadowLen(G, h);
+    const px = (x + G.dx * len / 2 - ox) * k, pz = (z + G.dz * len / 2 - oz) * k, r = (len / 2 + w * 0.3) * k;
     if (px < -r || pz < -r || px > SH_PX + r || pz > SH_PX + r) return;
-    g.setTransform(1, 0, 0, 1, px, pz); g.rotate(ang);
+    g.setTransform(1, 0, 0, 1, px, pz); g.rotate(G.ang);
     g.beginPath(); g.ellipse(0, 0, Math.max(0.6, w * k), r, 0, 0, Math.PI * 2); g.fill();
   };
-  const P = PAGE * CELL;
-  const a0 = Math.floor((ox - 60 - X0) / P), a1 = Math.floor((ox + SH_SIZE + 60 - X0) / P);
-  const b0 = Math.floor((oz - 60 - Z0) / P), b1 = Math.floor((oz + SH_SIZE + 60 - Z0) / P);
-  for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) {
-    if (a < 0 || b < 0 || a * PAGE >= NX || b * PAGE >= NZ) continue;
-    const pg = makePage(a, b);
+  forPages(ox - 60, oz - 60, ox + SH_SIZE + 60, oz + SH_SIZE + 60, (pg) => {
     for (const t of pg.list) one(t.x, t.z, t.height, t.height * atlas.rects[t.kind].aspect * 0.32);
     for (const r of pg.rocks) one(r.x, r.z, r.height, r.s * 0.8);
-  }
+  });
   for (const c of casters) one(c.x, c.z, c.h, c.w);
   g.setTransform(1, 0, 0, 1, 0, 0);
   shTex.needsUpdate = true;
-  shPix = g.getImageData(0, 0, SH_PX, SH_PX).data;
 }
-// sun reaching a point, for Goldie
+// sun reaching a point, for Goldie: the same ellipses tested directly, so the canvas is never read back
 function sunAt(x, z) {
-  if (!shPix) return 1;
-  const u = Math.floor((x - LIGHT.uShO.value.x) / SH_SIZE * SH_PX), v = Math.floor((z - LIGHT.uShO.value.y) / SH_SIZE * SH_PX);
-  if (u < 0 || v < 0 || u >= SH_PX || v >= SH_PX) return 1;
-  return 1 - shPix[(v * SH_PX + u) * 4] / 255;
+  if (!shAt) return 1;
+  const G = shadowGeo(), W0 = 0.6 * SH_SIZE / SH_PX;
+  const hit = (cx, cz, h, w) => {
+    const len = shadowLen(G, h), R = len / 2 + w * 0.3, W = Math.max(W0, w);
+    const ex = x - (cx + G.dx * len / 2), ez = z - (cz + G.dz * len / 2);
+    if (Math.abs(ex) > R + W || Math.abs(ez) > R + W) return false;
+    const lx = ex * G.ca + ez * G.sa, ly = -ex * G.sa + ez * G.ca;
+    return (lx / W) * (lx / W) + (ly / R) * (ly / R) <= 1;
+  };
+  let lit = 1;
+  forPages(x - 120, z - 120, x + 120, z + 120, (pg) => {
+    if (!lit) return;
+    for (const t of pg.list) if (hit(t.x, t.z, t.height, t.height * atlas.rects[t.kind].aspect * 0.32)) { lit = 0; return; }
+    for (const r of pg.rocks) if (hit(r.x, r.z, r.height, r.s * 0.8)) { lit = 0; return; }
+  });
+  if (lit) for (const c of casters) if (hit(c.x, c.z, c.h, c.w)) return 0;
+  return lit;
 }
 
 // ---------- Storm snowfall: flakes in a box that rides with the camera ----------
@@ -2524,7 +2643,19 @@ function applyTime(key) {
   treeMat.uniforms.uN.value = key === 'storm' ? atlas.stormNormal : atlas.normal;
   bulbMat.color.set(key === 'night' ? 0xffe9a8 : 0x2a2a2a);
   flakes.visible = key === 'storm';
+  setLamps(key === 'night');
   paintShadows(true);
+}
+// every Snowlight material, in the scene or not yet (run and kicker meshes), recompiled with or without LAMPS
+function setLamps(on) {
+  const mats = new Set([PATCH && PATCH.mat, kickSnowMat, kickMatMat]);
+  scene.traverse((o) => { if (o.material) mats.add(o.material); });
+  for (const m of mats) {
+    if (!m || !m.isShaderMaterial || !m.fragmentShader.includes('lamps(') || !!(m.defines && m.defines.LAMPS) === on) continue;
+    m.defines = Object.assign({}, m.defines);
+    if (on) m.defines.LAMPS = 1; else delete m.defines.LAMPS;
+    m.needsUpdate = true;
+  }
 }
 function setPixelLook(on) {
   pixelLook = on;
@@ -2957,6 +3088,7 @@ const DEBUG_ITEMS = [
   { name: 'Show collision shapes', get: () => physics.shapes, set: (on) => { physics.shapes = on; } },
   { name: 'Motion feel: camera tilt + lean', get: () => physics.feel, set: (on) => { physics.feel = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
+  { name: 'Perf stats (triangles, draws, frame ms)', get: () => perf.on, set: (on) => { perf.on = on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },
   { name: 'Detailed runs (2 m)', get: () => patchOn, set: (on) => setPatch(on) },
   ...Object.keys(TIMES).map((k) => ({ name: TIMES[k].name, radio: true, get: () => timeOfDay === k, set: (on) => { if (on) applyTime(k); } })),
@@ -3585,7 +3717,7 @@ function leanAxis(out) {
 // deepest ball overlap with any solid box: depth (0 for none), push-out direction in n
 function ballVsSolids(px, py, pz, r, n) {
   let best = 0;
-  for (const b of SOLIDS) {
+  for (const b of solidsAt(px, pz)) {
     // quick reject: hx + hz reaches past any corner
     if (Math.abs(px - b.x) > b.hx + b.hz + r || Math.abs(pz - b.z) > b.hx + b.hz + r) continue;
     const dx = px - b.x, dz = pz - b.z, u = b.c * dx - b.s * dz, v = b.s * dx + b.c * dz, y = py - b.y;
@@ -3970,6 +4102,7 @@ function facingCam(p) {
 function render(alpha, dt) {
   const p = view.copy(sk.prev).lerp(sk.pos, alpha);
   const snap = cameraSnap;
+  workAll = snap;
   const riding = phase === 'ride' || phase === 'unload';
   if (free.on) updateFreecam(dt);
   else if (riding) rideCamera(p);
@@ -4020,10 +4153,13 @@ function render(alpha, dt) {
   shadow.visible = !riding;
   if (!riding) updateSpray(p, dt);
   ringMat.uniforms.time.value = performance.now() / 1000;
-  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 2.23694)} mph · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps`;
+  if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 2.23694)} mph · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps${perf.on ? ` · ${Math.round(perf.tris / 1000)}k tris · ${perf.calls} draws · ${perf.ms.toFixed(1)} ms` : ''}`;
   updateWorld(dt);
   skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
+  runWork();
+  workAll = false;
   renderer.render(scene, camera);
+  perf.tris = renderer.info.render.triangles; perf.calls = renderer.info.render.calls;
   updateHudMap();
 }
 
@@ -4077,8 +4213,10 @@ window.addEventListener('resize', resize);
 // ---------- Main loop ----------
 let manual = false, acc = 0, last = performance.now();
 let fps = 0, fpsN = 0, fpsT = 0;             // counted over half a second
+const perf = { on: false, tris: 0, calls: 0, ms: 0 };   // Tab: Perf stats; ms is the game's own work per frame, smoothed
 function frame(now) {
   requestAnimationFrame(frame);
+  const t0 = performance.now();
   fpsN++; fpsT += now - last;
   if (fpsT >= 500) { fps = Math.round(fpsN * 1000 / fpsT); fpsN = 0; fpsT = 0; }
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -4090,6 +4228,7 @@ function frame(now) {
     if (n === 6) acc = 0;
   }
   render(manual ? 1 : acc / STEP, dt);
+  perf.ms += (performance.now() - t0 - perf.ms) * 0.1;
 }
 skierMat.uniforms.frameCol.value = FRAMES.stand;
 resize();
@@ -4129,5 +4268,6 @@ window.__golden = {
   map: { get ready() { return !!hudMap.plain; }, get paintMs() { return hudMap.paintMs; }, setFull: setFullMap, drawMini: drawMiniMap },
   get patch() { return PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
-  solids: SOLIDS, bail, BAIL, kickers: KICKERS, rides: RIDES, ride, startRide, skipRide,
+  solids: SOLIDS, bail, BAIL, kickers: KICKERS,
+  get work() { return work.size; }, perf, rides: RIDES, ride, startRide, skipRide,
 };
