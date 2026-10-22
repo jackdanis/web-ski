@@ -29,6 +29,8 @@ html, body {
   transition: opacity .4s ease;
 }
 #fade.on { opacity: 1; }
+/* The lift ride fades through black. */
+#fade.black { background: #000; }
 /* Debug menu (Tab), for testing on a laptop: one list of settings, nothing else. */
 #debug {
   position: fixed;
