@@ -2,7 +2,8 @@
 
 FreePlay on a true-size Snowmass: Momentum physics with carve turns, the 18 real lifts with a chairlift ride, and
 every run rebuilt from traced outlines on a 2 m grid. FreePlay starts at the Village Express top, facing down
-Sunnyside. What's in the game and what comes next is in the Golden Ski plan (Claude Doc).
+Sunnyside. What's in the game and what comes next is in the
+[Golden Ski plan](https://claude.ai/artifact/QNT5jc4pSLqKkMy6pGxaAm).
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
   On phones, drag to steer, swipe down to pole, swipe up to brake. M or a two-finger tap opens the map.
