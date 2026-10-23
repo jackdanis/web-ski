@@ -4,7 +4,8 @@ Golden Ski: real-time skiing on a true-size Snowmass, for desktop and mobile bro
 with no build step.
 
 The game lives in [`games/golden-ski/snowmass`](games/golden-ski/snowmass) (see its README). The root `index.html`
-opens it straight away, so the GitHub Pages link plays the game.
+opens it straight away, so the GitHub Pages link plays the game. `tools/` holds the scripts that build the
+game's data and art (see its README).
 
 ## Running
 

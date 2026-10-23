@@ -1,36 +1,44 @@
-# Golden Ski: Snowmass (playable mockup)
+# Golden Ski: Snowmass
 
-True-size Snowmass with Momentum physics plus carve turns, the 18 real lifts, and every run on the mountain rebuilt
-from traced outlines. Each run is shaped on a 2 m grid: groomed runs are trimmed and graded so they ski cleanly, and
-expert runs keep the natural unshaped snow. The run tiles are built ahead of time and load by distance as you ski. The
-rest of the mountain gets coarser with distance, and past about 300 m the forest is drawn as clumps of trees instead
-of single trees. FreePlay starts at the Village Express top, facing down Sunnyside.
+FreePlay on a true-size Snowmass: Momentum physics with carve turns, the 18 real lifts with a chairlift ride, and
+every run rebuilt from traced outlines on a 2 m grid. FreePlay starts at the Village Express top, facing down
+Sunnyside. What's in the game and what comes next is in the Golden Ski plan (Claude Doc).
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
-  On phones, drag to steer, swipe down to pole, swipe up to brake.
-- Tab menu (three-finger tap on phones): Freecam, Crashes (off by default), collision shapes, Speed readout, perf stats,
-  Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm, and a start at the top or bottom of any lift.
-- The Speed readout (mph) also shows the frame rate.
-- Goldie is drawn from a sheet pre-rendered from her 3D model: 16 directions (9 drawn, the left side mirrored) at three
-  camera heights, lit by Snowlight from its normal map. While moving her body stands square to the slope. Her skis are
-  a textured pair on the physics ski plate, rolled onto their edges in a turn, and she stands on the snow as drawn.
-- HUD map in the style of the Snowmass trail map: a minimap top-left that turns with Goldie, and the whole mountain
-  (summit at the top, run, lift, peak and base labels) on M or a two-finger tap. It is painted once at load.
-- Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
-  siding and roof snow. The ground blends up to each deck so you can ski on and off, and the post, legs and hut are solid.
-  Chairs are detailed close up, plain further out and hidden past 2.5 km.
-- The Elk Camp Gondola and Sky Cab have their own terminals (a glass hall with a barrel roof), galvanized towers and
-  black Snowmass cabins. At the Elk Camp Gondola top there's the restaurant (with three après posters on its wall) and a
-  maintenance building; all of them are solid.
-- Run edges are lined with trees from a 1 m canopy height map at real forest density. Within about 150 m of you the
-  gaps are packed in so the forest is tight but you can still ski between the trees; farther out only the mapped trees
-  and clumps are drawn. Every tree is solid.
-- Each named run has one trail sign where it begins, with the run's name and its difficulty symbol. Rope lines on
-  bamboo poles run down both edges of the first 170 m of Sunnyside and Max Park.
-- Buildings near the runs are plain stand-in blocks on their real footprints until the real buildings are made.
-- No build step. `data.js` holds the terrain, forest and lifts. `runs.js` holds the run index, the run-edge trees,
-  the signs and the stand-in blocks, and `runs/` holds the 2 m run tiles in 512 m chunks that the game fetches as you
-  get near them. Both are built ahead of time from the run outlines. Three.js loads from jsDelivr.
+  On phones, drag to steer, swipe down to pole, swipe up to brake. M or a two-finger tap opens the map.
+- Tab menu (three-finger tap on phones), for testing: Freecam, Crashes (off by default), collision shapes, speed
+  readout (mph and frame rate), perf stats, pixel look, detailed runs (2 m), Noon / Golden hour / Night / Storm, and
+  a start at the top or bottom of any lift.
+
+## Files
+
+No build step: `index.html` loads `src/main.js` as a module and three.js comes from jsDelivr.
+
+| Path | What's in it |
+| --- | --- |
+| `src/config.js` | Tuning numbers for the skiing, small helpers |
+| `src/state.js` | Game state that more than one file changes |
+| `src/world.js` | Ground sampling: heights, cover, runs, the 2 m run grid, solids, bridges, kickers |
+| `src/scene.js` | Renderer, camera, Snowlight, textures, sky, terrain mesh, work queue, far peaks |
+| `src/buildings.js` | Kit models, detail rings, rocks, lift terminals, the Elk Camp restaurant |
+| `src/trees.js` | Trees, clumps and props, paged in around the camera |
+| `src/lifts.js` | Lift lines, towers, cable, chairs, cabins; kicker meshes |
+| `src/slopes.js` | Signs, ropes, fence, roads, the 2 m run meshes and streaming, start points |
+| `src/ride.js` | The chairlift ride cutscene |
+| `src/atmosphere.js` | Lamps, shadows, storm snow, time of day, pixel look |
+| `src/goldie.js` | Goldie's sprite, skis, shadow and spray |
+| `src/play.js` | Input, Tab menu, freecam, and the simulation (skiing, jumps, collisions, bails) |
+| `src/hudmap.js` | Minimap and full map |
+| `src/main.js` | Rendering, main loop, test hooks (`window.__golden`) |
+| `assets/sprites/` | Goldie's sheet, trees, poles, signs (each with a `_n` normal map) |
+| `assets/textures/` | Snow textures and the station atlas |
+| `assets/sky/` | One sky strip per time of day |
+| `assets/models/` | The Elk Camp restaurant model and texture |
+| `data/mountain.js` | Terrain, forest, lifts and run lines (10 m) |
+| `data/runs.js`, `data/runs/` | Run index, edge trees, signs, stand-in blocks; 2 m run tiles fetched by distance |
+
+The files load in the order of the list in `src/` above (each file imports the one before it), the same order the
+code ran in as one file. `data/runs.js` and `data/runs/` are built by `tools/runs` (see `tools/README.md`).
 
 Data: elevation from USGS 3DEP (public domain). Forest and runs contain modified Copernicus Sentinel data 2025.
 Trees along the runs from the Meta and WRI high resolution canopy height maps (CC BY 4.0). Lift and run lines and

@@ -1,0 +1,347 @@
+<!doctype html><meta charset="utf-8"><body style="margin:0;background:transparent">
+<script src="../vendor/three.min.js"></script><script src="../vendor/GLTFLoader.js">
+</script>
+<script>
+// Pose a stock Mixamo character (Michelle) as a stand-in Goldie and render albedo + normal passes.
+// Body frame: x = her left, y = up, z = forward (travel).
+const V = (x, y, z) => new THREE.Vector3(x, y, z).normalize();
+const deg = Math.PI / 180;
+const COL = { gold: '#e0a526', navy: '#1d2a4d', red: '#c62a2a', boot: '#2a2c33', glove: '#1a1a1e', skin: '#d9a383', lens: '#e08a2a', ski: '#a3262b', skiEdge: '#2b2c31', bindPlate: '#7d828c', skiTop: '#f2f2f2', pole: '#8d929c' };
+
+// Each pose: overall body rotation (yaw, lean = roll toward her left +, pitch = forward +) and segment directions.
+// L/R arrays are [left, right]. mirror() builds the right-turn versions.
+const STAND = { // OG stand: upright from behind, poles planted just outside the skis
+  rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 1, 0.2), head: V(0, 1, 0.05),
+  thigh: [V(0.08, -1, 0.3), V(-0.08, -1, 0.3)], shin: [V(0, -1, -0.25), V(0, -1, -0.25)],
+  arm: [V(0.3, -1, 0.1), V(-0.3, -1, 0.1)], fore: [V(0.25, -0.6, 1), V(-0.25, -0.6, 1)],
+  pole: [V(0.18, -1, -0.15), V(-0.18, -1, -0.15)], skiYaw: [0, 0],
+};
+// Poses copied from the OG photo frames (references/goldie/hires), all seen from the 0 (behind) camera.
+const POSES = {
+  stand: STAND,
+  carve_l: { // skis run diagonally across the bottom, body inclined hard to the left, back to the camera
+    rot: { yaw: 50, roll: 30, pitch: 0 }, look: -50, torso: V(0.4, 1, 1.0), head: V(0.3, 1, 0.5),
+    thigh: [V(0.05, -0.75, 0.8), V(-0.12, -0.9, 0.55)], shin: [V(0.05, -1, -0.5), V(0, -1, -0.4)],
+    arm: [V(0.55, -1, 0.35), V(-0.5, -1, 0.2)], fore: [V(0.2, -0.4, 1), V(-0.3, -0.4, 1)],
+    pole: [V(0.35, -1, -0.1), V(-0.6, -1, -0.8)], skiYaw: [0, 0],
+  },
+  tuck: { // downhill racing tuck (Jack's photo): back flat, knees deep, hands together under the chin, poles tucked back under the arms
+    rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 0.32, 1), head: V(0, 0.9, 0.6),
+    thigh: [V(0.12, -0.25, 1), V(-0.12, -0.25, 1)], shin: [V(0.03, -1, -0.8), V(-0.03, -1, -0.8)],
+    arm: [V(0.2, -0.85, 0.5), V(-0.2, -0.85, 0.5)], fore: [V(-0.3, 0.4, 0.85), V(0.3, 0.4, 0.85)],
+    pole: [V(0.22, 0.05, -1), V(-0.22, 0.05, -1)], skiYaw: [0, 0],
+  },
+  brake: { // OG hockey stop: skis across the bottom, feet pushed out right, upper body hunched left with its back to the camera
+    rot: { yaw: -80, roll: 0, pitch: 0 }, look: 80, torso: V(0.75, 1, 0.8), head: V(0.5, 1, 0.4),
+    thigh: [V(0.05, -0.8, 0.7), V(-0.05, -0.85, 0.6)], shin: [V(0.03, -1, 0.35), V(0, -1, 0.3)],
+    arm: [V(0.6, -1, 0.3), V(-0.7, -1, 0.2)], fore: [V(0.35, -0.5, 1), V(-0.6, -0.3, 0.8)],
+    pole: [V(0.2, -1, -0.2), V(-0.8, -1, -0.4)], skiYaw: [0, 0],
+  },
+  air: { // OG air: legs together, arms wide, skis tilted tips-up and swung left
+    rot: { yaw: 0, roll: 0, pitch: -4 }, torso: V(0, 1, 0.15), head: V(0, 1, 0.1),
+    thigh: [V(0.08, -1, 0.2), V(-0.08, -1, 0.2)], shin: [V(0.02, -1, -0.1), V(-0.02, -1, -0.1)],
+    arm: [V(1, -0.15, 0.1), V(-1, -0.15, 0.1)], fore: [V(1, -0.05, 0.2), V(-1, -0.05, 0.2)],
+    pole: [V(0.55, -1, -0.4), V(-0.55, -1, -0.4)], skiYaw: [30, 30], skiPitch: 30,
+  },
+  land: { // OG land: crouched from behind, arms out low, poles out to the sides
+    rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 1, 0.6), head: V(0, 1, 0.3),
+    thigh: [V(0.12, -0.7, 0.8), V(-0.12, -0.7, 0.8)], shin: [V(0.02, -1, -0.5), V(-0.02, -1, -0.5)],
+    arm: [V(0.9, -0.8, 0.25), V(-0.9, -0.8, 0.25)], fore: [V(0.7, -0.45, 0.8), V(-0.7, -0.45, 0.8)],
+    pole: [V(0.55, -1, -0.3), V(-0.55, -1, -0.3)], skiYaw: [0, 0],
+  },
+  wipeout: { // Jack's bail: spread-eagle with both skis on, lying back on the snow
+    rot: { yaw: 0, roll: 0, pitch: -70 }, torso: V(0, 1, 0), head: V(0, 1, 0.15),
+    thigh: [V(0.5, -1, 0.1), V(-0.5, -1, 0.1)], shin: [V(0.4, -1, -0.05), V(-0.4, -1, -0.05)],
+    arm: [V(1, 0.45, 0.1), V(-1, 0.45, 0.1)], fore: [V(0.8, 0.8, 0.1), V(-0.8, 0.8, 0.1)],
+    pole: [V(1, 0.2, 0.3), V(-1, 0.2, 0.3)], skiYaw: [0, 0], ground: 'body',
+  },
+  sit: { // chairlift seat: thighs level, shins hanging, skis on, poles held low
+    rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 1, -0.08), head: V(0, 1, 0.08),
+    thigh: [V(0.12, -0.08, 1), V(-0.12, -0.08, 1)], shin: [V(0.03, -1, 0.15), V(-0.03, -1, 0.15)],
+    arm: [V(0.25, -1, 0.35), V(-0.25, -1, 0.35)], fore: [V(-0.15, -0.25, 1), V(0.15, -0.25, 1)],
+    pole: [V(0.15, -1, 0.45), V(-0.15, -1, 0.45)], skiYaw: [0, 0], skiPitch: 15,
+  },
+  celebrate: { // OG celebrate: arms up in a wide V, poles held high and out
+    rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 1, 0.05), head: V(0, 1, -0.1),
+    thigh: [V(0.12, -1, 0.15), V(-0.12, -1, 0.15)], shin: [V(0, -1, -0.12), V(0, -1, -0.12)],
+    arm: [V(0.7, 1, 0.05), V(-0.7, 1, 0.05)], fore: [V(0.45, 1, 0.05), V(-0.45, 1, 0.05)],
+    pole: [V(0.7, 1, 0), V(-0.7, 1, 0)], skiYaw: [0, 0],
+  },
+};
+const mx = v => new THREE.Vector3(-v.x, v.y, v.z);
+function mirror(p) {
+  const q = { rot: { yaw: -p.rot.yaw, roll: -p.rot.roll, pitch: p.rot.pitch }, look: p.look && -p.look, torso: mx(p.torso), head: mx(p.head), skiYaw: [-p.skiYaw[1], -p.skiYaw[0]], skiPitch: p.skiPitch, ground: p.ground };
+  for (const k of ['thigh', 'shin', 'arm', 'fore', 'pole']) q[k] = [mx(p[k][1]), mx(p[k][0])];
+  return q;
+}
+POSES.carve_r = mirror(POSES.carve_l);
+
+let model, bones = {}, skinned, skis = [], poles = [], footBind = [];
+window.setup = async function (url) {
+  const gltf = await new Promise((res, rej) => new THREE.GLTFLoader().load(url, res, undefined, rej));
+  model = gltf.scene;
+  model.traverse(o => { if (o.isBone) bones[o.name.replace('mixamorig', '').replace(':', '')] = o; if (o.isSkinnedMesh) skinned = o; });
+  // T-pose from the clip so the bind pose is clean
+  const mixer = new THREE.AnimationMixer(model); const tp = gltf.animations.find(a => a.name === 'TPose');
+  if (tp) { mixer.clipAction(tp).play(); mixer.update(0); }
+  model.updateMatrixWorld(true);
+  // height to 1.68 m
+  const top = bones.HeadTop_End.getWorldPosition(new THREE.Vector3()).y, foot = bones.LeftToeBase.getWorldPosition(new THREE.Vector3()).y;
+  const s = 1.62 / (top - foot); model.scale.multiplyScalar(s); model.updateMatrixWorld(true);
+  tameHair();
+  recolor();
+  skinned.frustumCulled = false;
+  { // helmet + goggles on the head bone
+    const h = bones.Head, hp = h.getWorldPosition(new THREE.Vector3()), tp = bones.HeadTop_End.getWorldPosition(new THREE.Vector3());
+    const hh = tp.y - hp.y, g = new THREE.Group();
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), mat(COL.red));
+    shell.scale.set(0.125, 0.135, 0.14); shell.position.set(0, hh * 0.55, -0.005);
+    const gog = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.055, 0.04), mat(COL.lens)); gog.position.set(0, hh * 0.47, 0.105);
+    const strap = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.128, 0.035, 16, 1, true), mat(COL.boot)); strap.position.set(0, hh * 0.47, 0); strap.scale.set(1, 1, 1.08);
+    g.add(shell, strap, gog); g.position.copy(hp); h.attach(g);
+  }
+  // remember bind directions of the feet (body frame = world here, she faces +z)
+  for (const side of ['Left', 'Right']) footBind.push(dirOf(bones[side + 'Foot'], bones[side + 'ToeBase']));
+  // skis: children of the feet, flat and pointing forward in the bind pose
+  for (const side of ['Left', 'Right']) {
+    const f = bones[side + 'Foot'], fp = f.getWorldPosition(new THREE.Vector3());
+    const g = new THREE.Group();
+    const L = 1.62, top = skiTex(), edge = mat(COL.skiEdge), sole = mat(COL.boot);
+    const skiM = [edge, edge, new THREE.MeshBasicMaterial({ map: top }), sole, edge, edge];
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.022, L), skiM);
+    const tipTex = top.clone(); tipTex.needsUpdate = true; tipTex.repeat.set(1, 0.1); tipTex.offset.set(0, 0);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.022, 0.18), [edge, edge, new THREE.MeshBasicMaterial({ map: tipTex }), sole, edge, edge]);
+    tip.position.set(0, 0.035, L / 2 + 0.06); tip.rotation.x = -0.45;
+    // binding: dark heel/toe pieces with a grey plate between
+    const binding = new THREE.Group();
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.02, 0.36), mat(COL.bindPlate)); plate.position.y = 0.02;
+    const toe = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.05, 0.08), mat(COL.boot)); toe.position.set(0, 0.04, 0.17);
+    const heel = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.06, 0.1), mat(COL.boot)); heel.position.set(0, 0.045, -0.17);
+    binding.add(plate, toe, heel);
+    g.add(base, tip, binding);
+    g.position.set(fp.x, 0.015, fp.z + 0.06);
+    f.attach(g); skis.push(g);
+  }
+  const scene = new THREE.Scene(); scene.add(model); window.scene = scene;
+  return { scale: s };
+};
+// Ski topsheet: muted red with grain, a charcoal tail band, a cream stripe and tip panel.
+function skiTex() {
+  const W = 16, H = 256, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  x.fillStyle = COL.ski; x.fillRect(0, 0, W, H);
+  x.fillStyle = '#7a1b20'; x.fillRect(0, 0, 1, H); x.fillRect(W - 1, 0, 1, H);           // darker rails along the edges
+  x.fillStyle = '#26272c'; x.fillRect(0, 0, W, 18);                                         // tail band (v = 0 is the tail)
+  x.fillStyle = '#e9e1cf'; x.fillRect(0, 18, W, 2); x.fillRect(W / 2 - 1, 20, 2, 170);     // cream divider + centre stripe
+  x.fillStyle = '#26272c'; x.fillRect(0, 196, W, 26);                                       // charcoal panel near the tip
+  x.fillStyle = '#e9e1cf'; x.fillRect(3, 204, W - 6, 9);                                    // cream logo block
+  x.fillStyle = '#c9b48a'; x.fillRect(0, 222, W, 2);
+  const d = x.getImageData(0, 0, W, H);                                                     // fine grain
+  for (let i = 0; i < d.data.length; i += 4) { const n = (Math.random() - 0.5) * 18; for (let k = 0; k < 3; k++) d.data[i + k] = Math.max(0, Math.min(255, d.data[i + k] + n)); }
+  x.putImageData(d, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.magFilter = THREE.NearestFilter; t.encoding = THREE.LinearEncoding; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+}
+function mat(c) { return new THREE.MeshBasicMaterial({ color: new THREE.Color(c) }); }
+function dirOf(a, b) { return b.getWorldPosition(new THREE.Vector3()).sub(a.getWorldPosition(new THREE.Vector3())).normalize(); }
+
+// Pull the hair buns in under the helmet: in bind space, clamp head vertices above the brow to a sphere.
+function tameHair() {
+  skinned.updateMatrixWorld(true);
+  const sk = skinned.skeleton, iH = sk.bones.indexOf(bones.Head), iT = sk.bones.indexOf(bones.HeadTop_End);
+  const h = bones.Head.getWorldPosition(new THREE.Vector3()), t = bones.HeadTop_End.getWorldPosition(new THREE.Vector3());
+  const hh = t.y - h.y, C = new THREE.Vector3(h.x, h.y + hh * 0.5, h.z + 0.01), R = hh * 0.6;
+  const hm = i => new THREE.Matrix4().multiplyMatrices(skinned.matrixWorld, skinned.bindMatrixInverse).multiply(sk.bones[i].matrixWorld).multiply(sk.boneInverses[i]).multiply(skinned.bindMatrix).invert();
+  const invs = { [iH]: hm(iH), [iT]: hm(iT) };
+  const pos = skinned.geometry.attributes.position, si = skinned.geometry.attributes.skinIndex, sw = skinned.geometry.attributes.skinWeight, v = new THREE.Vector3();
+  let n = 0;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i); skinned.boneTransform(i, v); v.applyMatrix4(skinned.matrixWorld);
+    const d = v.clone().sub(C);
+    let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const G = ['getX', 'getY', 'getZ', 'getW'][k], w = sw[G](i); if (w > bw) { bw = w; best = si[G](i); } }
+    if (!invs[best] || d.y < -hh * 0.6 || d.length() < R) continue;
+    v.copy(C).addScaledVector(d.normalize(), R).applyMatrix4(invs[best]); pos.setXYZ(i, v.x, v.y, v.z); n++;
+  }
+  pos.needsUpdate = true; skinned.geometry.computeVertexNormals(); console.log('hair clamp', n, hh);
+}
+// Paint the body by its bones: a gold jacket with a navy chest stripe, navy pants, red helmet, goggles, gloves, boots.
+function recolor() {
+  const g = skinned.geometry, pos = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+  const names = skinned.skeleton.bones.map(b => b.name.replace('mixamorig', '').replace(':', ''));
+  const cols = new Float32Array(pos.count * 3), v = new THREE.Vector3(), c = new THREE.Color();
+  const wp = n => bones[n].getWorldPosition(new THREE.Vector3());
+  const hipY = wp('Hips').y, sp2 = wp('Spine2').y, neck = wp('Neck').y, head = wp('Head'), top = wp('HeadTop_End').y;
+  const eyeY = head.y + (top - head.y) * 0.42;
+  skinned.updateMatrixWorld(true);
+  for (let i = 0; i < pos.count; i++) {
+    let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const G = ['getX', 'getY', 'getZ', 'getW'][k], w = sw[G](i); if (w > bw) { bw = w; best = si[G](i); } }
+    const n = names[best]; v.fromBufferAttribute(pos, i); skinned.boneTransform(i, v); v.applyMatrix4(skinned.matrixWorld);
+    let col = COL.gold;
+    if (/Hand|Thumb|Index|Middle|Ring|Pinky/.test(n)) col = COL.glove;
+    else if (/Foot|Toe/.test(n)) col = COL.boot;
+    else if (/UpLeg|Leg/.test(n)) col = COL.navy;
+    else if (n === 'Hips') col = v.y > hipY + 0.06 ? COL.gold : COL.navy;
+    else if (/Head|Eye/.test(n)) {
+      if (v.y > eyeY + 0.035) col = COL.red;
+      else if (v.y > eyeY - 0.03 && v.z > head.z) col = v.z > head.z + 0.06 ? COL.lens : COL.boot;
+      else if (v.y > eyeY - 0.03) col = COL.boot;
+      else col = COL.skin;
+    } else if (/Spine/.test(n) && v.y > sp2 - 0.02 && v.y < sp2 + 0.07) col = COL.navy;
+    else if (n === 'Neck') col = v.y > neck + 0.06 ? COL.skin : COL.gold;
+    c.set(col); cols.set([c.r, c.g, c.b], i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+}
+
+// Turn a bone so the segment to its child points along dir (world).
+const _q = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
+function aim(bone, child, dir) {
+  bone.updateMatrixWorld(true);
+  const cur = dirOf(bone, child);
+  _q.setFromUnitVectors(cur, dir.clone().normalize());
+  bone.getWorldQuaternion(_wq); _wq.premultiply(_q);
+  bone.parent.getWorldQuaternion(_pq); bone.quaternion.copy(_pq.invert().multiply(_wq));
+  bone.updateMatrixWorld(true);
+}
+let restQ = null;
+window.pose = function (name) {
+  const p = POSES[name];
+  if (!restQ) { restQ = new Map(); model.traverse(o => { if (o.isBone) restQ.set(o, o.quaternion.clone()); }); }
+  restQ.forEach((q, o) => o.quaternion.copy(q));
+  model.position.set(0, 0, 0); model.updateMatrixWorld(true);
+  const R = new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rot.pitch * deg, p.rot.yaw * deg, -p.rot.roll * deg, 'YXZ'));
+  const W = d => d.clone().applyQuaternion(R);
+  // hips carry the whole-body rotation
+  const hips = bones.Hips; hips.getWorldQuaternion(_wq); _wq.premultiply(R); hips.parent.getWorldQuaternion(_pq); hips.quaternion.copy(_pq.invert().multiply(_wq)); hips.updateMatrixWorld(true);
+  const look = p.look ? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.look * deg) : null;
+  const T = d => look ? W(d.clone().applyQuaternion(look)) : W(d);
+  if (look) { // twist the upper body round her up axis so the chest really turns, not just bends
+    const tw = new THREE.Quaternion().setFromAxisAngle(W(new THREE.Vector3(0, 1, 0)), p.look * deg), sp = bones.Spine;
+    sp.getWorldQuaternion(_wq); _wq.premultiply(tw); sp.parent.getWorldQuaternion(_pq); sp.quaternion.copy(_pq.invert().multiply(_wq)); sp.updateMatrixWorld(true);
+  }
+  aim(bones.Spine, bones.Spine1, T(p.torso)); aim(bones.Spine1, bones.Spine2, T(p.torso)); aim(bones.Spine2, bones.Neck, T(p.torso));
+  aim(bones.Neck, bones.Head, T(p.head)); aim(bones.Head, bones.HeadTop_End, T(p.head));
+  ['Left', 'Right'].forEach((s, i) => {
+    aim(bones[s + 'Arm'], bones[s + 'ForeArm'], T(p.arm[i])); aim(bones[s + 'ForeArm'], bones[s + 'Hand'], T(p.fore[i]));
+    aim(bones[s + 'Hand'], bones[s + 'HandMiddle1'], T(p.fore[i]));
+    aim(bones[s + 'UpLeg'], bones[s + 'Leg'], W(p.thigh[i])); aim(bones[s + 'Leg'], bones[s + 'Foot'], W(p.shin[i]));
+    const fy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.skiYaw[i] * deg).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -(p.skiPitch || 0) * deg));
+    aim(bones[s + 'Foot'], bones[s + 'ToeBase'], W(footBind[i].clone().applyQuaternion(fy)));
+  });
+  model.updateMatrixWorld(true);
+  // poles: grip in the glove, 1.15 m long
+  poles.forEach(m => scene.remove(m)); poles = [];
+  ['Left', 'Right'].forEach((s, i) => {
+    const a = bones[s + 'Hand'].getWorldPosition(new THREE.Vector3()).lerp(bones[s + 'HandMiddle1'].getWorldPosition(new THREE.Vector3()), 0.7);
+    const d = T(p.pole[i]), b = a.clone().addScaledVector(d, 1.08), top = a.clone().addScaledVector(d, -0.07);
+    const len = top.distanceTo(b), cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.016, len, 6), mat(COL.pole));
+    cyl.position.copy(top).add(b).multiplyScalar(0.5); cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().negate());
+    const basket = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.015, 8), mat(COL.boot)); basket.position.copy(a).addScaledVector(d, 0.98); basket.quaternion.copy(cyl.quaternion);
+    scene.add(cyl, basket); poles.push(cyl, basket);
+  });
+  // stand her on the snow: lowest ski point at y = 0, between her feet at x = z = 0
+  scene.updateMatrixWorld(true);
+  const box = new THREE.Box3(); skis.forEach(g => box.expandByObject(g));
+  let minY = box.min.y;
+  if (p.ground === 'body') for (const n of ['Hips', 'Spine2', 'Head', 'LeftHand', 'RightHand']) minY = Math.min(minY, bones[n].getWorldPosition(new THREE.Vector3()).y - 0.12);
+  const fl = bones.LeftFoot.getWorldPosition(new THREE.Vector3()), fr = bones.RightFoot.getWorldPosition(new THREE.Vector3());
+  const off = new THREE.Vector3(-(fl.x + fr.x) / 2, -minY, -(fl.z + fr.z) / 2);
+  if (p.ground === 'body') { const h = bones.Hips.getWorldPosition(new THREE.Vector3()); off.x = -h.x; off.z = -h.z; }
+  model.position.add(off); poles.forEach(m => m.position.add(off));
+  scene.updateMatrixWorld(true);
+};
+
+// Fixed camera: frame W x H metres, the ground point 0.04 m above the bottom, centred; camera yaw = where it sits around her
+// (0 = behind, 180 = in front), pitched down by `pitch`.
+window.setSkis = function (on) { skis.forEach(g => g.visible = on); };
+window.shoot = function (camYaw, pitch, pxPerM, Wm, Hm) {
+  const renderer = window._r || (window._r = new THREE.WebGLRenderer({ alpha: true, antialias: false, preserveDrawingBuffer: true }));
+  renderer.setSize(Math.round(Wm * pxPerM), Math.round(Hm * pxPerM), false);
+  const p = pitch * deg, y = camYaw * deg;
+  const back = new THREE.Vector3(-Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p)); // from target toward camera
+  const up = new THREE.Vector3(Math.sin(y) * Math.sin(p), Math.cos(p), Math.cos(y) * Math.sin(p));
+  const tgt = up.clone().multiplyScalar(Hm / 2 - 0.04);
+  const cam = new THREE.OrthographicCamera(-Wm / 2, Wm / 2, Hm / 2, -Hm / 2, 0.01, 100);
+  cam.position.copy(tgt).addScaledVector(back, 20); cam.up.copy(up); cam.lookAt(tgt);
+  const albedo = window.bodyAlbedo || new THREE.MeshBasicMaterial({ vertexColors: true, skinning: true, side: THREE.DoubleSide });
+  const normal = new THREE.MeshNormalMaterial({ skinning: true, side: THREE.DoubleSide });
+  const props = []; scene.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.visible && !o.userData.hidden) props.push(o); });
+  const keep = props.map(o => o.material);
+  const shot = norm => {
+    skinned.material = norm ? normal : albedo;
+    props.forEach((o, i) => o.material = norm ? new THREE.MeshNormalMaterial({ side: THREE.DoubleSide }) : keep[i]);
+    renderer.setClearColor(0, 0); renderer.render(scene, cam); return renderer.domElement.toDataURL('image/png');
+  };
+  const out = { albedo: shot(false), normal: shot(true) }; shot(false); return out;
+};
+
+// ---------- Put a real body (a static GLB, e.g. from TRELLIS) on the stock skeleton ----------
+// 1. pose the donor skeleton in the photo's A-pose, scaled and moved onto the body
+// 2. each body vertex copies the skin weights of its nearest donor vertices
+// 3. bind the body to the skeleton in that A-pose; the donor mesh and its helmet are hidden
+window.attachBody = async function (url, opt) {
+  opt = Object.assign({ rotY: 0, arm: 33, fore: 30, leg: 4, k: 6 }, opt || {});
+  const gltf = await new Promise((res, rej) => new THREE.GLTFLoader().load(url, res, undefined, rej));
+  gltf.scene.rotation.y = opt.rotY * deg; gltf.scene.updateMatrixWorld(true);
+  const geos = [], mats = [];
+  gltf.scene.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); geos.push(g); mats.push(o.material); } });
+  if (geos.length !== 1) console.log('body meshes', geos.length);
+  const geo = geos[0], bmat = mats[0]; if (bmat.map) { bmat.map.encoding = THREE.LinearEncoding; bmat.map.needsUpdate = true; }
+  geo.computeBoundingBox(); const bb = geo.boundingBox, hgt = bb.max.y - bb.min.y;
+  const s = 1.70 / hgt; geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2); geo.scale(s, s, s);
+  geo.computeBoundingBox();
+  // donor A-pose
+  restQ = null; const save = new Map(); model.traverse(o => { if (o.isBone) save.set(o, o.quaternion.clone()); });
+  ['Left', 'Right'].forEach((sd, i) => {
+    const sx = i === 0 ? 1 : -1, a = opt.arm * deg, f = opt.fore * deg, l = opt.leg * deg;
+    aim(bones[sd + 'Arm'], bones[sd + 'ForeArm'], new THREE.Vector3(sx * Math.sin(a), -Math.cos(a), 0));
+    aim(bones[sd + 'ForeArm'], bones[sd + 'Hand'], new THREE.Vector3(sx * Math.sin(f), -Math.cos(f), 0));
+    aim(bones[sd + 'Hand'], bones[sd + 'HandMiddle1'], new THREE.Vector3(sx * Math.sin(f), -Math.cos(f), 0));
+    aim(bones[sd + 'UpLeg'], bones[sd + 'Leg'], new THREE.Vector3(sx * Math.sin(l), -Math.cos(l), 0));
+    aim(bones[sd + 'Leg'], bones[sd + 'Foot'], new THREE.Vector3(sx * Math.sin(l), -Math.cos(l), 0));
+  });
+  model.updateMatrixWorld(true);
+  const donor = () => { const pos = skinned.geometry.attributes.position, out = new Float32Array(pos.count * 3), v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i); skinned.boneTransform(i, v); v.applyMatrix4(skinned.matrixWorld); out.set([v.x, v.y, v.z], i * 3); } return out; };
+  let D = donor(), mn = [1e9, 1e9, 1e9], mxv = [-1e9, -1e9, -1e9];
+  for (let i = 0; i < D.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], D[i + k]); mxv[k] = Math.max(mxv[k], D[i + k]); }
+  const ds = 1.70 / (mxv[1] - mn[1]); model.scale.multiplyScalar(ds); model.updateMatrixWorld(true);
+  D = donor(); mn = [1e9, 1e9, 1e9]; mxv = [-1e9, -1e9, -1e9];
+  for (let i = 0; i < D.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], D[i + k]); mxv[k] = Math.max(mxv[k], D[i + k]); }
+  model.position.x -= (mn[0] + mxv[0]) / 2; model.position.y -= mn[1]; model.position.z -= (mn[2] + mxv[2]) / 2; model.updateMatrixWorld(true);
+  D = donor();
+  // grid of donor vertices
+  const C = 0.04, grid = new Map(), key = (x, y, z) => x + ',' + y + ',' + z;
+  for (let i = 0; i < D.length / 3; i++) { const k = key(Math.floor(D[i * 3] / C), Math.floor(D[i * 3 + 1] / C), Math.floor(D[i * 3 + 2] / C)); (grid.get(k) || grid.set(k, []).get(k)).push(i); }
+  const si = skinned.geometry.attributes.skinIndex, sw = skinned.geometry.attributes.skinWeight, G4 = ['getX', 'getY', 'getZ', 'getW'];
+  const pos = geo.attributes.position, n = pos.count, SI = new Uint16Array(n * 4), SW = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i), gx = Math.floor(x / C), gy = Math.floor(y / C), gz = Math.floor(z / C);
+    let best = []; 
+    for (let r = 1; r <= 6 && best.length < opt.k; r++) {
+      best = [];
+      for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) for (let c = -r; c <= r; c++) {
+        const L = grid.get(key(gx + a, gy + b, gz + c)); if (!L) continue;
+        for (const j of L) { const dx = D[j * 3] - x, dy = D[j * 3 + 1] - y, dz = D[j * 3 + 2] - z; best.push([dx * dx + dy * dy + dz * dz, j]); }
+      }
+    }
+    best.sort((p, q) => p[0] - q[0]); best = best.slice(0, opt.k);
+    const acc = new Map();
+    for (const [d2, j] of best) { const w0 = 1 / (Math.sqrt(d2) + 0.01); for (let k = 0; k < 4; k++) { const w = sw[G4[k]](j); if (w > 0) { const bi = si[G4[k]](j); acc.set(bi, (acc.get(bi) || 0) + w * w0); } } }
+    const top = [...acc.entries()].sort((p, q) => q[1] - p[1]).slice(0, 4), tot = top.reduce((t, e) => t + e[1], 0) || 1;
+    top.forEach(([bi, w], k) => { SI[i * 4 + k] = bi; SW[i * 4 + k] = w / tot; });
+    if (!top.length) { SI[i * 4] = skinned.skeleton.bones.indexOf(bones.Hips); SW[i * 4] = 1; }
+  }
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4));
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+  if (!geo.attributes.normal) console.log("body had no normals"); geo.computeVertexNormals();
+  const body = new THREE.SkinnedMesh(geo, new THREE.MeshBasicMaterial({ map: bmat.map, color: bmat.map ? 0xffffff : bmat.color, vertexColors: !!geo.attributes.color, skinning: true, side: THREE.DoubleSide }));
+  body.frustumCulled = false;
+  const skel = new THREE.Skeleton(skinned.skeleton.bones); // inverses from the A-pose as it stands now
+  scene.add(body); body.updateMatrixWorld(true); body.bind(skel, body.matrixWorld);
+  skinned.visible = false; skinned.userData.hidden = true;
+  bones.Head.traverse(o => { if (o.isMesh) { o.visible = false; o.userData.hidden = true; } });
+  window.bodyAlbedo = body.material; window.donor = skinned; skinned = body;
+  // skis sit on the body's boot soles: move them down/up so their base meets the lowest body point under each foot
+  return { verts: n, scale: s, donorScale: ds };
+};
+
+</script>
