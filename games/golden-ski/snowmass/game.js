@@ -449,9 +449,12 @@ async function loadTex(name, { pixel = true, repeat = false, mips = false } = {}
 const [cordT, cordN, powT, powN, skyT, goldieT, goldieN, ...skyRest] = await Promise.all([
   loadTex('corduroy', { repeat: true, mips: true }), loadTex('corduroy_n', { repeat: true, mips: true }),
   loadTex('powder', { repeat: true, mips: true }), loadTex('powder_n', { repeat: true, mips: true }),
-  loadTex('sky_noon', { pixel: false }), loadTex('goldie8'), loadTex('goldie8_n'),
+  loadTex('sky_noon', { pixel: false }), loadTex('goldie_body'), loadTex('goldie_body_n'),
   loadTex('sky_golden', { pixel: false }), loadTex('sky_night', { pixel: false }), loadTex('sky_storm', { pixel: false }),
 ]);
+// Goldie's sheet is read top-down by the rects in its JSON
+goldieT.flipY = goldieN.flipY = false;
+const GOLDIE = await (await fetch(new URL('assets/goldie_body.json', import.meta.url))).json();
 const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
 const [stationT, stationN] = await Promise.all([loadTex('station_atlas'), loadTex('station_atlas_n')]);
 const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];
@@ -2820,57 +2823,113 @@ function updateWorld(dt) {
   updateFlakes(dt);
 }
 
-// ---------- The skier: a camera-facing sprite from Goldie's sheet, plus a blob shadow ----------
-// Sheet: 10 pose columns x 5 angle rows (0 behind, 45, 90 her right, 135, 180 in front); her left side is mirrored.
+// ---------- The skier: Goldie as a camera-facing card from her sheet, on a pair of skis, plus a blob shadow ----------
+// Sheet (goldie_body.json): per pose, camera tilt (0, 12, 45 degrees above her horizon) and angle round her (0 behind,
+// 90 her right, 180 in front, in 22.5 degree steps; her left side mirrored), the frame's rect and its foot point, 64 px per m.
+// The frames are her body only; the skis are drawn on the physics ski plate. Wipeout and sit keep their own skis.
 // Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
-const FRAMES = { stand: 0, carveL: 1, carveR: 2, tuck: 3, brake: 4, air: 5, land: 6, wipeout: 7, celebrate: 8, sit: 9 };
-const POSE_COLS = 10, ANGLE_ROWS = 5;
-const SPRITE_H = 2.0, SPRITE_W = 2.5;
+const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit' };
+const SHEET_PX = GOLDIE.pxPerM, [SHEET_W, SHEET_H] = GOLDIE.size;
+const SHEET_YAWS = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180];
+const SKIER_LIT = { sunColor: { value: SUN_COLOR }, skyColor: { value: SKY_COLOR }, bounce: { value: BOUNCE }, uLit: { value: 1 } };
+const SNOWLIGHT_GLSL = `
+    uniform vec3 sunColor, skyColor, bounce;
+    uniform float uLit;
+    float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
+    vec3 snowlight(vec3 n, vec3 s) {
+      vec3 l = sunColor * band(max(0.0, dot(n, s))) * uLit;
+      l += skyColor * (0.35 + 0.35 * n.y);
+      l += bounce * band(max(0.0, 0.15 - 0.8 * n.y)) * 0.55;
+      l += 0.06;
+      float m = max(max(l.r, l.g), max(l.b, 1e-3));
+      return l * band(min(1.25, m)) / m;
+    }`;
+// Drawn a little toward the camera so the snow right around her feet never covers her (0.5 m) or her skis (0.3 m);
+// she stays ahead of her skis' middle, so her boots sit on them.
+const nudged = (m) => `vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      mv.xyz += normalize(-mv.xyz) * ${m.toFixed(2)};
+      gl_Position = projectionMatrix * mv;`;
 const skierMat = new THREE.ShaderMaterial({
   uniforms: {
     map: { value: goldieT },
     normalMap: { value: goldieN },
-    frameCol: { value: 0 },
-    frameRow: { value: 0 },
+    rect: { value: new THREE.Vector4() },
     mirror: { value: 0 },
     sunLocal: { value: new THREE.Vector3(0, 1, 0) },
-    sunColor: { value: SUN_COLOR },
-    skyColor: { value: SKY_COLOR },
-    bounce: { value: BOUNCE },
-    uLit: { value: 1 },
+    ...SKIER_LIT,
   },
   vertexShader: `
-    uniform float frameCol, frameRow, mirror;
+    uniform vec4 rect;
+    uniform float mirror;
     varying vec2 vUv;
     void main() {
       float u = mix(uv.x, 1.0 - uv.x, mirror);
-      vUv = vec2((u + frameCol) / ${POSE_COLS}.0, (uv.y + ${ANGLE_ROWS - 1}.0 - frameRow) / ${ANGLE_ROWS}.0);
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      vUv = vec2(rect.x + u * rect.z, rect.y + (1.0 - uv.y) * rect.w);
+      ${nudged(0.5)}
     }`,
   fragmentShader: `
     uniform sampler2D map;
     uniform sampler2D normalMap;
-    uniform vec3 sunLocal, sunColor, skyColor, bounce;
-    uniform float uLit, mirror;
+    uniform vec3 sunLocal;
+    uniform float mirror;
     varying vec2 vUv;
-    float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
+    ${SNOWLIGHT_GLSL}
     void main() {
       vec4 albedo = texture2D(map, vUv);
       if (albedo.a < 0.5) discard;
       vec3 n = normalize(texture2D(normalMap, vUv).rgb * 2.0 - 1.0);
       if (mirror > 0.5) n.x = -n.x;
-      vec3 l = sunColor * band(max(0.0, dot(n, sunLocal))) * uLit;
-      l += skyColor * (0.35 + 0.35 * n.y);
-      l += bounce * band(max(0.0, 0.15 - 0.8 * n.y)) * 0.55;
-      l += 0.06;
-      float m = max(max(l.r, l.g), max(l.b, 1e-3));
-      l *= band(min(1.25, m)) / m;
-      gl_FragColor = vec4(min(albedo.rgb * l * 1.15, 1.0), 1.0);
+      gl_FragColor = vec4(min(albedo.rgb * snowlight(n, sunLocal) * 1.15, 1.0), 1.0);
     }`,
   side: THREE.DoubleSide,
 });
-const skierMesh = new THREE.Mesh(new THREE.PlaneGeometry(SPRITE_W, SPRITE_H).translate(0, SPRITE_H / 2 - 0.04, 0), skierMat);
+// unit card with its origin at the lower left; scaled and placed per frame so the foot point lands on her skis
+const skierMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).translate(0.5, 0.5, 0), skierMat);
 scene.add(skierMesh);
+// Her skis: two thin boxes on the 0.3 x 1.7 m ski plate. The top faces carry the ski art at 1 px per cm, tips at the
+// top of the canvas; edges and bases are dark so an edged ski seen side-on still reads as a line.
+const skiTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 30; c.height = 170;
+  const x = c.getContext('2d');
+  x.fillStyle = '#7a1b20'; x.fillRect(0, 0, 30, 170);   // opaque everywhere, so far mip levels never fade the skis out
+  for (const x0 of [1, 21]) {
+    x.fillStyle = '#a3262b'; x.fillRect(x0, 4, 8, 164);
+    x.fillRect(x0 + 1, 2, 6, 2); x.fillRect(x0 + 2, 0, 4, 2);                     // rounded tip
+    x.fillStyle = '#7a1b20'; x.fillRect(x0, 4, 1, 164); x.fillRect(x0 + 7, 4, 1, 164);
+    x.fillStyle = '#26272c'; x.fillRect(x0, 152, 8, 16);                            // tail band
+    x.fillStyle = '#e9e1cf'; x.fillRect(x0, 150, 8, 2); x.fillRect(x0 + 3, 40, 2, 110);
+    x.fillStyle = '#26272c'; x.fillRect(x0, 16, 8, 18);                             // tip panel
+    x.fillStyle = '#e9e1cf'; x.fillRect(x0 + 2, 21, 4, 7);
+    x.fillStyle = '#7d828c'; x.fillRect(x0 + 1, 70, 6, 36);                         // binding plate
+    x.fillStyle = '#2a2c33'; x.fillRect(x0 + 1, 68, 6, 6); x.fillRect(x0 + 1, 100, 6, 8);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapNearestFilter;
+  return t;
+})();
+const skiUp = new THREE.Vector3(0, 1, 0);
+const skiTopMat = new THREE.ShaderMaterial({
+  uniforms: { map: { value: skiTex }, up: { value: skiUp }, sun: { value: SUN_DIR }, ...SKIER_LIT },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; ${nudged(0.3)} }`,
+  fragmentShader: `uniform sampler2D map; uniform vec3 up, sun; varying vec2 vUv; ${SNOWLIGHT_GLSL}
+    void main() { gl_FragColor = vec4(min(texture2D(map, vUv).rgb * snowlight(up, sun) * 1.15, 1.0), 1.0); }`,
+});
+const skiEdgeMat = new THREE.ShaderMaterial({
+  uniforms: { up: { value: skiUp }, sun: { value: SUN_DIR }, ...SKIER_LIT },
+  vertexShader: `void main() { ${nudged(0.3)} }`,
+  fragmentShader: `uniform vec3 up, sun; ${SNOWLIGHT_GLSL} void main() { gl_FragColor = vec4(vec3(0.17, 0.17, 0.19) * snowlight(up, sun), 1.0); }`,
+});
+const skis = new THREE.Group();
+for (const x0 of [1, 21]) {
+  // box faces +x, -x, +y, -y, +z, -z; in the skis' frame +x is her right, +y toward the tips, +z up
+  const g = new THREE.BoxGeometry(0.08, BODY.PLATE_L, 0.025), uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setX(i, (x0 + uv.getX(i) * 8) / 30);
+  const ski = new THREE.Mesh(g, [skiEdgeMat, skiEdgeMat, skiEdgeMat, skiEdgeMat, skiTopMat, skiEdgeMat]);
+  ski.position.set((x0 + 4 - 15) / 100, 0, 0.0125);
+  skis.add(ski);
+}
+scene.add(skis);
 const shadow = (() => {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -4247,9 +4306,105 @@ function updateFreecam(dt) {
   if (Math.abs(near - camera.near) > 0.02 * camera.near) { camera.near = near; camera.updateProjectionMatrix(); }
 }
 
-function facingCam(p) {
-  const dx = camera.position.x - p.x, dz = camera.position.z - p.z, l = Math.hypot(dx, dz) || 1;
-  return (dx * Math.sin(sk.heading) - dz * Math.cos(sk.heading)) / l;
+// The snow as drawn: flat triangles through the 2 m run points at the detail level showing (or the 10 m ground),
+// while physics rides a smooth curve through the same points. The gap reaches tens of cm on bumps, so her card,
+// skis and shadow sit on the drawn triangles. Stations, kickers, bridges and roofs are drawn where physics has them.
+const drawnA = { h: 0, gx: 0, gz: 0 }, drawnB = { h: 0, gx: 0, gz: 0 };
+let drawnG = null;
+function drawnSnowDY(x, z) {
+  const h = sampleBase(x, z, drawnA).h;
+  if (Math.abs(sample(x, z, drawnB).h - h) > 0.01) return 0;
+  const P = PATCH;
+  if (!(patchOn && P && samplePatch(P, x, z, drawnB))) return clamp(meshY(x, z) - h, -0.6, 0.6);
+  const g = drawnG && x >= drawnG.x0 && x < drawnG.x1 && z >= drawnG.z0 && z < drawnG.z1 ? drawnG
+    : (drawnG = P.groups.find((q) => x >= q.x0 && x < q.x1 && z >= q.z0 && z < q.z1) || null);
+  if (!g || g.level < 0) return 0;
+  const st = PATCH_STEP[g.level], fx = (x - P.x0) / (PCELL * st), fz = (z - P.z0) / (PCELL * st);
+  const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j, a = i * st, b = j * st;
+  const c00 = P.at(a, b), c10 = P.at(a + st, b), c01 = P.at(a, b + st), c11 = P.at(a + st, b + st);
+  if (c00 < 0 || c10 < 0 || c01 < 0 || c11 < 0) return 0;
+  const h00 = P.hr[c00], h10 = P.hr[c10], h01 = P.hr[c01], h11 = P.hr[c11];
+  // same diagonals as buildGroupMesh
+  const t = (i + j) & 1
+    ? (tx + tz <= 1 ? h00 + tx * (h10 - h00) + tz * (h01 - h00) : h11 + (1 - tx) * (h01 - h11) + (1 - tz) * (h10 - h11))
+    : (tx >= tz ? h00 + tx * (h10 - h00) + tz * (h11 - h10) : h00 + tz * (h01 - h00) + tx * (h11 - h01));
+  return clamp(t - h, -0.6, 0.6);
+}
+// Her frame: pose from the controls, angle and tilt from where the camera sits in her body's frame. Her body stands
+// square to the slope while moving (upright when stopped, in the air or celebrating). The carve frames carry most of
+// her lean; the skis roll onto their edges with the physics.
+const bodyU = new THREE.Vector3(), bodyF = new THREE.Vector3(), bodyR = new THREE.Vector3(), camD = new THREE.Vector3();
+const cardR = new THREE.Vector3(), cardU = new THREE.Vector3(), cardZ = new THREE.Vector3(), foot = new THREE.Vector3();
+const cardM = new THREE.Matrix4(), skiN = new THREE.Vector3(), skiF = new THREE.Vector3(), skiR = new THREE.Vector3();
+const DEG = 180 / Math.PI;
+function drawSkier(p, riding, dY) {
+  let pose = riding ? FRAMES.sit : pickFrame();
+  sk.frame = pose;
+  const crashed = sk.crashed && !riding;
+  const n = normalFrom(sample(p.x, p.z), skiN);
+  const moving = !riding && !crashed && sk.grounded && sk.vel.length() > 0.5 && pose !== FRAMES.air && pose !== FRAMES.celebrate;
+  const e = sk.grounded && !crashed && !riding ? (sk.lean || sk.edgeA) : 0;
+  bodyU.copy(moving ? n : UP);
+  bodyF.set(Math.sin(sk.heading), 0, -Math.cos(sk.heading));
+  if (physics.feel && e) {
+    // motion feel: a little extra lean with her edges, on top of the lean drawn into the carve frames
+    const L = clamp(e * 0.25, -0.17, 0.17);
+    bodyR.crossVectors(bodyF, bodyU).normalize();
+    bodyU.multiplyScalar(Math.cos(L)).addScaledVector(bodyR, Math.sin(L));
+  }
+  bodyF.addScaledVector(bodyU, -bodyF.dot(bodyU)).normalize();
+  bodyR.crossVectors(bodyF, bodyU).normalize();
+  foot.set(p.x, p.y + (riding ? RIDE_SEAT : dY), p.z);
+  camera.updateMatrixWorld();
+  cardZ.setFromMatrixColumn(camera.matrixWorld, 2);
+  camD.copy(camera.position).sub(foot).addScaledVector(bodyU, -0.9).normalize();
+  const side = camD.dot(bodyR), mirror = !crashed && side < 0;
+  const yi = Math.round(Math.atan2(Math.abs(side), -camD.dot(bodyF)) * DEG / 22.5);
+  const elev = Math.asin(clamp(camD.dot(bodyU), -1, 1)) * DEG;
+  let tilt = elev < 6 ? 0 : elev < 28.5 ? 12 : 45, yaw = SHEET_YAWS[yi];
+  if (mirror && pose === FRAMES.carveL) pose = FRAMES.carveR;
+  else if (mirror && pose === FRAMES.carveR) pose = FRAMES.carveL;
+  if (crashed) { tilt = 12; yaw = 0; }
+  const [fx, fy, fw, fh, ax, ay] = GOLDIE.frames[pose][tilt][yaw];
+  const U = skierMat.uniforms;
+  U.rect.value.set(fx / SHEET_W, fy / SHEET_H, fw / SHEET_W, fh / SHEET_H);
+  U.mirror.value = mirror ? 1 : 0;
+  const w = fw / SHEET_PX;
+  let hgt = fh / SHEET_PX;
+  if (crashed) {
+    // wipeout frame turned in the screen to lie along the bail box, centred on it
+    bA.set(0, 0, 1).applyQuaternion(bail.q).transformDirection(camera.matrixWorldInverse);
+    const th = Math.atan2(-bA.x, bA.y) - Math.PI, c = Math.cos(th), sn = Math.sin(th);
+    cardR.setFromMatrixColumn(camera.matrixWorld, 0); cardU.setFromMatrixColumn(camera.matrixWorld, 1);
+    bodyR.copy(cardR);
+    cardR.multiplyScalar(c).addScaledVector(cardU, sn);
+    cardU.multiplyScalar(c).addScaledVector(bodyR, -sn);
+    skierMesh.position.copy(p).addScaledVector(cardR, -w / 2).addScaledVector(cardU, -hgt / 2);
+  } else {
+    // a frame drawn from higher up is squashed by cos(tilt): stretch it to the real camera height so her size holds
+    const k = Math.cos(clamp(elev, 0, 60) / DEG) / Math.cos(tilt / DEG);
+    hgt *= k;
+    // the card faces the camera and turns in the screen so its up follows her body's up
+    cardU.copy(bodyU).addScaledVector(cardZ, -bodyU.dot(cardZ));
+    if (cardU.lengthSq() < 1e-6) cardU.setFromMatrixColumn(camera.matrixWorld, 1);
+    cardU.normalize();
+    cardR.crossVectors(cardU, cardZ).normalize();
+    skierMesh.position.copy(foot).addScaledVector(cardR, -(mirror ? fw - ax : ax) / SHEET_PX).addScaledVector(cardU, -(fh - ay) / SHEET_PX * k);
+  }
+  skierMesh.quaternion.setFromRotationMatrix(cardM.makeBasis(cardR, cardU, cardZ));
+  skierMesh.scale.set(w, hgt, 1);
+  U.sunLocal.value.set(SUN_DIR.dot(cardR), SUN_DIR.dot(cardU), SUN_DIR.dot(cardZ));
+  // skis on the ski plate, rolled onto their edges; the lower edge rests on the snow
+  skis.visible = !riding && !crashed;
+  if (skis.visible) {
+    if (!sk.grounded) n.copy(UP);
+    skiDir(n, skiF);
+    skiR.crossVectors(skiF, n).normalize();
+    skiUp.copy(n).multiplyScalar(Math.cos(e)).addScaledVector(skiR, Math.sin(e));
+    skiR.crossVectors(skiF, skiUp).normalize();
+    skis.quaternion.setFromRotationMatrix(cardM.makeBasis(skiR, skiF, skiUp));
+    skis.position.copy(foot).addScaledVector(n, 0.012 + 0.15 * Math.sin(Math.abs(e)));
+  }
 }
 function render(alpha, dt) {
   const p = view.copy(sk.prev).lerp(sk.pos, alpha);
@@ -4266,38 +4421,13 @@ function render(alpha, dt) {
   updateTrees(snap);
   sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
 
-  // Sprite faces the camera around the vertical axis only.
-  skierMesh.position.copy(p);
-  if (riding) skierMesh.position.y += RIDE_SEAT;
-  const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
-  skierMesh.rotation.y = yaw;
-  // Motion feel: she leans with her edge angle (mirrored seen from the front).
-  skierMesh.rotation.z = physics.feel && sk.grounded && !sk.crashed ? -sk.edgeA * 0.55 * (facingCam(p) > 0.35 ? -1 : 1) : 0;
-  // Sun in sprite space: x along its right, z toward the camera.
-  const cy = Math.cos(yaw), sy = Math.sin(yaw);
-  skierMat.uniforms.sunLocal.value.set(SUN_DIR.x * cy - SUN_DIR.z * sy, SUN_DIR.y, SUN_DIR.x * sy + SUN_DIR.z * cy);
-  tmpA.set(camera.position.x - p.x, 0, camera.position.z - p.z).normalize();
-  // Camera angle round her (0 behind, 180 in front), snapped to the sheet's 45 degree rows; left side mirrored.
-  const ahead = tmpA.x * Math.sin(sk.heading) - tmpA.z * Math.cos(sk.heading);
-  const side = tmpA.x * Math.cos(sk.heading) + tmpA.z * Math.sin(sk.heading);
-  const mirror = side < 0;
-  let frame = riding ? FRAMES.sit : pickFrame(), row = sk.crashed ? 0 : Math.round(Math.atan2(Math.abs(side), -ahead) / (Math.PI / 4));
-  if (mirror && frame === FRAMES.carveL) frame = FRAMES.carveR;
-  else if (mirror && frame === FRAMES.carveR) frame = FRAMES.carveL;
-  const U = skierMat.uniforms;
-  U.frameCol.value = frame; U.frameRow.value = row; U.mirror.value = mirror && !sk.crashed ? 1 : 0; sk.frame = frame;
-  if (sk.crashed) {
-    // wipeout frame turned to lie along the bail box, centred on it
-    bA.set(0, 0, 1).applyQuaternion(bail.q).transformDirection(camera.matrixWorldInverse);
-    const th = Math.atan2(-bA.x, bA.y) - Math.PI, c = SPRITE_H / 2 - 0.04;
-    skierMesh.rotation.z = th;
-    skierMesh.position.set(p.x + c * Math.sin(th) * cy, p.y - c * Math.cos(th), p.z - c * Math.sin(th) * sy);
-  }
+  const dY = riding ? 0 : drawnSnowDY(p.x, p.z);
+  drawSkier(p, riding, dY);
   updateShapes(p);
 
   const s = sample(p.x, p.z);
   normalFrom(s, tmpN);
-  shadow.position.set(p.x, s.h + 0.06, p.z);
+  shadow.position.set(p.x, s.h + dY + 0.06, p.z);
   shadow.quaternion.setFromUnitVectors(UP, tmpN).multiply(FLAT_Q);
   const lift = Math.max(0, p.y - s.h);
   shadow.material.opacity = clamp(1 - lift / 8, 0.2, 1);
@@ -4308,7 +4438,7 @@ function render(alpha, dt) {
   ringMat.uniforms.time.value = performance.now() / 1000;
   if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 2.23694)} mph · ${physics.momentum ? (physics.carve ? 'Carve' : 'Momentum') + (physics.assists ? '' : ', raw') : 'Classic'} · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps${perf.on ? ` · ${Math.round(perf.tris / 1000)}k tris · ${perf.calls} draws · ${perf.ms.toFixed(1)} ms` : ''}`;
   updateWorld(dt);
-  skierMat.uniforms.uLit.value = sunAt(p.x, p.z);
+  SKIER_LIT.uLit.value = sunAt(p.x, p.z);
   runWork();
   workAll = false;
   renderer.render(scene, camera);
@@ -4383,7 +4513,6 @@ function frame(now) {
   render(manual ? 1 : acc / STEP, dt);
   perf.ms += (performance.now() - t0 - perf.ms) * 0.1;
 }
-skierMat.uniforms.frameCol.value = FRAMES.stand;
 resize();
 applyTime('noon');
 toSummit();
