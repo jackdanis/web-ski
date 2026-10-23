@@ -12,6 +12,9 @@ of single trees. FreePlay starts at the Village Express top, facing down Sunnysi
   Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm,
   and a start at Sunnyside, Powderhorn or the top of any lift.
 - The Speed readout (mph) also shows the frame rate.
+- Goldie is drawn from a sheet pre-rendered from her 3D model: 16 directions (9 drawn, the left side mirrored) at three
+  camera heights, lit by Snowlight from its normal map. While moving her body stands square to the slope. Her skis are
+  a textured pair on the physics ski plate, rolled onto their edges in a turn, and she stands on the snow as drawn.
 - HUD map in the style of the Snowmass trail map: a minimap top-left that turns with Goldie, and the whole mountain
   (summit at the top, run, lift, peak and base labels) on M or a two-finger tap. It is painted once at load.
 - Chairlift terminals have a deck, an operator hut and four legs around the wheel post, with textured panels, boards,
