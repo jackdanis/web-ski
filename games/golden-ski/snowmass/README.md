@@ -8,9 +8,8 @@ of single trees. FreePlay starts at the Village Express top, facing down Sunnysi
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
   On phones, drag to steer, swipe down to pole, swipe up to brake.
-- Tab menu (three-finger tap on phones): Freecam, Momentum or Classic physics, Assists, Carve turns, Weight,
-  Crashes (off by default), Motion feel, Speed readout, Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm,
-  and a start at Sunnyside, Powderhorn or the top of any lift.
+- Tab menu (three-finger tap on phones): Freecam, Crashes (off by default), collision shapes, Speed readout, perf stats,
+  Pixel look, Detailed runs (2 m), Noon / Golden hour / Night / Storm, and a start at the top or bottom of any lift.
 - The Speed readout (mph) also shows the frame rate.
 - Goldie is drawn from a sheet pre-rendered from her 3D model: 16 directions (9 drawn, the left side mirrored) at three
   camera heights, lit by Snowlight from its normal map. While moving her body stands square to the slope. Her skis are
