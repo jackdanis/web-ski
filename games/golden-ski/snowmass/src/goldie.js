@@ -28,7 +28,7 @@ const SNOWLIGHT_GLSL = `
 // Drawn a little toward the camera so the snow right around her feet never covers her (0.5 m) or her skis (0.3 m);
 // she stays ahead of her skis' middle, so her boots sit on them.
 const nudged = (m) => `vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      mv.xyz += normalize(-mv.xyz) * ${m.toFixed(2)};
+      mv.xyz += normalize(-mv.xyz) * ${typeof m === 'string' ? m : m.toFixed(2)};
       gl_Position = projectionMatrix * mv;`;
 export const skierMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -36,17 +36,19 @@ export const skierMat = new THREE.ShaderMaterial({
     normalMap: { value: goldieN },
     rect: { value: new THREE.Vector4() },
     mirror: { value: 0 },
+    nudge: { value: 0.5 },             // 0 on a lift: the seat back and cabin walls cover her as they should
     sunLocal: { value: new THREE.Vector3(0, 1, 0) },
     ...SKIER_LIT,
   },
   vertexShader: `
     uniform vec4 rect;
     uniform float mirror;
+    uniform float nudge;
     varying vec2 vUv;
     void main() {
       float u = mix(uv.x, 1.0 - uv.x, mirror);
       vUv = vec2(rect.x + u * rect.z, rect.y + (1.0 - uv.y) * rect.w);
-      ${nudged(0.5)}
+      ${nudged('nudge')}
     }`,
   fragmentShader: `
     uniform sampler2D map;

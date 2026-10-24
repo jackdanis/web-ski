@@ -2,6 +2,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { UP_Y, clamp } from './config.js';
 import { camera, scene } from './scene.js';
+import { groundY } from './world.js';
 import { DARK, STEEL, TILES, cablePts, merge, modelMat, part } from './buildings.js';
 import { carriers, liftPaths } from './lifts.js';
 import { STARTS } from './slopes.js';
@@ -9,9 +10,22 @@ import { STARTS } from './slopes.js';
 // ---------- The lift ride ----------
 // A ring of light on every chairlift's loading deck: ski in, fade, ride a chair up at the lift's real speed, fade,
 // stand on the unload deck. Tap or Space skips to the last fade. The Tab menu's lift-top starts use the same spot.
+// Gondolas: a ring where Jack pinned it outside the bottom station, a ride in a cabin, out at the top start.
 export const RING_R = 2.5, LOAD = 4.5;      // m across the ring / 2; m from the wheel to load and unload
+const CHAIR_SEAT = -3.05, CABIN_SEAT = -3.93; // her sprite's base below the cable: feet off the seat, on the cabin floor
+const GONDOLA_RINGS = { 'Elk Camp Gondola': [1776.6, -5245.4] };
 export const RIDES = [];
 for (const lp of liftPaths) {
+  const pin = lp.kind === 'gondola' && GONDOLA_RINGS[lp.name];
+  if (pin) {
+    const N = lp.pts.length, b = lp.g[0] <= lp.g[N - 1] ? 0 : N - 1;
+    const top = STARTS.find((q) => q.label === `Start: ${lp.name} top`);
+    if (!top) continue;
+    const d0 = (b ? lp.L : 0) + LOAD, d1 = (b ? lp.L : 0) + lp.L - LOAD;
+    RIDES.push({ lp, ring: { x: pin[0], z: pin[1], y: groundY(pin[0], pin[1]) }, top, d0, d1,
+      chair: carriers.cabin.find((c) => c.lp === lp), seat: CABIN_SEAT, cabin: true });
+    continue;
+  }
   if (lp.kind !== 'chair_lift') continue;
   const N = lp.pts.length, b = lp.g[0] <= lp.g[N - 1] ? 0 : N - 1, t = N - 1 - b;
   const sb = lp.stn[b], st = lp.stn[t];
@@ -27,7 +41,7 @@ for (const lp of liftPaths) {
   if (old) Object.assign(old, top);
   // the ride in carrier distance: load spot to unload spot
   const d0 = (b ? lp.L : 0) + LOAD, d1 = (b ? lp.L : 0) + lp.L - LOAD;
-  RIDES.push({ lp, ring, top, d0, d1, chair: carriers.chair.find((c) => c.lp === lp) });
+  RIDES.push({ lp, ring, top, d0, d1, chair: carriers.chair.find((c) => c.lp === lp), seat: CHAIR_SEAT });
 }
 // ring: green wisps around a soft cyan glow on the deck
 export const ringMat = new THREE.ShaderMaterial({
@@ -102,13 +116,16 @@ function roundRing(a, b, r, y, seg = 3) {
     for (let k = 0; k <= seg; k++) { const t = (t0 + 0.5 * k / seg) * Math.PI; out.push([cx + r * Math.cos(t), y, cz + r * Math.sin(t)]); }
   return out;
 }
-function cabinGeo() {
+// pick: 'all' for the instanced cabins; 'body' and 'glass' for the ride cabin, whose glass you see her through
+function cabinGeo(pick = 'all') {
   const rings = [[0.86, 0.8, 0.35, -3.95], [1.0, 0.93, 0.45, -3.7], [1.06, 0.99, 0.5, -2.95], [1.0, 0.93, 0.45, -2.0], [0.86, 0.8, 0.38, -1.8], [0.6, 0.55, 0.3, -1.68]]
     .map(([a, b, r, y]) => roundRing(a, b, r, y));
   const pos = [], col = [], tt = [], BODY = [0.06, 0.065, 0.075], TINT = [0.1, 0.13, 0.18], yF = -3.95, yT = -1.85;
   const tri = (A, B, C) => {
     const n = new THREE.Vector3(...B).sub(new THREE.Vector3(...A)).cross(new THREE.Vector3(...C).sub(new THREE.Vector3(...A))).normalize();
     const yc = (A[1] + B[1] + C[1]) / 3, side = Math.abs(n.x) > 0.75 && yc < -1.9;
+    const glass = !side && yc > -2.95 && yc < -1.95;
+    if ((pick === 'body' && glass) || (pick === 'glass' && !glass)) return;
     for (const P of [A, B, C]) {
       pos.push(...P);
       if (side) {   // logo tile once across the side, top at the roof line
@@ -127,6 +144,7 @@ function cabinGeo() {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (pick === 'glass') return g;
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setAttribute('aH', new THREE.Float32BufferAttribute(pos.filter((_, k) => k % 3 === 1), 1));
   g.setAttribute('aT', new THREE.Float32BufferAttribute(tt, 3));
@@ -168,6 +186,13 @@ const CARRIER_GEO = {
     part(new THREE.BoxGeometry(1.1, 0.12, 0.12).translate(0, -3.6, 0), DARK),
   ]),
 };
+// the ride cabin: drawn in place of its instance, with see-through tinted glass
+const rideCabin = new THREE.Group();
+rideCabin.add(new THREE.Mesh(cabinGeo('body'), modelMat),
+  new THREE.Mesh(cabinGeo('glass'), new THREE.MeshBasicMaterial({ color: 0x1a2230, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide })));
+rideCabin.visible = false;
+rideCabin.matrixAutoUpdate = false;
+scene.add(rideCabin);
 const FAR_OF = { chair: 'chairFar', cabin: 'cabinFar' };
 const carrierMeshes = {};
 for (const k of [...Object.keys(carriers), ...Object.values(FAR_OF)]) {
@@ -201,6 +226,7 @@ export function placeCarriers(t) {
   const cx = camera.position.x, cz = camera.position.z;
   // the ride chair: shift its lift's chairs so one is where the ride is
   if (ride.lp && ride.chair) ride.lp.shift = ride.d - (ride.chair.s0 + t * ride.lp.speed);
+  rideCabin.visible = false;
   for (const k of Object.keys(carriers)) {
     const m = carrierMeshes[k], e = m.instanceMatrix.array, fm = FAR_OF[k] && carrierMeshes[FAR_OF[k]], fe = fm && fm.instanceMatrix.array;
     let nNear = 0, nFar = 0;
@@ -219,6 +245,13 @@ export function placeCarriers(t) {
         if (d2 > CHAIR_NEAR * CHAIR_NEAR) { out = fe; n = nFar++; } else nNear++;
       } else nNear++;
       // rotation about y taking local +z to (fx, fz)
+      if (c === ride.chair && k === 'cabin') {
+        rideCabin.matrix.set(fz, 0, fx, x, 0, 1, 0, cp.y, -fx, 0, fz, z, 0, 0, 0, 1);
+        rideCabin.matrixWorldNeedsUpdate = true;
+        rideCabin.visible = true;
+        if (out === e) nNear--; else nFar--;
+        return;
+      }
       out.set([fz, 0, -fx, 0, 0, 1, 0, 0, fx, 0, fz, 0, x, cp.y, z, 1], n * 16);
     });
     m.count = nNear;

@@ -11,7 +11,7 @@ Writes labels.npy (int16, 0 = no run) and pockets.json.
 import json, sys, numpy as np
 from scipy import ndimage as ndi
 from skimage.morphology import reconstruction
-from load import load_owner, load_runs, load_lifts, load_kit_runs, RM, IN
+from load import load_owner, load_runs, load_lifts, load_kit_runs, fill_mask, RM, IN
 import grid
 
 TRIM = 3.0        # m: deeper pockets come off the run
@@ -42,6 +42,18 @@ def main(out_dir):
     runs = {r['i']: r for r in load_runs()}
     h0 = np.load(f'{out_dir}/h0.npy')
     lab = O.copy()
+    # extra lines marked paint (no traced outline) get their width painted where no run is; forest fills are not run
+    from shape import dense_line
+    lines = load_kit_runs() + json.load(open(IN + 'extra_runs.json'))
+    for i, ln in enumerate(lines):
+        if not ln.get('paint'): continue
+        L = dense_line(ln['points']); half = ln['width'] / 2
+        rr, cc = np.round(grid.rc(L[:, 0], L[:, 1])).astype(int); pad = int(half / grid.PC) + 2
+        r0, c0 = max(0, rr.min() - pad), max(0, cc.min() - pad)
+        sl = (slice(r0, rr.max() + pad + 1), slice(c0, cc.max() + pad + 1))
+        on = np.zeros(lab[sl].shape, bool); on[rr - r0, cc - c0] = True
+        lab[sl][(ndi.distance_transform_edt(~on) * grid.PC <= half) & (lab[sl] == 0)] = i + 1
+    lab[fill_mask(lab.shape)] = 0
     # 1. specks
     nspeck = 0
     for i in np.unique(lab[lab > 0]):
@@ -54,7 +66,7 @@ def main(out_dir):
     # cat tracks across expert runs: expert snow within half the track's width of its line becomes track
     from shape import dense_line
     lines = load_kit_runs() + json.load(open(IN + 'extra_runs.json'))
-    expert = np.zeros(lab.max() + 1, bool)
+    expert = np.zeros(max(lab.max(), len(lines)) + 1, bool)
     for i, r in runs.items(): expert[i + 1] = r['difficulty'] == 'expert'
     ncross = 0
     for i, r in runs.items():
@@ -91,6 +103,7 @@ def main(out_dir):
             sizes = ndi.sum(m, cl, range(1, n + 1))
             small = np.isin(cl, 1 + np.nonzero(sizes * 4 < 100)[0])
             lab[small] = 0
+    lab[fill_mask(lab.shape)] = 0
     np.save(f'{out_dir}/labels.npy', lab)
     json.dump(sorted(pockets, key=lambda p: -p['depth']), open(f'{out_dir}/pockets.json', 'w'), indent=0)
     print(f'specks {nspeck * 4} m2, cat tracks across experts {ncross * 4} m2, pockets trimmed {len(pockets)} ({int(trim.sum()) * 4} m2), '

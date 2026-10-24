@@ -6,12 +6,22 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBuilding, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBuilding, addIndustrial, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 
 // ---------- Run props: trail signs, rope lines, fence ----------
 export const RUNS = MAP.runs || [];
+// Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
+const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
+function nearestRunPoint(x, z) {
+  let best = Infinity, at = [x, z + 1];
+  for (const r of RUNS) for (const [px, pz] of r.points) {
+    const d = Math.hypot(px - x, pz - z);
+    if (d < best) { best = d; at = [px, pz]; }
+  }
+  return at;
+}
 // point and direction some distance down a run
 function alongRun(run, dist) {
   const p = run.points;
@@ -246,8 +256,16 @@ if (RUN_DATA) {
     addObstacle(t);
   }
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
+  // INDUSTRIAL blocks get the industrial building instead.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
+    if (INDUSTRIAL.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) {
+      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
+      // local z in the world, as placeM turns it: the door side faces the run
+      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
+      addIndustrial({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 });
+      continue;
+    }
     addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h, what: 'stand-in building' });
   }
   flushBuildings();
@@ -445,13 +463,18 @@ SIGNS.forEach(([name, , spots], n) => {
   casters.push({ x, z, h: 2.3, w: w / 2 });
 });
 addByPage(signFaces, signMat, mergeAny);
-// rope lines down both edges of the first 170 m of Sunnyside and Max Park (shared folder: source-data/runs/ropes.json)
+// rope lines down both edges of the first 170 m of Sunnyside and Max Park, and above the buildings below Fanny Hill
+// (shared folder: source-data/runs/ropes.json). Each span is a thin solid wall up to the rope, so skiers glance off it.
 const ropePts = [];
 for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
   for (let k = 0; k < line.length; k += 3) {
     const [x, z, y] = [line[k], line[k + 1], line[k + 2]];
     addProp({ x, z, y: y - 0.15, height: 1.7, r: 0, kind: KIND.pole });
-    if (k) ropePts.push(line[k - 3], line[k - 1] + 1.25, line[k - 2], x, y + 1.25, z);
+    if (!k) continue;
+    const [px, pz, py] = [line[k - 3], line[k - 2], line[k - 1]], len = Math.hypot(x - px, z - pz) || 1;
+    ropePts.push(px, py + 1.25, pz, x, y + 1.25, z);
+    SOLIDS.push({ x: (px + x) / 2, z: (pz + z) / 2, y: (py + y) / 2 + 0.6, hx: 0.12, hy: 0.7 + Math.abs(y - py) / 2, hz: len / 2,
+      c: (z - pz) / len, s: (x - px) / len, what: 'rope' });
   }
 }
 {

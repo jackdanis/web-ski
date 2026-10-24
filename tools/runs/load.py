@@ -27,3 +27,15 @@ def load_lifts():
     return json.JSONDecoder().raw_decode(s[i:])[0]
 def load_kit_runs():
     return json.load(open(IN + 'runs.json'))['runs']
+def load_fills():
+    # forest fill rings (x, z in m): ground that is forest, not run, whatever the traced runs say (Jack's laser notes)
+    p = IN + 'forest_fill.json'
+    return [np.asarray(f['ring'], np.float64) for f in json.load(open(p))['fills']] if os.path.exists(p) else []
+def fill_mask(shape):
+    # the fill rings on the 2 m grid (row, col)
+    import cv2, grid
+    m = np.zeros(shape, np.uint8)
+    for ring in load_fills():
+        r, c = grid.rc(ring[:, 0], ring[:, 1])
+        cv2.fillPoly(m, [np.round(np.stack([c, r], 1)).astype(np.int32)], 1)
+    return m.astype(bool)

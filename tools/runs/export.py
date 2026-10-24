@@ -24,13 +24,13 @@ distance (Jack's choice 8).
 - runf: the same to the groomed edge, which the 10 m ground draws the runs with wherever no tiles are loaded.
 - blocks: plain stand-in blocks for the buildings (Jack's choice 4) until real ones are made: each footprint's
   smallest enclosing rectangle as [x, z, width, length, yaw in degrees, height, ground low, ground high] (ground
-  under the footprint, shaped). Heights are a guess from the
+  under the footprint, shaped), within BLOCK_REACH of a run line. Heights are a guess from the
   footprint (5 m plus a quarter of its square root, 6 to 16 m); the footprints carry no heights.
 """
 import base64, json, os, sys, zlib, numpy as np, cv2
 from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
-from load import load_map, load_runs, RM, IN
+from load import load_map, load_runs, load_kit_runs, RM, IN
 from shape import smoothstep, BERM_W, BLEND
 from signs import CLEAR, TREE_R
 import grid
@@ -39,6 +39,7 @@ TILE = 64
 KEEP = 24.0          # m past a run's edge a tile still has to reach to be kept (BLEND + 6)
 CHUNK = 4            # tiles a side in each file the game loads
 EDGE_STEP = 0.15     # m per int8 step of the edge field
+BLOCK_REACH = 500.0  # m: stand-in blocks farther than this from every run line are left out (Jack, 2026-10-24)
 
 
 def enc_tiles(dh, edges, tiles):
@@ -135,11 +136,14 @@ def main(d):
         P = np.array(rp['points'], np.float64); y = drawn(P[:, 0], P[:, 1])
         ropes.append([round(float(v), 2) for p_, y_ in zip(P, y) for v in (p_[0], p_[1], y_)])
     blocks = []
+    from shape import dense_line
+    run_pts = cKDTree(np.vstack([dense_line(r_['points'])[:, :2] for r_ in load_kit_runs() + json.load(open(IN + 'extra_runs.json')) if len(r_['points']) > 1]))
     for b in json.load(open(RM + 'buildings_game.json'))['buildings']:
         ring = np.asarray(b['ring'], np.float32)
         if len(ring) < 3: continue
         (cx, cz), (bw, bl), ang = cv2.minAreaRect(ring)
         if min(bw, bl) < 2: continue
+        if run_pts.query([cx, cz])[0] > BLOCK_REACH: continue
         hgt = float(np.clip(5 + np.sqrt(abs(cv2.contourArea(ring))) / 4, 6, 16))
         # cv2's angle turns the rectangle's width (x) axis toward z; the game's yaw turns local x the other way
         gy = at(ring[:, 0], ring[:, 1]); gc = at(np.array([cx]), np.array([cz]))

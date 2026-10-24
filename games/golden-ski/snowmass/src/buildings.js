@@ -207,6 +207,29 @@ export function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof 
   return addRinged(make, 0, RING_NEAR, foot);
 }
 export const flushBuildings = () => addByPage(STAND_INS, modelMat);
+// Industrial building (Jack's reference: a small electrical building): dark brown lap siding, a flat roof behind a
+// grey band, framed double doors on the side that faces the run (front = +1 for local +z, -1 for -z). One storey
+// on small footprints, taller on big ones; batched with the stand-ins.
+const IND_SIDING = [0.6, 0.66, 0.84], IND_DOOR = [0.21, 0.18, 0.16], IND_TRIM = [0.15, 0.13, 0.12], IND_BAND = [0.6, 0.6, 0.58];
+export function addIndustrial({ x, z, yaw = 0, w, l, bot, ground, front = 1 }) {
+  const H = ground - bot + (w * l < 80 ? 3.4 : 4.6), m = placeM(x, bot, z, yaw), band = 0.7;
+  // doors go on a long side: swap so the long side runs along local x
+  const long = w >= l, W = long ? w : l, L = long ? l : w, mm = long ? m : m.clone().multiply(new THREE.Matrix4().makeRotationY(Math.PI / 2));
+  const P = [
+    part(new THREE.BoxGeometry(W, H - band, L).translate(0, (H - band) / 2, 0), IND_SIDING, mm, TILES.siding),
+    part(new THREE.BoxGeometry(W + 0.16, band, L + 0.16).translate(0, H - band / 2, 0), IND_BAND, mm),
+    part(new THREE.BoxGeometry(W - 0.3, 0.12, L - 0.3).translate(0, H + 0.06, 0), SNOWCAP, mm),   // snow inside the band
+  ];
+  // pairs of doors 2.6 m wide, 2.5 m tall, about one per 4 m of wall
+  const pairs = Math.max(1, Math.min(4, Math.floor(W / 4))), dy = ground - bot, zf = front * (L / 2 + 0.04);
+  for (let k = 0; k < pairs; k++) {
+    const cx = (k - (pairs - 1) / 2) * (W / pairs);
+    P.push(part(new THREE.BoxGeometry(2.9, 2.75, 0.06).translate(cx, dy + 1.375, zf), IND_TRIM, mm));         // frame
+    for (const s of [-1, 1]) P.push(part(new THREE.BoxGeometry(1.24, 2.5, 0.1).translate(cx + s * 0.65, dy + 1.25, zf), IND_DOOR, mm, TILES.siding));
+  }
+  bucket(STAND_INS, x, z, ...P);
+  SOLIDS.push({ x, z, y: bot + H / 2, hx: w / 2, hy: H / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw), what: 'industrial building' });
+}
 
 // ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 export const ROCK_VARIANTS = 6, ROCK_MAX = 2500;

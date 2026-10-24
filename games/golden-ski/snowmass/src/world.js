@@ -113,7 +113,8 @@ export function stationH(st, x, z) {
 // Solid boxes: centre x, y, z, half sizes hx, hy, hz, yaw as c, s.
 export const SOLIDS = [];
 export function nearSolid(x, z, pad) {
-  return SOLIDS.some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
+  return SOLIDS.some((b) => { if (b.what === 'rope') return false;   // ropes don't keep buildings and signs away
+    const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
 }
 // SOLIDS bucketed in 32 m cells, each box in every cell its reach (plus 1 m for the body) touches, in SOLIDS order;
 // rebuilt whenever boxes are added

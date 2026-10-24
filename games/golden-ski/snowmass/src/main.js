@@ -45,8 +45,8 @@ function updateCamera(p, dt) {
   state.cameraSnap = false;
 }
 
-// On the chair: camera behind and above, looking up the line. RIDE_SEAT is her sprite's base below the cable.
-const RIDE_SEAT = -3.05, rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
+// On the chair or in the cabin: camera behind and above, looking up the line. R.seat is her sprite's base below the cable.
+const rideLook = { x: 0, y: 0, z: 0, dx: 0, dz: 0, fx: 0, fz: 0 };
 function rideCamera(p) {
   const fx = Math.sin(sk.heading), fz = -Math.cos(sk.heading);
   const R = ride.R, ahead = Math.min(ride.d + 30, R.d1 + LOAD);
@@ -168,7 +168,8 @@ function drawSkier(p, riding, dY) {
   }
   bodyF.addScaledVector(bodyU, -bodyF.dot(bodyU)).normalize();
   bodyR.crossVectors(bodyF, bodyU).normalize();
-  foot.set(p.x, p.y + (riding ? RIDE_SEAT : dY), p.z);
+  foot.set(p.x, p.y + (riding ? ride.R.seat : dY), p.z);
+  skierMat.uniforms.nudge.value = riding ? 0 : 0.5;
   camera.updateMatrixWorld();
   cardZ.setFromMatrixColumn(camera.matrixWorld, 2);
   camD.copy(camera.position).sub(foot).addScaledVector(bodyU, -0.9).normalize();

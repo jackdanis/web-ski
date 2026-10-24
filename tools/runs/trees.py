@@ -13,7 +13,7 @@ mapped tree top).
 """
 import sys, numpy as np
 from scipy import ndimage as ndi
-from load import load_map, RM
+from load import load_map, load_fills, RM
 import grid
 
 NEAR = 25.0
@@ -59,6 +59,15 @@ def main(d):
             if not len(R): continue
             x = Cc - 3985.0 + 0.5; z = R - 8525.0 + 0.5
             out.append(np.stack([x, z, hh], 1))
+    # forest fills: a jittered 6 m grid of 9-16 m crowns, kept like mapped tops so they draw at any distance
+    for ring in load_fills():
+        import cv2
+        gx = np.arange(np.floor(ring[:, 0].min() / 6), np.ceil(ring[:, 0].max() / 6) + 1).astype(np.int64)
+        gz = np.arange(np.floor(ring[:, 1].min() / 6), np.ceil(ring[:, 1].max() / 6) + 1).astype(np.int64)
+        GI, GJ = [a.ravel() for a in np.meshgrid(gx, gz)]
+        fx = (GI + hash2(GI + 4242, GJ)) * 6.0; fz = (GJ + hash2(GI, GJ + 4242)) * 6.0
+        inside = np.array([cv2.pointPolygonTest(ring.astype(np.float32), (float(a), float(b)), False) > 0 for a, b in zip(fx, fz)], bool)
+        out.append(np.stack([fx[inside], fz[inside], 9 + 7 * hash2(GI[inside] + 77, GJ[inside])], 1))
     T = np.concatenate(out)
     ntops = len(T)
     # candidate spots wherever the map has canopy: a jittered grid, each with the crown top's height around it
