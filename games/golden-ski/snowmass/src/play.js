@@ -21,6 +21,7 @@ const ptr = { id: null, x0: 0, x: 0, y: 0, t0: 0, travel: 0, lastMove: 0, steer:
 const touches = new Map();      // finger id -> [x, y]
 const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'pole', KeyW: 'pole', ArrowDown: 'brake', KeyS: 'brake', ShiftLeft: 'tuck', ShiftRight: 'tuck', Space: 'jump' };
 window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;   // typing a note
   if (debugKey(e)) return;
   const k = KEYMAP[e.code];
   if (!k) return;

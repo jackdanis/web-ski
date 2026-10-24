@@ -67,3 +67,86 @@ html, body {
 .hudmap-full[hidden] { display: none; }
 .hudmap-full canvas { position: fixed; }
 .hudmap-full canvas:first-child { border-radius: 4px; box-shadow: 0 0 0 3px #fff, 0 4px 18px rgba(0, 0, 0, 0.4); }
+/* Laser notes (freecam): the red dot at screen centre, what it hits, the note box and the notes panel. */
+.laser-dot {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #ff2a2a;
+  box-shadow: 0 0 6px 2px rgba(255, 40, 40, 0.75);
+  pointer-events: none;
+}
+.laser-read {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 12px);
+  transform: translateX(-50%);
+  font: 600 12px ui-monospace, Menlo, monospace;
+  color: #fff;
+  text-shadow: 0 1px 2px #13244d;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.note-box {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 34px);
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 10px;
+  background: rgba(13, 22, 48, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.note-box label { display: block; margin-bottom: 6px; color: #ff8a8a; }
+.note-box input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  font: inherit;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.note-box small, .notes-panel small { display: block; margin-top: 6px; opacity: 0.7; }
+.notes-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  width: 280px;
+  max-height: 45vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: rgba(13, 22, 48, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.note-box[hidden], .notes-panel[hidden], .laser-dot[hidden], .laser-read[hidden] { display: none; }
+.notes-head { display: flex; align-items: center; gap: 6px; }
+.notes-head b { flex: 1; }
+.notes-panel button {
+  font: inherit;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.notes-panel ol { margin: 6px 0 0; padding-left: 22px; }
+.notes-panel li { padding: 2px 0; }
+.notes-panel li span { word-break: break-word; }
+.notes-panel li button { margin-left: 6px; padding: 0 5px; }

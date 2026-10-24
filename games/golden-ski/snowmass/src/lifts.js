@@ -103,7 +103,7 @@ for (const lift of LIFTS) {
     ];
     liftParts.push(...placed(parts, placeM(pts[i][0], g[i] - 0.4, pts[i][1], yaw)));
     casters.push({ x: pts[i][0], z: pts[i][1], h: th, w: 0.8 });
-    addObstacle({ x: pts[i][0], z: pts[i][1], y: g[i], r: 1.1, height: th });
+    addObstacle({ x: pts[i][0], z: pts[i][1], y: g[i], r: 1.1, height: th, what: 'lift tower' });
   }
   for (const i of [0, N - 1]) {
     const sd = stn[i], yaw = sd ? sd.yaw : dirAt(i) + (i === 0 ? Math.PI : 0), arm = st.arm;
@@ -130,11 +130,11 @@ for (const lift of LIFTS) {
       const L = 7, toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
       for (const [u, v, r] of [[0, 0, 0.6], [-(arm + 1.55), 1.2, 0.2], [arm + 1.55, 1.2, 0.2], [-(arm + 1.55), -L + 0.9, 0.2], [arm + 1.55, -L + 0.9, 0.2]]) {
         const [x, z] = toW(u, v);
-        addObstacle({ x, z, y: sd.y, r, height: hh });
+        addObstacle({ x, z, y: sd.y, r, height: hh, what: 'station post' });
       }
       // hut: solid 3 x 3 x 2.6 m box
       const [hutX, hutZ] = toW(sd.hut * (arm + 3.4), -L + 3.2);
-      SOLIDS.push({ x: hutX, z: hutZ, y: sd.y + 1.0, hx: 1.5, hy: 1.6, hz: 1.5, c: sd.c, s: sd.s });
+      SOLIDS.push({ x: hutX, z: hutZ, y: sd.y + 1.0, hx: 1.5, hy: 1.6, hz: 1.5, c: sd.c, s: sd.s, what: 'lift hut' });
       // no trees on the station or apron
       for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
         for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)

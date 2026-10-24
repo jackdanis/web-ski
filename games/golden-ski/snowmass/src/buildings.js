@@ -192,11 +192,11 @@ export function addByPage(map, mat, join = merge) {
 // Without a near model the box draws from 0, batched by page until flushBuildings(). near is a geometry, a mesh,
 // or a function returning either, called when the camera first comes within RING_NEAR.
 const STAND_INS = new Map();
-export function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof = null, near = null, mat = modelMat, solid = true }) {
+export function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof = null, near = null, mat = modelMat, solid = true, what = 'building' }) {
   const roofH = roof ? Math.min(0.5, (top - bot) * 0.1) : 0, m = placeM(x, bot, z, yaw);
   const box = [part(new THREE.BoxGeometry(w, top - bot - roofH, l).translate(0, (top - bot - roofH) / 2, 0), color, m)];
   if (roof) box.push(part(new THREE.BoxGeometry(w, roofH, l).translate(0, top - bot - roofH / 2, 0), roof, m));
-  if (solid) SOLIDS.push({ x, z, y: (bot + top) / 2, hx: w / 2, hy: (top - bot) / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw) });
+  if (solid) SOLIDS.push({ x, z, y: (bot + top) / 2, hx: w / 2, hy: (top - bot) / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw), what });
   if (!near) { bucket(STAND_INS, x, z, ...box); return; }
   const r = Math.hypot(w, l) / 2, foot = [x - r, x + r, z - r, z + r];
   addRinged(new THREE.Mesh(merge(box), modelMat), RING_NEAR, RING_FAR, foot);
@@ -469,13 +469,13 @@ export function gondolaStation(sd, arm, hh, base, m, elkTop) {
   const toW = (u, v) => [sd.x + sd.c * u + sd.s * v, sd.z - sd.s * u + sd.c * v];
   const box = (u0, u1, v0, v1, y0, y1) => {
     const [x, z] = toW((u0 + u1) / 2, (v0 + v1) / 2);
-    SOLIDS.push({ x, z, y: (y0 + y1) / 2, hx: (u1 - u0) / 2, hy: (y1 - y0) / 2, hz: (v1 - v0) / 2, c: sd.c, s: sd.s });
+    SOLIDS.push({ x, z, y: (y0 + y1) / 2, hx: (u1 - u0) / 2, hy: (y1 - y0) / 2, hz: (v1 - v0) / 2, c: sd.c, s: sd.s, what: 'gondola station' });
   };
   const wx = GW(arm), y = sd.y;
   box(-wx - 0.2, -wx + 0.2, -19.0, 4.5, y - 0.5, y + 5.5);
   box(wx - 0.2, wx + 0.2, -19.0, 4.5, y - 0.5, y + 5.5);
   box(-wx, wx, 4.3, 4.7, y - 0.5, y + 5.5);
-  { const [x, z] = toW(0, 0); addObstacle({ x, z, y, r: 0.7, height: hh }); }
+  { const [x, z] = toW(0, 0); addObstacle({ x, z, y, r: 0.7, height: hh, what: 'gondola post' }); }
   const cut = (u0, u1, v0, v1, pad) => {
     const cs = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]].map(([u, v]) => toW(u, v));
     const xs = cs.map((q) => q[0]), zs = cs.map((q) => q[1]);

@@ -248,7 +248,7 @@ if (RUN_DATA) {
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
-    addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h });
+    addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h, what: 'stand-in building' });
   }
   flushBuildings();
 }
@@ -527,7 +527,7 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
         stone.push(...quad(wl(p, p.y + PARAPET), wl(q, q.y + PARAPET), wi(q, q.y + PARAPET), wi(p, p.y + PARAPET)));   // coping
         const yaw = Math.atan2(q.x - p.x, q.z - p.z), c = (sg * (hw - PW / 2));
         SOLIDS.push({ x: (p.x + q.x) / 2 + (pnx + qnx) / 2 * c, z: (p.z + q.z) / 2 + (pnz + qnz) / 2 * c, y: (p.y + q.y) / 2 + PARAPET / 2,
-          hx: PW / 2, hy: PARAPET / 2 + Math.abs(q.y - p.y) / 2, hz: Math.hypot(q.x - p.x, q.z - p.z) / 2 + 0.05, c: Math.cos(yaw), s: Math.sin(yaw) });
+          hx: PW / 2, hy: PARAPET / 2 + Math.abs(q.y - p.y) / 2, hz: Math.hypot(q.x - p.x, q.z - p.z) / 2 + 0.05, c: Math.cos(yaw), s: Math.sin(yaw), what: 'bridge wall' });
       }
       // soffit: the deck's underside, following the arch over the road
       stone.push(...quad(at(p, hw, lo0 - p.y), at(p, -hw, lo0 - p.y), at(q, -hw, lo1 - q.y), at(q, hw, lo1 - q.y)));
