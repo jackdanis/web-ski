@@ -75,6 +75,25 @@ function mirror(p) {
   return q;
 }
 POSES.carve_r = mirror(POSES.carve_l);
+// Moving carve at three edge angles (Jack's carving photos): the legs lean into the turn by `roll`, both shins
+// parallel so the boots sit on the game's rolled ski plate; the upper body is given upright, so the hips drop
+// inside while the chest stays near vertical, turned a little to the outside, hands forward, head level.
+function upright(rot, look, w) { // a direction in her upright frame -> the rolled + twisted frame pose() applies
+  const R = new THREE.Quaternion().setFromEuler(new THREE.Euler(rot.pitch * deg, rot.yaw * deg, -rot.roll * deg, 'YXZ'));
+  const L = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), look * deg);
+  return w.clone().applyQuaternion(L).applyQuaternion(R.invert()).applyQuaternion(L.clone().invert());
+}
+function carveAt(roll) {
+  const k = roll / 40, rot = { yaw: 0, roll, pitch: 0 }, look = -20 * k, U = w => upright(rot, look, w);
+  return {
+    rot, look,
+    torso: U(V(0.15 * k, 1, 0.45)), head: U(V(0.05 * k, 1, 0.12)),
+    thigh: [V(0.02, -0.75, 0.65), V(-0.02, -0.85, 0.5)], shin: [V(0, -1, -0.6), V(0, -1, -0.5)],
+    arm: [U(V(0.4, -1, 0.45)), U(V(-0.4, -1, 0.4))], fore: [U(V(0.15, -0.35, 1)), U(V(-0.15, -0.45, 1))],
+    pole: [U(V(0.25 + 0.15 * k, -1, -0.1)), U(V(-0.15, -1, -0.5))], skiYaw: [0, 0],
+  };
+}
+for (const r of [15, 30, 45]) { POSES[`carve${r}_l`] = carveAt(r); POSES[`carve${r}_r`] = mirror(POSES[`carve${r}_l`]); }
 
 let model, bones = {}, skinned, skis = [], poles = [], footBind = [];
 window.setup = async function (url) {

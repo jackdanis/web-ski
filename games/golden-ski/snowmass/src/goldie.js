@@ -10,6 +10,8 @@ import './atmosphere.js'; // load order: runs after atmosphere.js
 // The frames are her body only; the skis are drawn on the physics ski plate. Wipeout and sit keep their own skis.
 // Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
 export const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit' };
+// The moving carve comes at three edge angles (degrees), frames carve15_l .. carve45_r; carve_l/r is the turn on the spot.
+export const CARVE_EDGES = [15, 30, 45];
 export const SHEET_PX = GOLDIE.pxPerM, [SHEET_W, SHEET_H] = GOLDIE.size;
 export const SHEET_YAWS = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180];
 export const SKIER_LIT = { sunColor: { value: SUN_COLOR }, skyColor: { value: SKY_COLOR }, bounce: { value: BOUNCE }, uLit: { value: 1 } };

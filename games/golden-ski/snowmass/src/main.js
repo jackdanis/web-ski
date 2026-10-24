@@ -10,7 +10,7 @@ import { carriers, liftPaths, updateKickers } from './lifts.js';
 import { PATCH_STEP, RUNS, STARTS, meshY, runStream, setPatch, signSpots, updatePatch } from './slopes.js';
 import { LOAD, RIDES, carrierAt, ride, ringMat } from './ride.js';
 import { applyTime, resize, setPixelLook, sunAt, updateWorld } from './atmosphere.js';
-import { FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
+import { CARVE_EDGES, FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
 import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
@@ -153,16 +153,27 @@ const cardM = new THREE.Matrix4(), skiN = new THREE.Vector3(), skiF = new THREE.
 const DEG = 180 / Math.PI;
 function drawSkier(p, riding, dY) {
   let pose = riding ? FRAMES.sit : pickFrame();
-  sk.frame = pose;
   const crashed = sk.crashed && !riding;
   const n = normalFrom(sample(p.x, p.z), skiN);
   const moving = !riding && !crashed && sk.grounded && sk.vel.length() > 0.5 && pose !== FRAMES.air && pose !== FRAMES.celebrate;
   const e = sk.grounded && !crashed && !riding ? (sk.lean || sk.edgeA) : 0;
+  // Moving, she carves: the frame drawn nearest the skis' edge angle, and the card turned by the rest so her legs
+  // line up with the skis. Turning on the spot keeps the stand-still lean frames.
+  let L = clamp(e * 0.25, -0.17, 0.17);
+  if (moving && (pose === FRAMES.stand || pose === FRAMES.carveL || pose === FRAMES.carveR)) {
+    const deg = Math.abs(e) * DEG;
+    if (deg < CARVE_EDGES[0] / 2) pose = FRAMES.stand;
+    else {
+      const lvl = CARVE_EDGES.reduce((a, b) => (Math.abs(b - deg) < Math.abs(a - deg) ? b : a));
+      pose = `carve${lvl}_${e > 0 ? 'r' : 'l'}`;
+      L = clamp(e - Math.sign(e) * lvl / DEG, -0.17, 0.17);
+    }
+  }
+  sk.frame = pose;
   bodyU.copy(moving ? n : UP);
   bodyF.set(Math.sin(sk.heading), 0, -Math.cos(sk.heading));
   if (e) {
-    // motion feel: a little extra lean with her edges, on top of the lean drawn into the carve frames
-    const L = clamp(e * 0.25, -0.17, 0.17);
+    // motion feel: a little extra lean with her edges, on top of the lean drawn into the frames
     bodyR.crossVectors(bodyF, bodyU).normalize();
     bodyU.multiplyScalar(Math.cos(L)).addScaledVector(bodyR, Math.sin(L));
   }
@@ -177,8 +188,7 @@ function drawSkier(p, riding, dY) {
   const yi = Math.round(Math.atan2(Math.abs(side), -camD.dot(bodyF)) * DEG / 22.5);
   const elev = Math.asin(clamp(camD.dot(bodyU), -1, 1)) * DEG;
   let tilt = elev < 6 ? 0 : elev < 28.5 ? 12 : 45, yaw = SHEET_YAWS[yi];
-  if (mirror && pose === FRAMES.carveL) pose = FRAMES.carveR;
-  else if (mirror && pose === FRAMES.carveR) pose = FRAMES.carveL;
+  if (mirror) pose = pose.replace(/_([lr])$/, (_, s) => (s === 'l' ? '_r' : '_l'));
   if (crashed) { tilt = 12; yaw = 0; }
   const [fx, fy, fw, fh, ax, ay] = GOLDIE.frames[pose][tilt][yaw];
   const U = skierMat.uniforms;

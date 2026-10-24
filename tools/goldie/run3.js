@@ -2,7 +2,7 @@
 const { chromium } = require('playwright'); const fs = require('fs'); const path = require('path');
 (async () => {
   const [bodyGlb, poses, yaws, pitches, outdir, optj] = [process.argv[2], process.argv[3].split(','), process.argv[4].split(',').map(Number), process.argv[5].split(',').map(Number), process.argv[6], process.argv[7] || '{}'];
-  const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const b = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const p = await b.newPage(); p.on('pageerror', e => console.error(String(e)));
   await p.goto('file://' + path.join(__dirname, 'pose2.html'));
   const u = f => 'data:model/gltf-binary;base64,' + fs.readFileSync(f).toString('base64');
