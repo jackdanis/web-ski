@@ -12,7 +12,7 @@ export const SNOW = {
 export const TUCK_GRIP = 0.6;          // tucked, less edge grip
 export const SKID = 0.55;              // speed lost to sideways slip, share of normal force
 export const BRAKE = 8.5;              // hockey stop, m/s^2
-export const POP_COOLDOWN = 0.35;
+export const POP_COOLDOWN = 0.15;      // s between ollies; counts down in the air too, so landing doesn't wait
 export const PUSH = 3.5;               // push off at the summit and after a wipeout
 export const TAKEOFF_MARGIN = 0.0005;  // m per step a crest must drop away before it launches you
 export const REAL_AIR = 0.22;          // shorter air is a bump, not a jump
@@ -44,7 +44,7 @@ export const MO = {
   CRASH_BASE: 2,
   CRASH_MAX: 5,                 // s before she self-arrests on any slope
 };
-export const ASSIST = { grip: 1.2, cap: 34, capDrag: 0.25, airG: 1.15, align: 2.5, clean: 25 };
+export const ASSIST = { grip: 1.2, cap: 34, capDrag: 0.25, airG: 1.15, clean: 25 };
 // ---------- Carve physics ----------
 // Steering asks for a share of the tightest turn you can hold: radius = max(R_MIN, v^2 / grip). Goldie leans to balance
 // the turn, so full steer is a clean carve at the grip limit. Carving costs speed; slow, the skis pivot; brake + steer

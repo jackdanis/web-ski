@@ -445,15 +445,13 @@ function groundStep(dt) {
 
 function airStep(dt) {
   const A = ASSIST;
+  sk.popCD = Math.max(0, sk.popCD - dt);
   // Air steering torques the spin; let go and it carries on.
   if (sk.steer) sk.spin += sk.steer * MO.SPIN_IN * dt;
   else {
     sk.spin *= Math.max(0, 1 - MO.SPIN_DAMP * dt);
-    // Assist: with nothing held and little spin, the skis drift back in line with travel.
-    if (A.align && Math.abs(sk.spin) < 2) {
-      sk.spin *= Math.max(0, 1 - 3 * dt);
-      sk.heading += clamp(wrapAngle(travelYaw() - sk.heading), -A.align * dt, A.align * dt);
-    }
+    // a slow spin settles; her heading stays wherever you leave it
+    if (Math.abs(sk.spin) < 2) sk.spin *= Math.max(0, 1 - 3 * dt);
   }
   sk.heading = wrapAngle(sk.heading + sk.spin * (sk.tuck ? MO.SPIN_TUCK : 1) * dt);
   // Up/down torques the flip the same way; let go and it carries on.
