@@ -384,6 +384,106 @@ export function addBase(b) {
   solidBox(x, z, yaw, w + 0.8, l + 0.8, bot, top + 1, 'Base');
 }
 
+// ---------- Snowmass Mall (laser notes batch 3, refs in references/buildings/westin-snowmass/) ----------
+// Big village buildings on steep ground: each is a grid of masses, and every mass stands on its own ground (a stone
+// plinth takes up the slope under it), so the building steps down the hill like the real ones.
+// m: frame matrix at y 0; spec: { x0, x1, z0, z1 } in frame metres, floors, and a style.
+// style: { wall, plinth, FH (floor height), band (window band height), balcony (rail color) or null, cap (roof trim) }
+function mass(P, b, frame, spec, st) {
+  const { x0, x1, z0, z1, floors } = spec, M = frame.m(0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, bw = x1 - x0, bl = z1 - z0;
+  const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  const g = [[x0, z0], [x1, z0], [x0, z1], [x1, z1], [cx, cz]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+  const lo = Math.min(...g) - 1, hi = Math.max(...g) + 0.3, top = hi + floors * st.FH;
+  P.push(part(BOX(bw + 0.4, hi - lo, bl + 0.4, cx, lo, cz), st.plinth, M, TILES.stone));
+  P.push(part(BOX(bw, top - hi, bl, cx, hi, cz), st.wall, M));
+  P.push(part(BOX(bw + 0.6, 0.7, bl + 0.6, cx, top - 0.1, cz), st.cap, M));
+  P.push(part(BOX(bw - 0.4, 0.14, bl - 0.4, cx, top + 0.6, cz), SNOWCAP, M));
+  // window bands on all four faces, balconies (slab and rail) on the run side and the two ends
+  const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]];
+  for (let f = 0; f < floors; f++) {
+    const y = hi + f * st.FH;
+    for (const [len, alongX, sg] of faces) {
+      const box = (gw, gh, gy, d, dep = 0.1) => alongX ? BOX(gw, gh, dep, cx, gy, cz + sg * (bl / 2 + d)) : BOX(dep, gh, gw, cx + sg * (bw / 2 + d), gy, cz);
+      P.push(part(box(len - 1.6, st.band, y + (st.FH - st.band) / 2 + 0.1, 0.03), WIN, M, TILES.window));
+      if (st.balcony && f > 0 && !(alongX && sg < 0)) {
+        P.push(part(box(len - 1.0, 0.22, y, 0.7, 1.4), st.cap, M));
+        P.push(part(box(len - 1.0, 1.0, y + 0.22, 1.35, 0.08), st.balcony, M));
+      }
+    }
+  }
+  const c = at(cx, cz), long = b.w >= b.l;
+  solidBox(c.x, c.z, b.yaw, long ? bw : bl, long ? bl : bw, lo, top - lo + 1, st.what);
+  return { lo, hi, top };
+}
+
+// The Westin (pins 4 and 5, one complex): white, three tiers stepping down to the run side, balconies on every
+// floor, a dark glass stair atrium, a round tower on top, and a two-storey colonnade pavilion with a pale roof
+// in front (the photo from the chair). Pin 5 is a lower wing in the same style.
+const WESTIN = { wall: [0.9, 0.9, 0.87], plinth: [1.0, 1.0, 1.02], cap: [0.95, 0.95, 0.93], balcony: [0.72, 0.73, 0.75], FH: 3.2, band: 1.4, what: 'Westin' };
+const PALE_ROOF = [0.82, 0.78, 0.7];
+export function addWestin(b) {
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
+  const xs = [-W / 2, -W / 2 + W * 0.3, W / 2 - W * 0.3, W / 2], zs = [-L / 2, -L / 2 + L * 0.38, L / 2 - L * 0.34, L / 2];
+  const FLOORS = [[6, 7, 6], [5, 6, 5], [3, 0, 3]];                                         // back, middle, front tier
+  let back = null;
+  for (let t = 0; t < 3; t++) for (let k = 0; k < 3; k++) {
+    if (!FLOORS[t][k]) continue;
+    const r = mass(P, b, F, { x0: xs[k], x1: xs[k + 1], z0: zs[t], z1: zs[t + 1], floors: FLOORS[t][k] }, WESTIN);
+    if (t === 0 && k === 1) back = r;
+  }
+  // colonnade pavilion in the middle of the front tier: two floors set back behind a row of square columns
+  const px0 = xs[1], px1 = xs[2], pz0 = zs[2], pz1 = zs[3];
+  const pv = mass(P, b, F, { x0: px0, x1: px1, z0: pz0, z1: pz1 - 4, floors: 2 }, { ...WESTIN, FH: 4.2, balcony: null });
+  const n = Math.round((px1 - px0) / 6), ry = pv.top - 0.2;
+  for (let k = 0; k <= n; k++) P.push(part(BOX(1.1, ry - pv.lo, 1.1, px0 + 0.6 + k * (px1 - px0 - 1.2) / n, pv.lo, pz1 - 0.8), WESTIN.wall, M));
+  P.push(part(BOX(px1 - px0 + 1.0, 0.8, 5.2, (px0 + px1) / 2, ry, pz1 - 2.2), WESTIN.cap, M));
+  P.push(part(gable(pz1 - pz0 + 1.6, px1 - px0 + 1.6, 2.4).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate((px0 + px1) / 2, ry + 0.8, (pz0 + pz1) / 2), PALE_ROOF, M));
+  // glass atrium where the left wing meets the middle, full height of the back tier, and the round tower on top
+  const ax = xs[1], az = zs[1] - 4;
+  P.push(part(BOX(9, back.top - back.hi + 2, 9, ax, back.hi, az), GLASS, M, TILES.curtain));
+  P.push(part(BOX(9.6, 0.5, 9.6, ax, back.top + 2, az), WESTIN.cap, M));
+  const tx = (xs[1] + xs[2]) / 2 - 8, tz = (zs[0] + zs[1]) / 2;
+  P.push(part(new THREE.CylinderGeometry(6, 6, 4.5, 16).translate(tx, back.top + 0.6 + 2.25, tz), WESTIN.wall, M));
+  P.push(part(new THREE.CylinderGeometry(5.2, 5.2, 1.6, 16).translate(tx, back.top + 2.2, tz), WIN, M, TILES.window));
+  P.push(part(new THREE.CylinderGeometry(6.4, 6.4, 0.5, 16).translate(tx, back.top + 5.1, tz), WESTIN.cap, M));
+  P.push(part(new THREE.CylinderGeometry(6.0, 6.0, 0.12, 16).translate(tx, back.top + 5.4, tz), SNOWCAP, M));
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+export function addWestinWing(b) {
+  const F = frameOf(b), { W, L } = F, P = [];
+  mass(P, b, F, { x0: -W / 2, x1: 0, z0: -L / 2, z1: L / 2, floors: 4 }, WESTIN);
+  mass(P, b, F, { x0: 0, x1: W / 2, z0: -L / 2, z1: L / 2, floors: 4 }, WESTIN);
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+
+// The other hotel (pin 6): the older tan building beside the Westin in Jack's photo, dark brown wood balconies.
+const TAN_HOTEL = { wall: [0.74, 0.64, 0.5], plinth: [1.0, 0.98, 0.95], cap: [0.6, 0.52, 0.42], balcony: [0.3, 0.21, 0.15], FH: 3.0, band: 1.6, what: 'hotel' };
+export function addTanHotel(b) {
+  const F = frameOf(b), { W, L } = F, P = [];
+  for (const [x0, x1] of [[-W / 2, 0], [0, W / 2]]) for (const [z0, z1, fl] of [[-L / 2, 0, 5], [0, L / 2, 4]]) mass(P, b, F, { x0, x1, z0, z1, floors: fl }, TAN_HOTEL);
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+
+// Venga Venga (pin 3): a low two-storey cream building with a dark fascia, big ground-floor windows and a wooden
+// deck with dark rails on the run side, on a stone base.
+const VENGA = { wall: [0.88, 0.84, 0.74], plinth: [0.95, 0.9, 0.85], cap: [0.25, 0.2, 0.17], balcony: null, FH: 4.2, band: 2.4, what: 'Venga Venga' };
+export function addVenga(b) {
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
+  const D = 7, z1 = L / 2 - D;                                                              // deck depth on the run side
+  let hi = -1e9;
+  for (const [x0, x1] of [[-W / 2, 0], [0, W / 2]]) for (const [z0, za] of [[-L / 2, 0], [0, z1]]) hi = Math.max(hi, mass(P, b, F, { x0, x1, z0, z1: za, floors: 2 }, VENGA).hi);
+  const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  const dg = Math.min(...[-W / 2, 0, W / 2].map((u) => { const q = at(u, L / 2); return groundY(q.x, q.z); }));
+  const dy = Math.max(hi, dg + 0.6);                                                        // deck level with the ground floor
+  P.push(part(BOX(W, dy - dg + 1, D, 0, dg - 1, z1 + D / 2), VENGA.plinth, M, TILES.stone));
+  P.push(part(BOX(W, 0.3, D, 0, dy - 0.3, z1 + D / 2), [1, 1, 1], M, TILES.deck));
+  P.push(part(BOX(W, 1.0, 0.12, 0, dy, L / 2 - 0.1), VENGA.cap, M));
+  for (const s of [-1, 1]) P.push(part(BOX(0.12, 1.0, D, s * (W / 2 - 0.1), dy, z1 + D / 2), VENGA.cap, M));
+  const c = at(0, z1 + D / 2), long = b.w >= b.l;
+  solidBox(c.x, c.z, b.yaw, long ? W : D, long ? D : W, dg - 1, dy - dg + 2, 'Venga Venga deck');
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+
 // ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 export const ROCK_VARIANTS = 6, ROCK_MAX = 2500;
 function rockGeo(k) {

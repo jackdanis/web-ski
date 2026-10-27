@@ -6,15 +6,17 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addUp4Pizza, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 
 // ---------- Run props: trail signs, rope lines, fence ----------
 export const RUNS = MAP.runs || [];
 // Named buildings from Jack's laser notes batch 2 (2026-10-27), by stand-in block centre; SKIP blocks go
-const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, -1013.2, 'up4'], [-342.3, -2936.9, 'map']];
-const SKIP = [[-338.6, -2933.0]];                     // a shed footprint inside the trail-map stand
+const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, -1013.2, 'up4'], [-342.3, -2936.9, 'map'],
+  [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan']];   // batch 3
+const SKIP = [[-338.6, -2933.0],                      // a shed footprint inside the trail-map stand
+  [1300.1, -4972.3]];                                  // a box overlapping the Westin, which hid it
 // Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
 function nearestRunPoint(x, z) {
@@ -261,9 +263,9 @@ if (RUN_DATA) {
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
   // INDUSTRIAL blocks get the industrial building instead, SPECIAL blocks their named building.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
-    if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
     if (SKIP.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) continue;
-    const special = SPECIAL.find(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1);
+    const special = SPECIAL.find(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1);   // named buildings always stand
+    if (!special && (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z)))) continue;
     if (special) {
       const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
       const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
@@ -271,6 +273,10 @@ if (RUN_DATA) {
       if (special[2] === 'base') addBase(b);
       else if (special[2] === 'sams') addSamsKnob(b);
       else if (special[2] === 'map') addMapStand(b);
+      else if (special[2] === 'venga') addVenga(b);
+      else if (special[2] === 'westin') addWestin(b);
+      else if (special[2] === 'wing') addWestinWing(b);
+      else if (special[2] === 'tan') addTanHotel(b);
       else {
         const g = sampleBase(x, z, { h: 0, gx: 0, gz: 0 }), n = Math.hypot(g.gx, g.gz) || 1;
         addUp4Pizza(b, [g.gx / n, g.gz / n]);
