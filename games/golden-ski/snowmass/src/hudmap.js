@@ -1,9 +1,11 @@
 // The HUD map: minimap and full map in the trail-map style.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from '../data/mountain.js';
 import { RUN_DATA } from '../data/runs.js';
 import { clamp } from './config.js';
 import { CELL, COVER, H, NX, NZ, X0, Z0, inflate } from './world.js';
 import { camera } from './scene.js';
+import { mapBoards } from './buildings.js';
 import { free, sk } from './play.js';
 
 // ---------- HUD map: minimap and full map in the trail-map style ----------
@@ -78,9 +80,32 @@ const mapFont = (px, w = 700, it = '') => `${it}${w} ${px}px "Helvetica Neue",Ar
   hudMap.plain = document.createElement('canvas');
   hudMap.plain.width = W; hudMap.plain.height = Hp;
   hudMap.plain.getContext('2d').putImageData(img, 0, 0);
+  paintMapBoards(img, W, Hp);
   hudMap.paintMs = Math.round(performance.now() - t0);
   if (hudMap.full) drawFullMap();
 })();
+
+// The same map on the trail-map stands, summit-up with its runs and lifts, fitted onto each board's face.
+function paintMapBoards(img, W, Hp) {
+  if (!mapBoards.length) return;
+  const north = Object.assign(document.createElement('canvas'), { width: W, height: Hp }), g = north.getContext('2d');
+  g.putImageData(img, 0, 0);
+  drawMapLines(g, 1, 3);
+  for (const face of mapBoards) {
+    const a = face.userData.aspect, cw = 2048, ch = Math.round(cw / a);
+    const cv = Object.assign(document.createElement('canvas'), { width: cw, height: ch }), c = cv.getContext('2d');
+    c.fillStyle = '#eef1f5'; c.fillRect(0, 0, cw, ch);
+    // just the runs and lifts with a little room around them
+    let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
+    for (const r of [...MAP.runs, ...MAP.lifts]) for (const [x, z] of r.points) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
+    const M = HUDMAP.MPP, sx = (x0 - 150 - hudMap.x0) / M, sz = (z0 - 150 - hudMap.z0) / M, sw = (x1 - x0 + 300) / M, sh = (z1 - z0 + 300) / M;
+    const k = Math.min(cw / sw, ch / sh);
+    c.translate(cw / 2, ch / 2); c.rotate(Math.PI); c.drawImage(north, sx, sz, sw, sh, -sw * k / 2, -sh * k / 2, sw * k, sh * k);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    face.material.map = t; face.material.color.set(0xffffff); face.material.needsUpdate = true;
+  }
+}
 
 // Runs as colored lines with a white casing, lifts red (purple for surface lifts) with end dots.
 // g is in image px; k is screen px per image px, so lw stays in screen px.

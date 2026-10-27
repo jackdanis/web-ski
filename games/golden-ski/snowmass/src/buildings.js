@@ -331,17 +331,23 @@ export function addUp4Pizza(b, uphill) {
   bucket(STAND_INS, cx, cz, ...R);
 }
 
-// Trail-map stand (pin 20): a large wooden board on two log posts, a big log across the top. The map on its face
-// comes later; the face is a plain light board for now.
-const LOG = [1.15, 1.0, 0.9], BOARD = [0.92, 0.9, 0.84];
+// Trail-map stand (pin 20): a large wooden board on two log posts, a big log across the top, the game's own map on
+// its face (Jack picked 1, 2026-10-27). The face is its own mesh: hudmap.js paints the map onto it once it is drawn.
+const LOG = [1.15, 1.0, 0.9];
+export const mapBoards = [];
 export function addMapStand(b) {
   const { x, z, yaw, w, l, bot, ground } = b, { W, m } = frameOf(b), M = m(bot), dy = ground - bot;
-  const bw = Math.min(W, 12), bh = 3.4, by = dy + 1.1;
-  const P = [part(BOX(bw, bh, 0.3, 0, by, 0), WALL, M, TILES.cedar), part(BOX(bw - 0.5, bh - 0.5, 0.06, 0, by + 0.25, 0.17), BOARD, M)];
+  const bw = Math.min(W, 8.5), bh = 7.0, by = dy + 1.1;                     // the map is about square
+  const P = [part(BOX(bw, bh, 0.3, 0, by, 0), WALL, M, TILES.cedar)];
   for (const s of [-1, 1]) P.push(part(new THREE.CylinderGeometry(0.28, 0.32, by + bh + 0.6, 8).translate(s * (bw / 2 + 0.2), (by + bh + 0.6) / 2, 0), LOG, M, TILES.cedar));
   P.push(part(new THREE.CylinderGeometry(0.42, 0.42, bw + 2.2, 10).applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 2)).translate(0, by + bh + 0.55, 0), LOG, M, TILES.cedar));
   P.push(part(BOX(bw + 1.6, 0.14, 0.7, 0, by + bh + 0.98, 0), SNOWCAP, M));
   bucket(STAND_INS, x, z, ...P);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(bw - 0.5, bh - 0.5).translate(0, by + bh / 2, 0.17).applyMatrix4(M),
+    new THREE.MeshBasicMaterial({ color: 0xd9d6cc }));
+  face.userData.aspect = (bw - 0.5) / (bh - 0.5);
+  mapBoards.push(face);
+  addRinged(face);
   solidBox(x, z, yaw, w >= l ? bw + 1 : 0.8, w >= l ? 0.8 : bw + 1, bot, by + bh + 1, 'trail map');
 }
 
