@@ -28,6 +28,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/ride.js` | The chairlift ride cutscene |
 | `src/atmosphere.js` | Lamps, shadows, storm snow, time of day, pixel look |
 | `src/goldie.js` | Goldie's sprite, skis, shadow and spray |
+| `src/tracks.js` | Her ski tracks: grooves painted around her, shaded by Snowlight |
 | `src/play.js` | Input, Tab menu, freecam, and the simulation (skiing, jumps, collisions, bails) |
 | `src/hudmap.js` | Minimap and full map |
 | `src/main.js` | Rendering, main loop, test hooks (`window.__golden`) |

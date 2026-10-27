@@ -14,6 +14,7 @@ import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, POLE_FRAMES, SHEET_H, SHEET_
 import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, POLE_PHASES, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
+import { paintTracks, recordTrack, tracks } from './tracks.js';
 
 // ---------- Rendering ----------
 const view = new THREE.Vector3(), camDir = new THREE.Vector3(0, 0, -1), camPos = new THREE.Vector3(), look = new THREE.Vector3();
@@ -311,7 +312,8 @@ function render(alpha, dt) {
   shadow.scale.setScalar(1 + lift * 0.08);
 
   shadow.visible = !riding;
-  if (!riding) updateSpray(p, dt);
+  if (!riding) { updateSpray(p, dt); recordTrack(); }
+  paintTracks(p.x, p.z);
   ringMat.uniforms.time.value = performance.now() / 1000;
   if (!speedEl.hidden) speedEl.textContent = `${Math.round(sk.vel.length() * 2.23694)} mph · ${(Math.abs(sk.latA) / G).toFixed(1)} g · ${fps} fps${perf.on ? ` · ${Math.round(perf.tris / 1000)}k tris · ${perf.calls} draws · ${perf.ms.toFixed(1)} ms` : ''}`;
   updateWorld(dt);
@@ -418,5 +420,5 @@ window.__golden = {
   get patch() { return state.PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
   solids: SOLIDS, bail, BAIL, kickers: KICKERS,
-  get work() { return work.size; }, perf, ringed, addBuilding, rides: RIDES, ride, startRide, skipRide, notes,
+  get work() { return work.size; }, perf, ringed, addBuilding, rides: RIDES, ride, startRide, skipRide, notes, tracks,
 };

@@ -36,12 +36,13 @@ export const LIGHT = {
   uSun: { value: SUN_DIR }, uSunC: { value: SUN_COLOR }, uSky: { value: SKY_COLOR }, uSnow: { value: SNOW_ALBEDO },
   uBounce: { value: BOUNCE }, uFog: { value: FOG }, uFogNear: { value: 1500 }, uFogFar: { value: 70000 }, uTreeFar: { value: TREE_FAR },
   uShadow: { value: null }, uShO: { value: new THREE.Vector2() }, uLamps: { value: [0, 1, 2, 3].map(() => new THREE.Vector3(0, -1e5, 0)) },
-  uLampC: { value: new THREE.Vector3() },
+  uLampC: { value: new THREE.Vector3() }, uTrack: { value: null }, uTrO: { value: new THREE.Vector2(-1e6, -1e6) },
 };
 export const LIGHT_GLSL = /* glsl */ `
   uniform vec3 uSun, uSunC, uSky, uSnow, uBounce, uFog, uLampC;
   uniform float uFogNear, uFogFar, uTreeFar;
   uniform sampler2D uShadow; uniform vec2 uShO; uniform vec3 uLamps[4];
+  uniform sampler2D uTrack; uniform vec2 uTrO;
   float band(float v) { return max(0.12, floor(v * 4.0 + 0.5) / 4.0); }
   float band0(float v) { return floor(v * 4.0 + 0.5) / 4.0; }
   float hash(vec2 p) { return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453); }
@@ -50,6 +51,13 @@ export const LIGHT_GLSL = /* glsl */ `
     vec2 uv = (p.xz - uShO) / ${SH_SIZE}.0;
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
     return texture2D(uShadow, vec2(uv.x, 1.0 - uv.y)).r;
+  }
+  // ski tracks around Goldie (tracks.js, 96 m across): groove depth in red, lip in green; height in m
+  float trackH(vec2 xz) {
+    vec2 uv = (xz - uTrO) / 96.0;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+    vec2 t = texture2D(uTrack, vec2(uv.x, 1.0 - uv.y)).rg;
+    return 0.06 * t.g * (1.0 - min(1.0, t.r * 6.0)) - 0.16 * t.r;
   }
   // LAMPS is defined only at night (applyTime), so daytime shaders skip the loop
   vec3 lamps(vec3 p, vec3 n) {
@@ -176,6 +184,14 @@ export const terrainMat = new THREE.ShaderMaterial({
       // windrow just off the groomed edge, then a thin shadow line
       if (edge > 0.0 && edge < 1.6) { alb = mix(alb, vec3(1.0), 0.35); n = normalize(n + vec3(0.0, 0.25, 0.0)); }
       else if (edge >= 1.6 && edge < 2.4) alb *= 0.82;
+      // ski tracks: lit from the groove's slope, the floor a shade bluer
+      float th = trackH(vP.xz);
+      if (th != 0.0 && vD < 70.0) {
+        const float E = 0.094;
+        vec2 tg = vec2(trackH(vP.xz + vec2(E, 0.0)) - trackH(vP.xz - vec2(E, 0.0)), trackH(vP.xz + vec2(0.0, E)) - trackH(vP.xz - vec2(0.0, E))) / (2.0 * E);
+        n = normalize(n + vec3(-tg.x, 0.0, -tg.y) * 1.4 * (1.0 - smoothstep(40.0, 70.0, vD)));
+        alb *= mix(vec3(1.0), vec3(0.86, 0.9, 1.0), clamp(-th * 7.0, 0.0, 1.0));
+      }
       if (vCov.y + dith > 0.5) alb = uRock;
       float far = smoothstep(uTreeFar * 0.6, uTreeFar, vD);
       alb = mix(alb, uForest, clamp(vCov.z, 0.0, 1.0) * far * 0.85);
