@@ -38,7 +38,7 @@ export const MO = {
   SPIN_IN: 7,                   // rad/s^2: steering in the air torques the spin
   SPIN_TUCK: 1.6,
   SPIN_DAMP: 0.4,               // spin lost per second with no steer
-  FLIP_IN: 7,                   // rad/s^2: up/down in the air torques a flip (up = front flip), and it carries on
+  FLIP_IN: 5,                   // rad/s^2: up/down in the air torques a flip (up = front flip), and it carries on
   FLIP_DAMP: 0.4,               // flip lost per second with nothing held
   CRASH_MU: 0.6,                // a wipeout slides with friction plus a base drag
   CRASH_BASE: 2,
