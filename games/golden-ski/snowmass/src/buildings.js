@@ -416,43 +416,80 @@ function mass(P, b, frame, spec, st) {
   return { lo, hi, top };
 }
 
-// The Westin (pins 4 and 5, one complex): white, three tiers stepping down to the run side, balconies on every
-// floor, a dark glass stair atrium, a round tower on top, and a two-storey colonnade pavilion with a pale roof
-// in front (the photo from the chair). Pin 5 is a lower wing in the same style.
-const WESTIN = { wall: [0.9, 0.9, 0.87], plinth: [1.0, 1.0, 1.02], cap: [0.95, 0.95, 0.93], balcony: [0.72, 0.73, 0.75], FH: 3.2, band: 1.4, what: 'Westin' };
-const PALE_ROOF = [0.82, 0.78, 0.7];
-export function addWestin(b) {
-  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
-  const xs = [-W / 2, -W / 2 + W * 0.3, W / 2 - W * 0.3, W / 2], zs = [-L / 2, -L / 2 + L * 0.38, L / 2 - L * 0.34, L / 2];
-  const FLOORS = [[6, 7, 6], [5, 6, 5], [3, 0, 3]];                                         // back, middle, front tier
-  let back = null;
-  for (let t = 0; t < 3; t++) for (let k = 0; k < 3; k++) {
-    if (!FLOORS[t][k]) continue;
-    const r = mass(P, b, F, { x0: xs[k], x1: xs[k + 1], z0: zs[t], z1: zs[t + 1], floors: FLOORS[t][k] }, WESTIN);
-    if (t === 0 && k === 1) back = r;
+// The Westin (pins 4 and 5, one complex), v2 after Jack's lodge photos (references/buildings/westin-snowmass/style-*):
+// one continuous building dug into the slope under a single roofline, nine floors above its mean ground. Dark brown
+// walls on a stone base, stone chimney towers, steep snowy gables with timber trim and glass gable ends on the wings
+// facing the run, glass balcony rails. Pin 5 is a lower wing in the same style.
+const LODGE = { wall: [0.36, 0.27, 0.21], stone: [1.12, 1.0, 0.86], roof: [0.3, 0.31, 0.33], timber: [1.2, 1.05, 0.9],
+  rail: [0.4, 0.5, 0.56], FH: 3.2 };
+// one piece: walls from below its lowest ground to `top`, a stone base two floors up from its downhill side, window
+// bands and balconies above, and a gable roof whose ridge runs along local x or z (gable ends at the other two sides).
+function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what) {
+  const M = F.m(0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, bw = x1 - x0, bl = z1 - z0;
+  const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  const g = [[x0, z0], [x1, z0], [x0, z1], [x1, z1], [cx, cz]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+  const lo = Math.min(...g) - 1, stoneTop = lo + 1 + 3 * LODGE.FH;
+  P.push(part(BOX(bw + 0.5, stoneTop - lo, bl + 0.5, cx, lo, cz), LODGE.stone, M, TILES.stone));
+  P.push(part(BOX(bw, top - stoneTop, bl, cx, stoneTop, cz), LODGE.wall, M, TILES.siding));
+  P.push(part(BOX(bw + 0.8, 0.5, bl + 0.8, cx, top - 0.3, cz), LODGE.timber, M, TILES.cedar));                  // eave band
+  const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]];
+  for (let y = lo + 1 + 0.9; y < top - 2; y += LODGE.FH) for (const [len, alongX, sg] of faces) {
+    const box = (gw, gh2, gy, d, dep = 0.1) => alongX ? BOX(gw, gh2, dep, cx, gy, cz + sg * (bl / 2 + d)) : BOX(dep, gh2, gw, cx + sg * (bw / 2 + d), gy, cz);
+    const n = Math.max(1, Math.floor((len - 2) / 4.2)), step = (len - 2) / n;            // pairs of tall windows, 4.2 m apart
+    for (let k = 0; k < n; k++) {
+      const c = -(len - 2) / 2 + (k + 0.5) * step, o = alongX ? [c, 0] : [0, c];
+      const wb = (alongX ? BOX(2.6, 1.9, 0.1, cx + c, y, cz + sg * (bl / 2 + 0.3)) : BOX(0.1, 1.9, 2.6, cx + sg * (bw / 2 + 0.3), y, cz + c));
+      P.push(part(wb, WIN, M, TILES.window));
+    }
+    if (y > stoneTop && alongX && sg > 0) {                              // balconies on the run side: slab and glass rail
+      P.push(part(box(len * 0.6, 0.25, y - 0.9, 0.8, 1.6), LODGE.wall, M));
+      P.push(part(box(len * 0.6, 1.05, y - 0.65, 1.55, 0.08), LODGE.rail, M));
+    }
   }
-  // colonnade pavilion in the middle of the front tier: two floors set back behind a row of square columns
-  const px0 = xs[1], px1 = xs[2], pz0 = zs[2], pz1 = zs[3];
-  const pv = mass(P, b, F, { x0: px0, x1: px1, z0: pz0, z1: pz1 - 4, floors: 2 }, { ...WESTIN, FH: 4.2, balcony: null });
-  const n = Math.round((px1 - px0) / 6), ry = pv.top - 0.2;
-  for (let k = 0; k <= n; k++) P.push(part(BOX(1.1, ry - pv.lo, 1.1, px0 + 0.6 + k * (px1 - px0 - 1.2) / n, pv.lo, pz1 - 0.8), WESTIN.wall, M));
-  P.push(part(BOX(px1 - px0 + 1.0, 0.8, 5.2, (px0 + px1) / 2, ry, pz1 - 2.2), WESTIN.cap, M));
-  P.push(part(gable(pz1 - pz0 + 1.6, px1 - px0 + 1.6, 2.4).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate((px0 + px1) / 2, ry + 0.8, (pz0 + pz1) / 2), PALE_ROOF, M));
-  // glass atrium where the left wing meets the middle, full height of the back tier, and the round tower on top
-  const ax = xs[1], az = zs[1] - 4;
-  P.push(part(BOX(9, back.top - back.hi + 2, 9, ax, back.hi, az), GLASS, M, TILES.curtain));
-  P.push(part(BOX(9.6, 0.5, 9.6, ax, back.top + 2, az), WESTIN.cap, M));
-  const tx = (xs[1] + xs[2]) / 2 - 8, tz = (zs[0] + zs[1]) / 2;
-  P.push(part(new THREE.CylinderGeometry(6, 6, 4.5, 16).translate(tx, back.top + 0.6 + 2.25, tz), WESTIN.wall, M));
-  P.push(part(new THREE.CylinderGeometry(5.2, 5.2, 1.6, 16).translate(tx, back.top + 2.2, tz), WIN, M, TILES.window));
-  P.push(part(new THREE.CylinderGeometry(6.4, 6.4, 0.5, 16).translate(tx, back.top + 5.1, tz), WESTIN.cap, M));
-  P.push(part(new THREE.CylinderGeometry(6.0, 6.0, 0.12, 16).translate(tx, back.top + 5.4, tz), SNOWCAP, M));
+  // roof: dark metal gable with an overhang, snow on top; timber trim and glass in the gable ends
+  const rw = (ridge === 'x' ? bl : bw) + 3, rl = (ridge === 'x' ? bw : bl) + 3;
+  const rot = ridge === 'x' ? new THREE.Matrix4().makeRotationY(Math.PI / 2) : new THREE.Matrix4();
+  P.push(part(gable(rw, rl, gh).applyMatrix4(rot).translate(cx, top, cz), LODGE.roof, M, TILES.metalRoof));
+  P.push(part(gable(rw - 0.8, rl - 0.4, gh).applyMatrix4(rot).translate(cx, top + 0.3, cz), SNOWCAP, M));
+  for (const s of [-1, 1]) {
+    const endAt = (ridge === 'x' ? bw : bl) / 2 + 0.06;
+    const tri = gable(rw - 5, 0.1, gh - 1.6).translate(0, 0.4, s * endAt).applyMatrix4(rot).translate(cx, top, cz);
+    P.push(part(tri, WIN, M, TILES.window));
+    const beam = BOX(rw - 3.5, 0.45, 0.45, 0, -0.1, s * (endAt + 0.2)).applyMatrix4(rot).translate(cx, top, cz);
+    P.push(part(beam, LODGE.timber, M, TILES.cedar));
+  }
+  const c = at(cx, cz), long = b.w >= b.l;
+  solidBox(c.x, c.z, b.yaw, long ? bw : bl, long ? bl : bw, lo, top + gh - lo, what);
+  return { lo, top };
+}
+function lodgeTop(b, F, floors) {                                          // one roofline: floors above the mean ground
+  const M = F.m(0); let hi = 0;
+  for (let i = 0; i <= 6; i++) for (let j = 0; j <= 3; j++) {
+    const q = new THREE.Vector3(-F.W / 2 + F.W * i / 6, 0, -F.L / 2 + F.L * j / 3).applyMatrix4(M);
+    hi += groundY(q.x, q.z) / 28;
+  }
+  return hi + 0.5 + floors * LODGE.FH;
+}
+export function addWestin(b) {
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [], top = lodgeTop(b, F, 9);
+  const zb = -L / 2 + L * 0.55;                                                      // back bar | wings toward the run
+  const bar = lodgePiece(P, b, F, { x0: -W / 2, x1: W / 2, z0: -L / 2, z1: zb }, top, 'x', 8, 'Westin');
+  const ww = 28;
+  for (const xc of [-W / 2 + ww / 2 + 4, 0, W / 2 - ww / 2 - 4]) {
+    const wide = xc === 0 ? 34 : ww;
+    lodgePiece(P, b, F, { x0: xc - wide / 2, x1: xc + wide / 2, z0: zb - 2, z1: L / 2 }, top - (xc === 0 ? 0 : LODGE.FH), 'z', 10, 'Westin');
+  }
+  // stone chimney towers where the wings meet the bar
+  for (const xc of [-W / 2 + ww + 10, W / 2 - ww - 10]) {
+    P.push(part(BOX(6, top + 10 - bar.lo, 6, xc, bar.lo, zb - 3), LODGE.stone, M, TILES.stone));
+    P.push(part(BOX(7, 0.6, 7, xc, top + 10, zb - 3), LODGE.roof, M));
+    P.push(part(BOX(6.4, 0.15, 6.4, xc, top + 10.6, zb - 3), SNOWCAP, M));
+  }
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 export function addWestinWing(b) {
   const F = frameOf(b), { W, L } = F, P = [];
-  mass(P, b, F, { x0: -W / 2, x1: 0, z0: -L / 2, z1: L / 2, floors: 4 }, WESTIN);
-  mass(P, b, F, { x0: 0, x1: W / 2, z0: -L / 2, z1: L / 2, floors: 4 }, WESTIN);
+  lodgePiece(P, b, F, { x0: -W / 2, x1: W / 2, z0: -L / 2, z1: L / 2 }, lodgeTop(b, F, 6), 'x', 6, 'Westin');
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 
@@ -464,22 +501,53 @@ export function addTanHotel(b) {
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 
-// Venga Venga (pin 3): a low two-storey cream building with a dark fascia, big ground-floor windows and a wooden
-// deck with dark rails on the run side, on a stone base.
-const VENGA = { wall: [0.88, 0.84, 0.74], plinth: [0.95, 0.9, 0.85], cap: [0.25, 0.2, 0.17], balcony: null, FH: 4.2, band: 2.4, what: 'Venga Venga' };
+// Venga Venga (pin 3), v2: a low two-storey cantina. Stone base, a cedar-clad ground floor with big windows, a cream
+// stucco upper floor, a low snowy gable roof on timber eaves, and a wooden deck on the run side with dark rails and a
+// string of red and orange flags (Jack's photos).
+const VENGA = { cream: [0.88, 0.82, 0.68], stone: [1.12, 1.0, 0.86], dark: [0.25, 0.2, 0.17], flags: [[0.8, 0.18, 0.12], [0.95, 0.5, 0.12]] };
 export function addVenga(b) {
-  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
-  const D = 7, z1 = L / 2 - D;                                                              // deck depth on the run side
-  let hi = -1e9;
-  for (const [x0, x1] of [[-W / 2, 0], [0, W / 2]]) for (const [z0, za] of [[-L / 2, 0], [0, z1]]) hi = Math.max(hi, mass(P, b, F, { x0, x1, z0, z1: za, floors: 2 }, VENGA).hi);
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [], D = 7, zf = L / 2 - D;
   const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  let floor0 = -1e9;
+  for (const [x0, x1] of [[-W / 2, 0], [0, W / 2]]) {
+    const cx = (x0 + x1) / 2, cz = (-L / 2 + zf) / 2, bw = x1 - x0, bl = zf + L / 2;
+    const g = [[x0, -L / 2], [x1, -L / 2], [x0, zf], [x1, zf], [cx, cz]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+    const lo = Math.min(...g) - 1, hi = Math.max(...g) + 0.6, f1 = hi + 4.4, top = f1 + 4.0;
+    floor0 = Math.max(floor0, hi);
+    P.push(part(BOX(bw + 0.4, hi - lo, bl + 0.4, cx, lo, cz), VENGA.stone, M, TILES.stone));
+    P.push(part(BOX(bw, f1 - hi, bl, cx, hi, cz), [1, 1, 1], M, TILES.cedar));
+    P.push(part(BOX(bw + 0.3, top - f1, bl + 0.3, cx, f1, cz), VENGA.cream, M));
+    P.push(part(BOX(bw + 0.6, 0.4, bl + 0.6, cx, f1 - 0.2, cz), VENGA.dark, M));                  // floor band
+    for (const [len, alongX, sg] of [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]]) {
+      const n = Math.max(1, Math.floor((len - 2) / 4)), step = (len - 2) / n;
+      for (let k = 0; k < n; k++) {
+        const c = -(len - 2) / 2 + (k + 0.5) * step;
+        for (const [y, h, d] of [[hi + 0.6, 2.9, 0.06], [f1 + 0.9, 1.9, 0.22]]) {
+          const g2 = alongX ? BOX(3.0, h, 0.1, cx + c, y, cz + sg * (bl / 2 + d)) : BOX(0.1, h, 3.0, cx + sg * (bw / 2 + d), y, cz + c);
+          P.push(part(g2, WIN, M, TILES.window));
+        }
+      }
+    }
+    P.push(part(BOX(bw + 1.6, 0.5, bl + 1.6, cx, top - 0.2, cz), VENGA.dark, M, TILES.cedar));     // timber eaves
+    P.push(part(gable(bl + 2.4, bw + 2.4, 3.2).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(cx, top + 0.3, cz), LODGE.roof, M, TILES.metalRoof));
+    P.push(part(gable(bl + 1.8, bw + 2.0, 3.2).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(cx, top + 0.55, cz), SNOWCAP, M));
+    const c = at(cx, cz), long = b.w >= b.l;
+    solidBox(c.x, c.z, b.yaw, long ? bw : bl, long ? bl : bw, lo, top + 3.5 - lo, 'Venga Venga');
+  }
+  // the deck: stone wall below, planks level with the ground floor, dark rails, posts with a string of flags
   const dg = Math.min(...[-W / 2, 0, W / 2].map((u) => { const q = at(u, L / 2); return groundY(q.x, q.z); }));
-  const dy = Math.max(hi, dg + 0.6);                                                        // deck level with the ground floor
-  P.push(part(BOX(W, dy - dg + 1, D, 0, dg - 1, z1 + D / 2), VENGA.plinth, M, TILES.stone));
-  P.push(part(BOX(W, 0.3, D, 0, dy - 0.3, z1 + D / 2), [1, 1, 1], M, TILES.deck));
-  P.push(part(BOX(W, 1.0, 0.12, 0, dy, L / 2 - 0.1), VENGA.cap, M));
-  for (const s of [-1, 1]) P.push(part(BOX(0.12, 1.0, D, s * (W / 2 - 0.1), dy, z1 + D / 2), VENGA.cap, M));
-  const c = at(0, z1 + D / 2), long = b.w >= b.l;
+  const dy = Math.max(floor0, dg + 0.6), zc = zf + D / 2;
+  P.push(part(BOX(W, dy - dg + 1, D, 0, dg - 1, zc), VENGA.stone, M, TILES.stone));
+  P.push(part(BOX(W, 0.3, D, 0, dy - 0.3, zc), [1, 1, 1], M, TILES.deck));
+  P.push(part(BOX(W, 1.0, 0.12, 0, dy, L / 2 - 0.1), VENGA.dark, M));
+  for (const s of [-1, 1]) P.push(part(BOX(0.12, 1.0, D, s * (W / 2 - 0.1), dy, zc), VENGA.dark, M));
+  const posts = Math.round(W / 8);
+  for (let k = 0; k <= posts; k++) P.push(part(BOX(0.25, 3.2, 0.25, -W / 2 + 0.2 + k * (W - 0.4) / posts, dy, L / 2 - 0.2), VENGA.dark, M, TILES.cedar));
+  for (let k = 0; k < posts * 6; k++) {                                                          // flags between the posts
+    const x = -W / 2 + 0.6 + (k + 0.5) * (W - 1.2) / (posts * 6), sag = Math.sin(((k % 6) + 0.5) / 6 * Math.PI) * 0.6;
+    P.push(part(BOX(0.45, 0.5, 0.04, x, dy + 2.6 - sag, L / 2 - 0.2), VENGA.flags[k % 2], M));
+  }
+  const c = at(0, zc), long = b.w >= b.l;
   solidBox(c.x, c.z, b.yaw, long ? W : D, long ? D : W, dg - 1, dy - dg + 2, 'Venga Venga deck');
   bucket(STAND_INS, b.x, b.z, ...P);
 }
