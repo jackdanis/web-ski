@@ -231,6 +231,153 @@ export function addIndustrial({ x, z, yaw = 0, w, l, bot, ground, front = 1 }) {
   SOLIDS.push({ x, z, y: bot + H / 2, hx: w / 2, hy: H / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw), what: 'industrial building' });
 }
 
+// ---------- Named buildings from Jack's laser notes (batch 2), built on their stand-in blocks ----------
+// Each takes the block (centre, yaw, width w along local x, length l along local z, ground low and high) and
+// front: +1 or -1, the local axis side that faces the run (local z if w >= l, else local x).
+const WIN = [1.1, 1.1, 1.15];
+const BOX = (w, h, l, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, l).translate(x, y + h / 2, z);
+// shed roof block: width w across local x (low side at -x), length l along z, walls hLow and hHigh
+function shed(w, l, hLow, hHigh) {
+  const a = [-w / 2, 0], b = [w / 2, 0], c = [w / 2, hHigh], d = [-w / 2, hLow], pos = [];
+  const v = (p, z) => [p[0], p[1], z];
+  const quad = (p, q, r, s) => pos.push(...p, ...q, ...r, ...p, ...r, ...s);
+  quad(v(a, l / 2), v(b, l / 2), v(c, l / 2), v(d, l / 2));
+  quad(v(b, -l / 2), v(a, -l / 2), v(d, -l / 2), v(c, -l / 2));
+  quad(v(b, l / 2), v(b, -l / 2), v(c, -l / 2), v(c, l / 2));
+  quad(v(a, -l / 2), v(a, l / 2), v(d, l / 2), v(d, -l / 2));
+  quad(v(d, l / 2), v(c, l / 2), v(c, -l / 2), v(d, -l / 2));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return g;
+}
+// turn the block so its long side runs along local x and its run side is +z
+function frameOf({ x, z, yaw, w, l, front }) {
+  const long = w >= l, W = long ? w : l, L = long ? l : w;
+  let m = placeM(0, 0, 0, yaw);
+  if (!long) m = m.multiply(new THREE.Matrix4().makeRotationY(Math.PI / 2));
+  if (front < 0) m = m.multiply(new THREE.Matrix4().makeRotationY(Math.PI));
+  return { W, L, m: (y) => new THREE.Matrix4().makeTranslation(x, y, z).multiply(m) };
+}
+const solidBox = (x, z, yaw, w, l, y0, h, what) =>
+  SOLIDS.push({ x, z, y: y0 + h / 2, hx: w / 2, hy: h / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw), what });
+
+// Sam's Knob restaurant (pin 21, refs in references/buildings/sams-knob/): dark green board-and-batten under a low
+// snowy roof, a tall timber-framed glass gable at the entrance (run side), and the back one flat wall of windows in
+// wood cabin frames ("very Scandinavian").
+const SK_GREEN = [0.78, 1.18, 1.35], SK_TIMBER = [1.25, 1.2, 1.15], SK_ROOF = [0.45, 0.45, 0.47];
+export function addSamsKnob(b) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot, H = dy + 6.5;
+  const P = [
+    part(BOX(W, H, L), SK_GREEN, M, TILES.siding),
+    part(gable(L + 1.2, W + 1.2, 2.2).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(0, H, 0), SK_ROOF, M, TILES.metalRoof),
+    part(gable(L - 0.6, W - 0.6, 2.0).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(0, H + 0.12, 0), SNOWCAP, M),
+  ];
+  // the back: glass from the ground floor to the eaves, a cedar frame grid 3 m across and 2.6 m up
+  const zb = -L / 2 - 0.05, gh = H - dy - 0.6, gy = dy + 0.3;
+  P.push(part(BOX(W - 1.2, gh, 0.08, 0, gy, zb), WIN, M, TILES.window));
+  const cols = Math.round((W - 1.2) / 3);
+  for (let k = 0; k <= cols; k++) P.push(part(BOX(0.3, gh + 0.3, 0.3, -(W - 1.2) / 2 + k * (W - 1.2) / cols, gy - 0.15, zb - 0.1), SK_TIMBER, M, TILES.cedar));
+  for (let y = gy; y <= gy + gh + 0.01; y += gh / Math.round(gh / 2.6)) P.push(part(BOX(W - 0.9, 0.3, 0.32, 0, y - 0.15, zb - 0.1), SK_TIMBER, M, TILES.cedar));
+  // the entrance: a steep gable on four timber posts, glass in the gable end, a door below
+  const ew = 11, ed = 6, eh = dy + 6.0, ez = L / 2 + ed / 2 - 1;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) P.push(part(BOX(0.55, eh, 0.55, sx * (ew / 2 - 0.4), 0, ez + sz * (ed / 2 - 0.4)), SK_TIMBER, M, TILES.cedar));
+  P.push(part(gable(ew + 1.4, ed + 1.0, 5.0).translate(0, eh, ez), SK_ROOF, M, TILES.metalRoof));
+  P.push(part(gable(ew + 0.6, ed + 0.4, 4.6).translate(0, eh + 0.15, ez), SNOWCAP, M));
+  const tri = gable(ew - 1.2, 0.08, 4.3).translate(0, eh, ez + ed / 2 - 0.3);
+  P.push(part(tri, WIN, M, TILES.window));
+  P.push(part(BOX(ew - 0.6, 0.5, 0.5, 0, eh - 0.5, ez + ed / 2 - 0.4), SK_TIMBER, M, TILES.cedar));                 // tie beam
+  for (const s of [-1, 1]) {                                                                                       // braces
+    const g = BOX(0.35, 3.6, 0.35).translate(0, -1.8, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(s * 0.95)).translate(s * (ew / 2 - 0.6), eh - 0.4, ez + ed / 2 - 0.4);
+    P.push(part(g, SK_TIMBER, M, TILES.cedar));
+  }
+  P.push(part(BOX(ew - 2.0, eh - dy - 1.0, 0.08, 0, dy, L / 2 + 0.06), WIN, M, TILES.window));
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, w, l, bot, H + 2, "Sam's Knob");
+}
+
+// UP4Pizza (pin 22, refs in references/buildings/up4pizza/): a tight rust-red board-and-batten cabin under a tall
+// shed roof, big windows on the run side under grey corrugated awnings, a grey band of lap siding at the bottom,
+// and ski racks on the slope just above it.
+const UP_RED = [1.25, 0.82, 0.78], UP_GREY = [0.6, 0.6, 0.6], UP_ROOF = [0.32, 0.33, 0.36];
+export function addUp4Pizza(b, uphill) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot;
+  const lo = dy + 4.5, hi = dy + 9.0;
+  const P = [
+    part(shed(W, L, lo, hi), UP_RED, M, TILES.siding),
+    part(BOX(W + 0.1, 1.4, L + 0.1, 0, dy, 0), UP_GREY, M, TILES.concrete),
+  ];
+  // roof: a thin slab along the slope with snow on it
+  const run = Math.hypot(W, hi - lo), ang = Math.atan2(hi - lo, W);
+  const slab = (t, col, lift) => part(BOX(run + 1.2, t, L + 1.2, 0, -t / 2, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(ang)).translate(0, (lo + hi) / 2 + lift, 0), col, M);
+  P.push(slab(0.3, UP_ROOF, 0.15), slab(0.12, SNOWCAP, 0.4));
+  // run side: two rows of windows, an awning over each row
+  const zf = L / 2 + 0.05, n = Math.max(2, Math.floor((W - 2) / 2.6)), ww = (W - 2) / n;
+  for (const [y0, h] of [[dy + 1.6, 2.3], [dy + 4.6, 2.0]]) {
+    for (let k = 0; k < n; k++) P.push(part(BOX(ww - 0.35, h, 0.08, -(W - 2) / 2 + (k + 0.5) * ww, y0, zf), WIN, M, TILES.window));
+    P.push(part(BOX(W - 1.4, 0.12, 1.4, 0, y0 + h + 0.25, zf + 0.6).applyMatrix4(new THREE.Matrix4().makeRotationX(0)), UP_GREY, M, TILES.metalRoof));
+  }
+  P.push(part(BOX(1.3, 2.3, 0.1, W / 2 - 1.2, dy, zf + 0.02), DARK, M));                                           // door
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, w, l, bot, hi + 0.5, 'UP4Pizza');
+  // ski racks: two 6 m racks of steel rails on legs, end to end across the slope, 6 m above the cabin
+  const [ux, uz] = uphill, d = Math.max(w, l) / 2 + 6, cx = x + ux * d, cz = z + uz * d, ry = Math.atan2(ux, uz) + Math.PI / 2;
+  const R = [];
+  for (const off of [-3.3, 3.3]) {
+    const rx = cx + Math.sin(ry) * off, rz = cz + Math.cos(ry) * off, gy = groundY(rx, rz) - 0.1, rm = placeM(rx, gy, rz, ry);
+    for (const s of [-1, 1]) for (const hgt of [0.55, 0.95]) R.push(part(BOX(0.06, 0.06, 6, s * 0.25, hgt, 0), STEEL, rm));
+    for (const t of [-2.8, 0, 2.8]) for (const s of [-1, 1]) R.push(part(BOX(0.06, 1.0, 0.06, s * 0.25, 0, t), STEEL, rm));
+    solidBox(rx, rz, ry, 0.6, 6, gy, 1.0, 'ski rack');
+  }
+  bucket(STAND_INS, cx, cz, ...R);
+}
+
+// Trail-map stand (pin 20): a large wooden board on two log posts, a big log across the top. The map on its face
+// comes later; the face is a plain light board for now.
+const LOG = [1.15, 1.0, 0.9], BOARD = [0.92, 0.9, 0.84];
+export function addMapStand(b) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, m } = frameOf(b), M = m(bot), dy = ground - bot;
+  const bw = Math.min(W, 12), bh = 3.4, by = dy + 1.1;
+  const P = [part(BOX(bw, bh, 0.3, 0, by, 0), WALL, M, TILES.cedar), part(BOX(bw - 0.5, bh - 0.5, 0.06, 0, by + 0.25, 0.17), BOARD, M)];
+  for (const s of [-1, 1]) P.push(part(new THREE.CylinderGeometry(0.28, 0.32, by + bh + 0.6, 8).translate(s * (bw / 2 + 0.2), (by + bh + 0.6) / 2, 0), LOG, M, TILES.cedar));
+  P.push(part(new THREE.CylinderGeometry(0.42, 0.42, bw + 2.2, 10).applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 2)).translate(0, by + bh + 0.55, 0), LOG, M, TILES.cedar));
+  P.push(part(BOX(bw + 1.6, 0.14, 0.7, 0, by + bh + 0.98, 0), SNOWCAP, M));
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, w >= l ? bw + 1 : 0.8, w >= l ? 0.8 : bw + 1, bot, by + bh + 1, 'trail map');
+}
+
+// The Base (pin 7, ref in references/buildings/base-7/): a large building on a distinctive grey rock base, with the
+// brick architecture of Jack's reference above it: three floors of tall arched windows and a stone cornice.
+// Enterable later; only the outside for now.
+const BRICK = [0.62, 0.27, 0.19], TRIM = [0.86, 0.8, 0.68], ROCK = [1.05, 1.05, 1.08];
+export function addBase(b) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot;
+  const rockTop = dy + 3.5, FLOOR = 4.2, floors = 3, top = rockTop + FLOOR * floors;
+  const P = [
+    part(BOX(W + 0.8, rockTop, L + 0.8), ROCK, M, TILES.stone),
+    part(BOX(W, top - rockTop, L, 0, rockTop), BRICK, M),
+    part(BOX(W + 1.2, 0.9, L + 1.2, 0, top - 0.2), TRIM, M, TILES.concrete),
+    part(BOX(W + 0.6, 0.35, L + 0.6, 0, rockTop - 0.1), TRIM, M, TILES.concrete),
+    part(BOX(W - 0.4, 0.14, L - 0.4, 0, top + 0.7), SNOWCAP, M),
+  ];
+  // tall windows with round-topped heads (a lighter arch block over each), on all four sides
+  const wins = (len, axisX, sgn) => {
+    const n = Math.floor(len / 3.6), step = len / n;
+    for (let f = 0; f < floors; f++) {
+      const y = rockTop + f * FLOOR + 0.8;
+      for (let k = 0; k < n; k++) {
+        const c = -len / 2 + (k + 0.5) * step;
+        const at = (gw, gh, gy, d) => axisX ? BOX(gw, gh, 0.1, c, gy, sgn * (L / 2 + d)) : BOX(0.1, gh, gw, sgn * (W / 2 + d), gy, c);
+        P.push(part(at(1.3, 2.4, y, 0.04), WIN, M, TILES.window));
+        P.push(part(at(1.7, 0.45, y + 2.4, 0.08), TRIM, M));
+        P.push(part(at(1.6, 0.18, y - 0.18, 0.1), TRIM, M));
+      }
+    }
+  };
+  wins(W, true, 1); wins(W, true, -1); wins(L, false, 1); wins(L, false, -1);
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, w + 0.8, l + 0.8, bot, top + 1, 'Base');
+}
+
 // ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 export const ROCK_VARIANTS = 6, ROCK_MAX = 2500;
 function rockGeo(k) {

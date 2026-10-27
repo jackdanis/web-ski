@@ -19,6 +19,8 @@ distance (Jack's choice 8).
   the spots best first.
 - ropes: the rope lines kept from kit v18 at the tops of Sunnyside and Max Park (source-data/runs/ropes.json), one
   [x, z, ground y, x, z, ground y, ...] list of pole spots per line.
+- fences: wooden rail fences that keep skiers out of building areas (source-data/runs/fences.json, Jack's laser
+  notes), the same [x, z, ground y, ...] list of post spots per fence.
 - area: signed metres to the nearest run of any kind on the 10 m grid, in half metres (int8), for the game's own
   forest to stay clear of the runs and their edge trees.
 - runf: the same to the groomed edge, which the 10 m ground draws the runs with wherever no tiles are loaded.
@@ -135,6 +137,11 @@ def main(d):
     for rp in json.load(open(IN + 'ropes.json'))['ropes']:
         P = np.array(rp['points'], np.float64); y = drawn(P[:, 0], P[:, 1])
         ropes.append([round(float(v), 2) for p_, y_ in zip(P, y) for v in (p_[0], p_[1], y_)])
+    fences = []
+    if os.path.exists(IN + 'fences.json'):
+        for fp in json.load(open(IN + 'fences.json'))['fences']:
+            P = np.array(fp['points'], np.float64); y = drawn(P[:, 0], P[:, 1])
+            fences.append([round(float(v), 2) for p_, y_ in zip(P, y) for v in (p_[0], p_[1], y_)])
     blocks = []
     from shape import dense_line
     run_pts = cKDTree(np.vstack([dense_line(r_['points'])[:, :2] for r_ in load_kit_runs() + json.load(open(IN + 'extra_runs.json')) if len(r_['points']) > 1]))
@@ -151,12 +158,12 @@ def main(d):
                        round(float(min(gy.min(), gc[0])), 1), round(float(max(gy.max(), gc[0])), 1)])
     out = dict(v=3, edge_step=EDGE_STEP, x0=grid.GX0, z0=grid.GZ0, cell=grid.PC, nx=tx * TILE, nz=tz * TILE, tile=TILE, chunk=CHUNK,
                tiles=[v for t in tiles for v in t], chunks=chunks, trees=trees, ntrees=len(T), area=area_b, runf=runf_b, dh=dh_b, runs=runs, blocks=blocks,
-               signs=[[s_['name'], s_['difficulty'], s_['spots']] for s_ in signs], ropes=ropes, bridges=bridges, roads=roads)
+               signs=[[s_['name'], s_['difficulty'], s_['spots']] for s_ in signs], ropes=ropes, fences=fences, bridges=bridges, roads=roads)
     js = '// Whole-mountain runs built ahead of time by tools/runs (bake_runs.sh). Rebuild when the outlines change.\n'
     js += 'export const RUN_DATA = ' + json.dumps(out, separators=(',', ':')) + ';\n'
     open(f'{d}/runs.js', 'w').write(js)
     print(f'tiles {len(tiles)} in {len(chunks)} chunk files ({size / 1e6:.1f} MB), points {len(tiles) * TILE * TILE / 1e6:.2f} M, largest step {worst} (int16 limit 32767), '
-          f'runs.js {len(js) / 1e6:.2f} MB (trees {len(trees) / 1e3:.0f} KB, area {len(area_b) / 1e3:.0f} KB, runf {len(runf_b) / 1e3:.0f} KB, dh {len(dh_b) / 1e3:.0f} KB), {len(blocks)} stand-in blocks, {len(signs)} signs, {len(ropes)} rope lines, {int(gone.sum()) if len(spots) else 0} trees cleared for signs')
+          f'runs.js {len(js) / 1e6:.2f} MB (trees {len(trees) / 1e3:.0f} KB, area {len(area_b) / 1e3:.0f} KB, runf {len(runf_b) / 1e3:.0f} KB, dh {len(dh_b) / 1e3:.0f} KB), {len(blocks)} stand-in blocks, {len(signs)} signs, {len(ropes)} rope lines, {len(fences)} fences, {int(gone.sum()) if len(spots) else 0} trees cleared for signs')
 
 
 if __name__ == '__main__':

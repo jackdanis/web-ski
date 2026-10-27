@@ -113,7 +113,7 @@ export function stationH(st, x, z) {
 // Solid boxes: centre x, y, z, half sizes hx, hy, hz, yaw as c, s.
 export const SOLIDS = [];
 export function nearSolid(x, z, pad) {
-  return SOLIDS.some((b) => { if (b.what === 'rope') return false;   // ropes don't keep buildings and signs away
+  return SOLIDS.some((b) => { if (b.what === 'rope' || b.what === 'fence') return false;   // ropes and fences don't keep buildings and signs away
     const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
 }
 // SOLIDS bucketed in 32 m cells, each box in every cell its reach (plus 1 m for the body) touches, in SOLIDS order;
@@ -171,50 +171,85 @@ function bridgeTop(x, z, out) {
   }
   return out;
 }
-// ---------- Kickers ----------
-// Three sizes on Cabin's freestyle strip, part of the snow so physics launches off the lip.
-// Kicker frame: u down the fall line from its foot, v across (45 degree sides), w up.
+// ---------- Kickers, snow lips and moguls ----------
+// Kickers: three sizes on Cabin's freestyle strip, part of the snow so physics launches off the lip.
+// Snow lips: the same shape built up on a natural roll-over, plain snow with no mats (Jack's laser notes).
+// Moguls: a field of bumps across a run (Jack's laser notes).
+// Feature frame: u down the fall line from its foot, v across, w up; each feature's hAt(u, v) is its lift.
 const KICK_SIZES = {
   small: { h: 1.0, a: 22, w: 4 },                              // about 11 m of air at 25 mph
   medium: { h: 2.0, a: 27, w: 6 },                             // about 14 m
   large: { h: 3.5, a: 32, w: 8, table: 8, land: 20 },          // table + landing: clears from about 31 mph
+  lip: { h: 1.5, a: 20, w: 10, back: 35, plain: true },        // a natural lip raised 1.5 m, back into the slope it rolls onto
+  lipS: { h: 1.0, a: 20, w: 10, back: 35, plain: true },       // the same, 1 m
 };
-const KICK_AT = [                                              // m down the run from its top
+const KICK_AT = [                                              // m down the run from its top, or the lip's edge at a spot
   { run: 'Cabin', d: 330, size: 'medium' },
   { run: 'Cabin', d: 720, size: 'large' },
   { run: 'Cabin', d: 1290, size: 'small' },
+  { at: [2417.7, -3868.7], size: 'lip' },                      // laser note 8 (2026-10-27): "can we make it a bit larger?"
+  { at: [3288.9, -4782.7], size: 'lipS' },                     // laser note 17: the roll-over Jack liked, smoothed away
+                                                               // when the snow past it became a run, built back
 ];
+const MOGUL_AT = [                                             // centre, length down the fall line, width across
+  { at: [-30.5, -2186.9], len: 60, wide: 32 },                 // Mick's Gully, laser note 24 (2026-10-27)
+];
+const MOGUL = { h: 0.8, wave: 5, fade: 6 };                    // m: bump height, spacing along a row, edge fade
 export const KICK_LIP = 1.2;                                          // m of mat up to the lip
 export const KICKERS = [];
 {
   const kB = { h: 0, gx: 0, gz: 0 };
-  for (const at of KICK_AT) {
-    const run = (MAP.runs || []).find((r) => r.name === at.run);
-    if (!run) continue;
-    let left = at.d, x = run.points[0][0], z = run.points[0][1];
-    for (let i = 0; i < run.points.length - 1 && left > 0; i++) {
-      const [ax, az] = run.points[i], [bx, bz] = run.points[i + 1], L = Math.hypot(bx - ax, bz - az), f = Math.min(1, left / L);
-      x = ax + (bx - ax) * f; z = az + (bz - az) * f; left -= L;
-    }
-    // fall line averaged over 20 m
+  // fall line averaged over 20 m
+  const fall = (x, z) => {
     let gx = 0, gz = 0;
     for (let a = -10; a <= 10; a += 5) for (let b = -10; b <= 10; b += 5) { sampleBase(x + a, z + b, kB); gx += kB.gx; gz += kB.gz; }
-    const g = Math.hypot(gx, gz) || 1, S = KICK_SIZES[at.size], A = S.a * Math.PI / 180;
+    const g = Math.hypot(gx, gz) || 1;
+    return [-gx / g, -gz / g];
+  };
+  const bounds = (k, r) => Object.assign(k, { bx0: k.x - r, bx1: k.x + r, bz0: k.z - r, bz1: k.z + r });
+  for (const at of KICK_AT) {
+    let x, z;
+    const S = KICK_SIZES[at.size], A = S.a * Math.PI / 180;
     const R = S.h / (1 - Math.cos(A)), L = R * Math.sin(A);
-    const back = S.table ? Math.tan(S.land * Math.PI / 180) : Math.tan(50 * Math.PI / 180);
+    if (at.run) {
+      const run = (MAP.runs || []).find((r) => r.name === at.run);
+      if (!run) continue;
+      let left = at.d; x = run.points[0][0]; z = run.points[0][1];
+      for (let i = 0; i < run.points.length - 1 && left > 0; i++) {
+        const [ax, az] = run.points[i], [bx, bz] = run.points[i + 1], len = Math.hypot(bx - ax, bz - az), f = Math.min(1, left / len);
+        x = ax + (bx - ax) * f; z = az + (bz - az) * f; left -= len;
+      }
+    } else {
+      // the foot sits L up the fall line from the given edge
+      const [fx, fz] = fall(at.at[0], at.at[1]);
+      x = at.at[0] - fx * L; z = at.at[1] - fz * L;
+    }
+    const [fx, fz] = fall(x, z);
+    const back = S.table ? Math.tan(S.land * Math.PI / 180) : Math.tan((S.back || 50) * Math.PI / 180);
     const top = L + (S.table || 0), end = top + S.h / back;
     const prof = (u) => u <= 0 ? 0 : u <= L ? R - Math.sqrt(R * R - u * u) : u <= top ? S.h : Math.max(0, S.h - (u - top) * back);
-    const k = { x, z, fx: -gx / g, fz: -gz / g, hw: S.w / 2, h: S.h, L, end, prof, size: at.size, mode: -1, mesh: null };
-    const r = Math.hypot(end, k.hw + S.h);
-    Object.assign(k, { bx0: x - r, bx1: x + r, bz0: z - r, bz1: z + r });
-    KICKERS.push(k);
+    const hw = S.w / 2;
+    const hAt = (u, v) => u <= 0 || u >= end ? 0 : Math.max(0, prof(u) - Math.max(0, Math.abs(v) - hw));
+    const k = { x, z, fx, fz, hw, h: S.h, L, end, prof, hAt, size: at.size, plain: !!S.plain, mode: -1, mesh: null };
+    KICKERS.push(bounds(k, Math.hypot(end, hw + S.h)));
+  }
+  for (const at of MOGUL_AT) {
+    const [fx, fz] = fall(at.at[0], at.at[1]), hw = at.wide / 2, end = at.len, w = 2 * Math.PI / MOGUL.wave;
+    const x = at.at[0] - fx * end / 2, z = at.at[1] - fz * end / 2;
+    const ease = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
+    // staggered rows: bumps where both waves crest together, troughs between; faded in over the edges
+    const hAt = (u, v) => {
+      if (u <= 0 || u >= end || Math.abs(v) >= hw) return 0;
+      const f = ease(Math.min(u, end - u) / MOGUL.fade) * ease((hw - Math.abs(v)) / MOGUL.fade);
+      return MOGUL.h * f * (0.5 + 0.5 * Math.cos(w * u) * Math.cos(w * v));
+    };
+    const k = { x, z, fx, fz, hw: hw - MOGUL.h, h: MOGUL.h, L: 0, end, prof: () => 0, hAt, size: 'moguls', plain: true, mode: -1, mesh: null };
+    KICKERS.push(bounds(k, Math.hypot(end, hw)));
   }
 }
 export function kickH(k, x, z) {
-  const dx = x - k.x, dz = z - k.z, u = dx * k.fx + dz * k.fz;
-  if (u <= 0 || u >= k.end) return 0;
-  const v = Math.abs(dz * k.fx - dx * k.fz);
-  return Math.max(0, k.prof(u) - Math.max(0, v - k.hw));
+  const dx = x - k.x, dz = z - k.z;
+  return k.hAt(dx * k.fx + dz * k.fz, dz * k.fx - dx * k.fz);
 }
 function addKick(x, z, out) {
   for (const k of KICKERS) {

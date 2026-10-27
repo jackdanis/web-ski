@@ -4,14 +4,17 @@ import { MAP } from '../data/mountain.js';
 import { RUN_DATA } from '../data/runs.js';
 import { state } from './state.js';
 import { clamp } from './config.js';
-import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleGrid, stationAt } from './world.js';
+import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBuilding, addIndustrial, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addUp4Pizza, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 
 // ---------- Run props: trail signs, rope lines, fence ----------
 export const RUNS = MAP.runs || [];
+// Named buildings from Jack's laser notes batch 2 (2026-10-27), by stand-in block centre; SKIP blocks go
+const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, -1013.2, 'up4'], [-342.3, -2936.9, 'map']];
+const SKIP = [[-338.6, -2933.0]];                     // a shed footprint inside the trail-map stand
 // Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
 function nearestRunPoint(x, z) {
@@ -256,9 +259,24 @@ if (RUN_DATA) {
     addObstacle(t);
   }
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
-  // INDUSTRIAL blocks get the industrial building instead.
+  // INDUSTRIAL blocks get the industrial building instead, SPECIAL blocks their named building.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z))) continue;
+    if (SKIP.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) continue;
+    const special = SPECIAL.find(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1);
+    if (special) {
+      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
+      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
+      const b = { x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 };
+      if (special[2] === 'base') addBase(b);
+      else if (special[2] === 'sams') addSamsKnob(b);
+      else if (special[2] === 'map') addMapStand(b);
+      else {
+        const g = sampleBase(x, z, { h: 0, gx: 0, gz: 0 }), n = Math.hypot(g.gx, g.gz) || 1;
+        addUp4Pizza(b, [g.gx / n, g.gz / n]);
+      }
+      continue;
+    }
     if (INDUSTRIAL.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) {
       const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
       // local z in the world, as placeM turns it: the door side faces the run
@@ -482,28 +500,45 @@ for (const line of (RUN_DATA && RUN_DATA.ropes) || []) {
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ropePts), 3));
   if (ropePts.length) addRinged(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xc8261c })));
 }
-// rail fence behind the Village Express top terminal
+// rail fences: behind the Village Express top terminal, and where Jack's laser notes close the way into building
+// areas (shared folder: source-data/runs/fences.json). Posts about 3 m apart with two rails; the laser-note fences
+// are thin solid walls, like the ropes.
+function railFence(posts, solid) {
+  let last = null;
+  for (const [x, y, z] of posts) {
+    bucket(runParts, x, z, part(new THREE.BoxGeometry(0.18, 1.3, 0.18).translate(0, 0.65, 0), WOOD_DARK, new THREE.Matrix4().setPosition(x, y, z)));
+    if (last) {
+      const mx = (x + last[0]) / 2, mz = (z + last[2]) / 2, my = (y + last[1]) / 2, l = Math.hypot(x - last[0], z - last[2]);
+      const tilt = Math.atan2(y - last[1], l), yaw = Math.atan2(x - last[0], z - last[2]);
+      for (const h of [0.55, 1.05]) {
+        const m = new THREE.Matrix4().makeRotationY(yaw).multiply(new THREE.Matrix4().makeRotationX(-tilt)).setPosition(mx, my + h, mz);
+        bucket(runParts, x, z, part(new THREE.BoxGeometry(0.1, 0.12, l + 0.2), WOOD, m));
+      }
+      if (solid) {
+        SOLIDS.push({ x: mx, z: mz, y: my + 0.6, hx: 0.12, hy: 0.7 + Math.abs(y - last[1]) / 2, hz: l / 2,
+          c: (z - last[2]) / l, s: (x - last[0]) / l, what: 'fence' });
+      }
+    }
+    last = [x, y, z];
+    casters.push({ x, z, h: 1.3, w: 0.2 });
+  }
+}
 {
   const ve = LIFTS.find((l) => l.name === 'Village Express');
   if (ve) {
     const p = ve.points, a = p[p.length - 2], b = p[p.length - 1];
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / len, uz = (b[1] - a[1]) / len;
-    const cx = b[0] + ux * 16, cz = b[1] + uz * 16;
-    let last = null;
+    const cx = b[0] + ux * 16, cz = b[1] + uz * 16, posts = [];
     for (let s = -18; s <= 18; s += 3) {
-      const x = cx + uz * s, z = cz - ux * s, y = groundY(x, z) - 0.2;
-      bucket(runParts, cx, cz, part(new THREE.BoxGeometry(0.18, 1.3, 0.18).translate(0, 0.65, 0), WOOD_DARK, new THREE.Matrix4().setPosition(x, y, z)));
-      if (last) {
-        const mx = (x + last[0]) / 2, mz = (z + last[2]) / 2, my = (y + last[1]) / 2, l = Math.hypot(x - last[0], z - last[2]);
-        const tilt = Math.atan2(y - last[1], l), yaw = Math.atan2(x - last[0], z - last[2]);
-        for (const h of [0.55, 1.05]) {
-          const m = new THREE.Matrix4().makeRotationY(yaw).multiply(new THREE.Matrix4().makeRotationX(-tilt)).setPosition(mx, my + h, mz);
-          bucket(runParts, cx, cz, part(new THREE.BoxGeometry(0.1, 0.12, l + 0.2), WOOD, m));
-        }
-      }
-      last = [x, y, z];
-      casters.push({ x, z, h: 1.3, w: 0.2 });
+      const x = cx + uz * s, z = cz - ux * s;
+      posts.push([x, groundY(x, z) - 0.2, z]);
     }
+    railFence(posts, false);
+  }
+  for (const line of (RUN_DATA && RUN_DATA.fences) || []) {
+    const posts = [];
+    for (let k = 0; k < line.length; k += 3) posts.push([line[k], line[k + 2] - 0.2, line[k + 1]]);
+    railFence(posts, true);
   }
 }
 // Wood Rd from the bridge to Base Village in concrete (runs.js roads), and the stone ski bridge over it

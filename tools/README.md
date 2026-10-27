@@ -21,7 +21,9 @@ cp /tmp/runs/runs.js games/golden-ski/snowmass/data/runs.js
 cp -r /tmp/runs/runs/. games/golden-ski/snowmass/data/runs/
 ```
 
-Needs numpy, scipy and opencv. `GOLDEN_SKI_RUNS` points at a different input folder.
+Needs numpy, scipy, opencv and scikit-image. `GOLDEN_SKI_RUNS` points at a different input folder. Delete chunk files
+the bake no longer writes. The fences in `source-data/runs/fences.json` come from `runs/fences.py` (laser-note pins
+walked along the run edges); rerun it after the runs move, then `export.py`.
 
 ## Goldie
 

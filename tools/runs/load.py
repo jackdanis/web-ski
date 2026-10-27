@@ -27,10 +27,12 @@ def load_lifts():
     return json.JSONDecoder().raw_decode(s[i:])[0]
 def load_kit_runs():
     return json.load(open(IN + 'runs.json'))['runs']
-def load_fills():
-    # forest fill rings (x, z in m): ground that is forest, not run, whatever the traced runs say (Jack's laser notes)
+def load_fills(planted=False):
+    # forest fill rings (x, z in m): ground that is forest, not run, whatever the traced runs say (Jack's laser notes).
+    # planted: only the rings that get trees (plant: false just clears the run)
     p = IN + 'forest_fill.json'
-    return [np.asarray(f['ring'], np.float64) for f in json.load(open(p))['fills']] if os.path.exists(p) else []
+    if not os.path.exists(p): return []
+    return [np.asarray(f['ring'], np.float64) for f in json.load(open(p))['fills'] if not planted or f.get('plant', True)]
 def fill_mask(shape):
     # the fill rings on the 2 m grid (row, col)
     import cv2, grid

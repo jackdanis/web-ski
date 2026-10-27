@@ -60,7 +60,7 @@ def main(d):
             x = Cc - 3985.0 + 0.5; z = R - 8525.0 + 0.5
             out.append(np.stack([x, z, hh], 1))
     # forest fills: a jittered 6 m grid of 9-16 m crowns, kept like mapped tops so they draw at any distance
-    for ring in load_fills():
+    for ring in load_fills(planted=True):
         import cv2
         gx = np.arange(np.floor(ring[:, 0].min() / 6), np.ceil(ring[:, 0].max() / 6) + 1).astype(np.int64)
         gz = np.arange(np.floor(ring[:, 1].min() / 6), np.ceil(ring[:, 1].max() / 6) + 1).astype(np.int64)

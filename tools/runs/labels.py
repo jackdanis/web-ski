@@ -8,7 +8,7 @@
    it becomes off-piste snow. Narrow tracks and runs whose mapped line climbs are left for the line fit instead.
 Writes labels.npy (int16, 0 = no run) and pockets.json.
 """
-import json, sys, numpy as np
+import json, sys, numpy as np, cv2
 from scipy import ndimage as ndi
 from skimage.morphology import reconstruction
 from load import load_owner, load_runs, load_lifts, load_kit_runs, fill_mask, RM, IN
@@ -42,7 +42,7 @@ def main(out_dir):
     runs = {r['i']: r for r in load_runs()}
     h0 = np.load(f'{out_dir}/h0.npy')
     lab = O.copy()
-    # extra lines marked paint (no traced outline) get their width painted where no run is; forest fills are not run
+    # extra lines marked paint (no traced outline) get their width (and ring, if any) painted where no run is; forest fills are not run
     from shape import dense_line
     lines = load_kit_runs() + json.load(open(IN + 'extra_runs.json'))
     for i, ln in enumerate(lines):
@@ -53,6 +53,10 @@ def main(out_dir):
         sl = (slice(r0, rr.max() + pad + 1), slice(c0, cc.max() + pad + 1))
         on = np.zeros(lab[sl].shape, bool); on[rr - r0, cc - c0] = True
         lab[sl][(ndi.distance_transform_edt(~on) * grid.PC <= half) & (lab[sl] == 0)] = i + 1
+        if ln.get('ring'):                                              # and a painted area, where one is given
+            m = np.zeros(lab.shape, np.uint8); r_, c_ = grid.rc(*np.asarray(ln['ring'], float).T)
+            cv2.fillPoly(m, [np.round(np.stack([c_, r_], 1)).astype(np.int32)], 1)
+            lab[(m > 0) & (lab == 0)] = i + 1
     lab[fill_mask(lab.shape)] = 0
     # 1. specks
     nspeck = 0
@@ -85,7 +89,8 @@ def main(out_dir):
     depth, unreached = drain_fill(h0, dom, lift_outlets(run.shape, dom, h0))
     keep_names = np.zeros(lab.max() + 1, bool)
     for i, r in runs.items():
-        keep_names[i + 1] = r['cat_track'] or r['name'] in LINE_FIX
+        # batch 2 laser-note paths and areas were placed by hand on ground checked to drain
+        keep_names[i + 1] = r['cat_track'] or r['name'] in LINE_FIX or r['osm'] == 'jack-laser-2026-10-27'
     trim = run & (depth > TRIM) & ~keep_names[lab]
     pockets = []
     pl, pn = ndi.label(trim, structure=np.ones((3, 3)))
