@@ -61,12 +61,8 @@ export const modelMat = new THREE.ShaderMaterial({
       }
       vec2 sunXZ = normalize(uSun.xz + vec2(1e-4));
       float lit = 1.0 - shade(vP + vec3(sunXZ.x, 0.0, sunXZ.y) * 1.5) * (1.0 - smoothstep(0.0, 4.0, vH));
-      // Snowlight for buildings: a wall facing away from the sun still gets the sunlit snow's bounce, and the light
-      // keeps less of the sky's blue, so wood, brick and stone hold their colour in shade instead of going grey.
-      float wall = 1.0 - abs(n.y);
       vec3 l = uSunC * band(max(0.0, dot(n, uSun))) * lit + uSky * (0.35 + 0.35 * n.y)
-             + uBounce * (band0(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 + wall * 0.4) + lamps(vP, n) * 1.2 + 0.05;
-      l = mix(vec3(dot(l, vec3(0.3333))), l, 0.55);
+             + uBounce * band0(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 + lamps(vP, n) * 1.2 + 0.05;
       gl_FragColor = vec4(finish(alb, l, vD, 1.25), 1.0);
     }`,
 });
