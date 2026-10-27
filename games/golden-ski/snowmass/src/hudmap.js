@@ -94,12 +94,11 @@ function paintMapBoards(img, W, Hp) {
   for (const face of mapBoards) {
     const a = face.userData.aspect, cw = 2048, ch = Math.round(cw / a);
     const cv = Object.assign(document.createElement('canvas'), { width: cw, height: ch }), c = cv.getContext('2d');
-    c.fillStyle = '#eef1f5'; c.fillRect(0, 0, cw, ch);
-    // just the runs and lifts with a little room around them
+    // zoomed to the runs and lifts
     let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
     for (const r of [...MAP.runs, ...MAP.lifts]) for (const [x, z] of r.points) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
-    const M = HUDMAP.MPP, sx = (x0 - 150 - hudMap.x0) / M, sz = (z0 - 150 - hudMap.z0) / M, sw = (x1 - x0 + 300) / M, sh = (z1 - z0 + 300) / M;
-    const k = Math.min(cw / sw, ch / sh);
+    const M = HUDMAP.MPP, sx = (x0 - hudMap.x0) / M, sz = (z0 - hudMap.z0) / M, sw = (x1 - x0) / M, sh = (z1 - z0) / M;
+    const k = Math.max(cw / sw, ch / sh);                                   // fill the board, no margins
     c.translate(cw / 2, ch / 2); c.rotate(Math.PI); c.drawImage(north, sx, sz, sw, sh, -sw * k / 2, -sh * k / 2, sw * k, sh * k);
     const t = new THREE.CanvasTexture(cv);
     t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
