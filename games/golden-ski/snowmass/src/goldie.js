@@ -9,6 +9,8 @@ import './atmosphere.js'; // load order: runs after atmosphere.js
 // 90 her right, 180 in front, in 22.5 degree steps; her left side mirrored), the frame's rect and its foot point, 64 px per m.
 // The frames are her body only; the skis are drawn on the physics ski plate. Wipeout and sit keep their own skis.
 // Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
+// Double-poling uses its own sheet (goldie_pole.json, same layout): pole_reach, pole_plant, pole_crunch, pole_push.
+export const POLE_FRAMES = ['pole_reach', 'pole_plant', 'pole_crunch', 'pole_push'];
 export const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
 // Flips use their own sheet (goldie_air.json): the tucked body from every camera direction round her, elevation -90
 // (from below) to 90 (from above) in 22.5 degree steps, each frame's anchor at the point she turns about. Her skis'

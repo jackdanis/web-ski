@@ -3,15 +3,15 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
 import { state } from './state.js';
 import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, physics, wrapAngle } from './config.js';
 import { H, KICKERS, META, PCELL, POWDER, SOLIDS, aspen, cellAt, conifer, groundY, isRock, normalFrom, patchEdge, sample, sampleBase, samplePatch, surfaceAt } from './world.js';
-import { GOLDIE, GOLDIE_AIR, SUN_DIR, camera, goldieAirN, goldieAirT, goldieN, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
+import { GOLDIE, GOLDIE_AIR, GOLDIE_POLE, SUN_DIR, camera, goldieAirN, goldieAirT, goldieN, goldiePoleN, goldiePoleT, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
 import { addBuilding, ringed, updateRings } from './buildings.js';
 import { clumpGeo, fillGeo, pages, treeGeo, updateTrees } from './trees.js';
 import { carriers, liftPaths, updateKickers } from './lifts.js';
 import { PATCH_STEP, RUNS, STARTS, meshY, runStream, setPatch, signSpots, updatePatch } from './slopes.js';
 import { LOAD, RIDES, carrierAt, ride, ringMat } from './ride.js';
 import { applyTime, resize, setPixelLook, sunAt, updateWorld } from './atmosphere.js';
-import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
-import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
+import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, POLE_FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
+import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, POLE_PHASES, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
 
@@ -65,6 +65,11 @@ function pickFrame() {
   if (sk.landT > 0) return FRAMES.land;
   if (sk.brake && speed > 1) return FRAMES.brake;
   if (sk.tuck) return FRAMES.tuck;
+  if (sk.poleP >= 0) {
+    let i = 0, a = POLE_PHASES[0];
+    while (sk.poleP >= a && i < 3) a += POLE_PHASES[++i];
+    return POLE_FRAMES[i];
+  }
   if (sk.steer > 0.3) return FRAMES.carveR;
   if (sk.steer < -0.3) return FRAMES.carveL;
   return FRAMES.stand;
@@ -235,10 +240,11 @@ function drawSkier(p, riding, dY) {
   let tilt = elev < 6 ? 0 : elev < 28.5 ? 12 : 45, yaw = SHEET_YAWS[yi];
   if (mirror) pose = pose.replace(/_([lr])$/, (_, s) => (s === 'l' ? '_r' : '_l'));
   if (crashed) { tilt = 12; yaw = 0; }
-  const [fx, fy, fw, fh, ax, ay] = GOLDIE.frames[pose][tilt][yaw];
+  const poling = pose.startsWith('pole_'), sheet = poling ? GOLDIE_POLE : GOLDIE, [SW, SH] = sheet.size;
+  const [fx, fy, fw, fh, ax, ay] = sheet.frames[pose][tilt][yaw];
   const U = skierMat.uniforms;
-  U.map.value = goldieT; U.normalMap.value = goldieN;
-  U.rect.value.set(fx / SHEET_W, fy / SHEET_H, fw / SHEET_W, fh / SHEET_H);
+  U.map.value = poling ? goldiePoleT : goldieT; U.normalMap.value = poling ? goldiePoleN : goldieN;
+  U.rect.value.set(fx / SW, fy / SH, fw / SW, fh / SH);
   U.mirror.value = mirror ? 1 : 0;
   const w = fw / SHEET_PX;
   let hgt = fh / SHEET_PX;

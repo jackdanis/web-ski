@@ -90,6 +90,10 @@ export const GOLDIE = await (await fetch(new URL('../assets/sprites/goldie_body.
 export const [goldieAirT, goldieAirN] = await Promise.all([loadTex('sprites/goldie_air'), loadTex('sprites/goldie_air_n')]);
 goldieAirT.flipY = goldieAirN.flipY = false;
 export const GOLDIE_AIR = await (await fetch(new URL('../assets/sprites/goldie_air.json', import.meta.url))).json();
+// her double-pole frames: same layout as the body sheet (pose, tilt, yaw), same palette
+export const [goldiePoleT, goldiePoleN] = await Promise.all([loadTex('sprites/goldie_pole'), loadTex('sprites/goldie_pole_n')]);
+goldiePoleT.flipY = goldiePoleN.flipY = false;
+export const GOLDIE_POLE = await (await fetch(new URL('../assets/sprites/goldie_pole.json', import.meta.url))).json();
 export const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
 export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];
