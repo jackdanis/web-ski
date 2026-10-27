@@ -9,7 +9,12 @@ import './atmosphere.js'; // load order: runs after atmosphere.js
 // 90 her right, 180 in front, in 22.5 degree steps; her left side mirrored), the frame's rect and its foot point, 64 px per m.
 // The frames are her body only; the skis are drawn on the physics ski plate. Wipeout and sit keep their own skis.
 // Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
-export const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit' };
+export const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
+// Flips use their own sheet (goldie_air.json): the tucked body from every camera direction round her, elevation -90
+// (from below) to 90 (from above) in 22.5 degree steps, each frame's anchor at the point she turns about. Her skis'
+// middle sits FLIP_SKIS from that point (m: up, forward in her body frame).
+export const FLIP_SKIS = [-0.664, 0.408];
+export const AIR_ELEVS = [-90, -67.5, -45, -22.5, 0, 22.5, 45, 67.5, 90];
 // The moving carve comes at three edge angles (degrees), frames carve15_l .. carve45_r; carve_l/r is the turn on the spot.
 export const CARVE_EDGES = [15, 30, 45];
 export const SHEET_PX = GOLDIE.pxPerM, [SHEET_W, SHEET_H] = GOLDIE.size;

@@ -29,6 +29,9 @@ Needs numpy, scipy and opencv. `GOLDEN_SKI_RUNS` points at a different input fol
    (Playwright with Chromium). It poses the model on the stock three.js Michelle rig: put `Michelle.glb` from the
    three.js examples next to `run3.js` first.
 2. `python3 goldie/sheet3.py <outdir> <sheet name>` packs them into the atlas and JSON the game reads.
+3. Flip frames (`assets/sprites/goldie_air*`): `node goldie/run_air.js <model.glb> flip 0,22.5,...,180 -90,-67.5,...,90 <outdir>`
+   renders the tuck centred on her turning point from every elevation, then
+   `PAL=<goldie_body.png> CENTER=1 python3 goldie/sheet3.py <outdir> <out> 1024 goldie_air` packs it in the body sheet's palette.
 
 ## Textures
 

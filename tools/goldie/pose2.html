@@ -94,6 +94,13 @@ function carveAt(roll) {
   };
 }
 for (const r of [15, 30, 45]) { POSES[`carve${r}_l`] = carveAt(r); POSES[`carve${r}_r`] = mirror(POSES[`carve${r}_l`]); }
+// Air flips and spins (stick up/down): knees pulled to the chest, hands on the shins, poles tucked back.
+POSES.flip = {
+  rot: { yaw: 0, roll: 0, pitch: 0 }, torso: V(0, 1, 0.55), head: V(0, 1, 0.35),
+  thigh: [V(0.1, 0.25, 1), V(-0.1, 0.25, 1)], shin: [V(0.02, -1, -0.15), V(-0.02, -1, -0.15)],
+  arm: [V(0.3, -0.5, 0.8), V(-0.3, -0.5, 0.8)], fore: [V(-0.05, -0.9, 0.35), V(0.05, -0.9, 0.35)],
+  pole: [V(0.15, 0.35, -1), V(-0.15, 0.35, -1)], skiYaw: [0, 0],
+};
 
 let model, bones = {}, skinned, skis = [], poles = [], footBind = [];
 window.setup = async function (url) {
@@ -290,6 +297,38 @@ window.shoot = function (camYaw, pitch, pxPerM, Wm, Hm) {
     renderer.setClearColor(0, 0); renderer.render(scene, cam); return renderer.domElement.toDataURL('image/png');
   };
   const out = { albedo: shot(false), normal: shot(true) }; shot(false); return out;
+};
+
+// The point a flipping body turns about: low on her back, between the hips and the chest.
+window.pivot = function () {
+  scene.updateMatrixWorld(true);
+  return bones.Hips.getWorldPosition(new THREE.Vector3()).lerp(bones.Spine2.getWorldPosition(new THREE.Vector3()), 0.3);
+};
+// The skis' middle relative to the pivot (m, x = her left, y = up, z = forward), for the game's ski board.
+window.skiOffset = function () {
+  const was = skis.map(g => g.visible); setSkis(true); scene.updateMatrixWorld(true);
+  const box = new THREE.Box3(); skis.forEach(g => box.expandByObject(g));
+  skis.forEach((g, i) => g.visible = was[i]);
+  const c = box.getCenter(new THREE.Vector3()); c.y = box.min.y; return c.sub(pivot()).toArray();
+};
+// Like shoot(), but a square W m frame centred on the pivot, from any elevation (-90 below her to 90 above).
+window.shootPivot = function (camYaw, pitch, pxPerM, Wm) {
+  const renderer = window._r || (window._r = new THREE.WebGLRenderer({ alpha: true, antialias: false, preserveDrawingBuffer: true }));
+  renderer.setSize(Math.round(Wm * pxPerM), Math.round(Wm * pxPerM), false);
+  const p = pitch * deg, y = camYaw * deg, piv = pivot();
+  const back = new THREE.Vector3(-Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p));
+  const up = new THREE.Vector3(Math.sin(y) * Math.sin(p), Math.cos(p), Math.cos(y) * Math.sin(p));
+  const cam = new THREE.OrthographicCamera(-Wm / 2, Wm / 2, Wm / 2, -Wm / 2, 0.01, 100);
+  cam.position.copy(piv).addScaledVector(back, 20); cam.up.copy(up); cam.lookAt(piv);
+  const albedo = window.bodyAlbedo, normal = new THREE.MeshNormalMaterial({ skinning: true, side: THREE.DoubleSide });
+  const props = []; scene.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.visible && !o.userData.hidden) props.push(o); });
+  const keep = props.map(o => o.material);
+  const shot = norm => {
+    skinned.material = norm ? normal : albedo;
+    props.forEach((o, i) => o.material = norm ? new THREE.MeshNormalMaterial({ side: THREE.DoubleSide }) : keep[i]);
+    renderer.setClearColor(0, 0); renderer.render(scene, cam); return renderer.domElement.toDataURL('image/png');
+  };
+  shot(false); const out = { albedo: shot(false), normal: shot(true) }; shot(false); return out;
 };
 
 // ---------- Put a real body (a static GLB, e.g. from TRELLIS) on the stock skeleton ----------

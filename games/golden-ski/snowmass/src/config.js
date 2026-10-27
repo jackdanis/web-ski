@@ -38,6 +38,8 @@ export const MO = {
   SPIN_IN: 7,                   // rad/s^2: steering in the air torques the spin
   SPIN_TUCK: 1.6,
   SPIN_DAMP: 0.4,               // spin lost per second with no steer
+  FLIP_IN: 7,                   // rad/s^2: up/down in the air torques a flip (up = front flip), and it carries on
+  FLIP_DAMP: 0.4,               // flip lost per second with nothing held
   CRASH_MU: 0.6,                // a wipeout slides with friction plus a base drag
   CRASH_BASE: 2,
   CRASH_MAX: 5,                 // s before she self-arrests on any slope
@@ -71,6 +73,7 @@ export const BAIL = {
   HIT: 9,                       // m/s into a wall or trunk that bails (about 20 mph)
   MISS: 70,                     // degrees between skis and travel on landing that bails
   IMPACT: 16,                   // m/s landing impact that bails (about a 13 m drop)
+  FLIP: 45,                     // degrees off upright (mid-flip) on landing that bails
   L: 1.8, W: 0.6, T: 0.25,      // body box: length, width, thickness
   MU: 0.7,
   E: 0.15,

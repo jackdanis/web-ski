@@ -1,10 +1,11 @@
 # Body-only Goldie atlas: 64 px/m frames with the OG finish (punch, shared 22-colour palette, despeckle, outline),
 # trimmed to their pixels and shelf-packed. JSON: per pose/tilt/yaw the rect in the atlas and the foot point inside it.
-import numpy as np, json, sys, colorsys, glob, re
+import numpy as np, json, sys, colorsys, glob, re, os
 from PIL import Image
 SRC, OUT, W = sys.argv[1], sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 2048
+CENTER = bool(os.environ.get('CENTER'))  # frames from run_air.js: the anchor is the frame's centre (her pivot), not her feet
 F = 5; NCOL = 22; OUTLINE = np.array([18, 16, 46.])
-keys = sorted({re.match(r'(.+)_t([\d.]+)_y([\d.]+)_albedo', f.split('/')[-1]).groups() for f in glob.glob(f'{SRC}/*_albedo.png')})
+keys = sorted({re.match(r'(.+)_t(-?[\d.]+)_y([\d.]+)_albedo', f.split('/')[-1]).groups() for f in glob.glob(f'{SRC}/*_albedo.png')})
 def pool(x):
     h, w = x.shape[0] // F * F, x.shape[1] // F * F; x = x[x.shape[0] - h:, :w]
     return x.reshape(h // F, F, w // F, F, x.shape[2]).sum((1, 3))
@@ -23,7 +24,11 @@ for k in keys:
     frames[k] = (rgb, cov > 0.35, n)
 allpx = punch(np.concatenate([f[0][f[1]] for f in frames.values()])[::3])
 side = int(np.ceil(np.sqrt(len(allpx)))); pad = np.zeros((side * side, 3)); pad[:len(allpx)] = allpx; pad[len(allpx):] = allpx[0]
-pal = np.array(Image.fromarray((pad.reshape(side, side, 3) * 255).astype(np.uint8)).quantize(colors=NCOL, method=Image.MEDIANCUT, dither=Image.NONE).getpalette()[:NCOL * 3]).reshape(-1, 3).astype(float)
+if os.environ.get('PAL'):  # reuse another sheet's palette: the colours deep inside its frames (outlines excluded)
+    ref = np.asarray(Image.open(os.environ['PAL']).convert('RGBA')); m = ref[..., 3] > 0
+    for _ in range(2): m[1:-1, 1:-1] = m[1:-1, 1:-1] & m[:-2, 1:-1] & m[2:, 1:-1] & m[1:-1, :-2] & m[1:-1, 2:]
+    u, c = np.unique(ref[m][:, :3], axis=0, return_counts=True); pal = u[c > 0.05 * c.max()].astype(float)
+else: pal = np.array(Image.fromarray((pad.reshape(side, side, 3) * 255).astype(np.uint8)).quantize(colors=NCOL, method=Image.MEDIANCUT, dither=Image.NONE).getpalette()[:NCOL * 3]).reshape(-1, 3).astype(float)
 def finish(rgb, m, n):
     lab = -np.ones(m.shape, int); lab[m] = ((punch(rgb[m])[:, None, :] * 255 - pal[None]) ** 2).sum(2).argmin(1)
     Hh, Ww = m.shape
@@ -47,7 +52,7 @@ def finish(rgb, m, n):
 fin = {}
 for k, v in frames.items():
     o, no = finish(*v); ys, xs = np.where(o[..., 3] > 0); x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-    fh, fw = o.shape[:2]; fin[k] = (o[y0:y1, x0:x1], no[y0:y1, x0:x1], fw / 2 - x0, fh - 0.04 * 64 - y0)
+    fh, fw = o.shape[:2]; fin[k] = (o[y0:y1, x0:x1], no[y0:y1, x0:x1], fw / 2 - x0, (fh / 2 if CENTER else fh - 0.04 * 64) - y0)
 # shelf pack, tallest first
 order = sorted(fin, key=lambda k: -fin[k][0].shape[0]); x = y = sh = 0; rects = {}
 for k in order:
@@ -59,6 +64,7 @@ atlas = np.zeros((H, W, 4)); natlas = np.zeros((H, W, 4)); meta = {}
 for k, (x, y, w, h) in rects.items():
     atlas[y:y + h, x:x + w] = fin[k][0]; natlas[y:y + h, x:x + w] = fin[k][1]
     meta.setdefault(k[0], {}).setdefault(k[1], {})[k[2]] = [int(x), int(y), int(w), int(h), round(float(fin[k][2]), 2), round(float(fin[k][3]), 2)]
-Image.fromarray(atlas.astype(np.uint8)).save(f'{OUT}/goldie_body.png'); Image.fromarray(natlas.astype(np.uint8)).save(f'{OUT}/goldie_body_n.png')
-json.dump({'pxPerM': 64, 'size': [W, H], 'frames': meta}, open(f'{OUT}/goldie_body.json', 'w'))
+NAME = sys.argv[4] if len(sys.argv) > 4 else 'goldie_body'
+Image.fromarray(atlas.astype(np.uint8)).save(f'{OUT}/{NAME}.png'); Image.fromarray(natlas.astype(np.uint8)).save(f'{OUT}/{NAME}_n.png')
+json.dump({'pxPerM': 64, 'size': [W, H], 'frames': meta}, open(f'{OUT}/{NAME}.json', 'w'))
 print('atlas', W, H, 'frames', len(rects))

@@ -86,6 +86,10 @@ export const [cordT, cordN, powT, powN, skyT, goldieT, goldieN, ...skyRest] = aw
 // Goldie's sheet is read top-down by the rects in its JSON
 goldieT.flipY = goldieN.flipY = false;
 export const GOLDIE = await (await fetch(new URL('../assets/sprites/goldie_body.json', import.meta.url))).json();
+// her flip frames: a second, smaller sheet in the same palette
+export const [goldieAirT, goldieAirN] = await Promise.all([loadTex('sprites/goldie_air'), loadTex('sprites/goldie_air_n')]);
+goldieAirT.flipY = goldieAirN.flipY = false;
+export const GOLDIE_AIR = await (await fetch(new URL('../assets/sprites/goldie_air.json', import.meta.url))).json();
 export const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
 export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];

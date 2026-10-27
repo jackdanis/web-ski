@@ -1,16 +1,16 @@
 // Rendering, the main loop and the test hooks. index.html loads this file.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { state } from './state.js';
-import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, physics } from './config.js';
+import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, physics, wrapAngle } from './config.js';
 import { H, KICKERS, META, PCELL, POWDER, SOLIDS, aspen, cellAt, conifer, groundY, isRock, normalFrom, patchEdge, sample, sampleBase, samplePatch, surfaceAt } from './world.js';
-import { GOLDIE, SUN_DIR, camera, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
+import { GOLDIE, GOLDIE_AIR, SUN_DIR, camera, goldieAirN, goldieAirT, goldieN, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
 import { addBuilding, ringed, updateRings } from './buildings.js';
 import { clumpGeo, fillGeo, pages, treeGeo, updateTrees } from './trees.js';
 import { carriers, liftPaths, updateKickers } from './lifts.js';
 import { PATCH_STEP, RUNS, STARTS, meshY, runStream, setPatch, signSpots, updatePatch } from './slopes.js';
 import { LOAD, RIDES, carrierAt, ride, ringMat } from './ride.js';
 import { applyTime, resize, setPixelLook, sunAt, updateWorld } from './atmosphere.js';
-import { CARVE_EDGES, FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
+import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
 import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
@@ -60,7 +60,8 @@ function rideCamera(p) {
 function pickFrame() {
   const speed = sk.vel.length();
   if (sk.crashed) return FRAMES.wipeout;
-  if (!sk.grounded && sk.airTime > 0.12) return FRAMES.air;
+  // in the air: tucked while she flips, arms out otherwise
+  if (!sk.grounded && sk.airTime > 0.12) return sk.flipIn || Math.abs(wrapAngle(sk.flip)) > 0.25 || Math.abs(sk.flipRate) > 1 ? FRAMES.flip : FRAMES.air;
   if (sk.landT > 0) return FRAMES.land;
   if (sk.brake && speed > 1) return FRAMES.brake;
   if (sk.tuck) return FRAMES.tuck;
@@ -151,8 +152,52 @@ const bodyU = new THREE.Vector3(), bodyF = new THREE.Vector3(), bodyR = new THRE
 const cardR = new THREE.Vector3(), cardU = new THREE.Vector3(), cardZ = new THREE.Vector3(), foot = new THREE.Vector3();
 const cardM = new THREE.Matrix4(), skiN = new THREE.Vector3(), skiF = new THREE.Vector3(), skiR = new THREE.Vector3();
 const DEG = 180 / Math.PI;
+// Mid-flip: her body frame turned forward by sk.flip about her right side, round a point low on her back. The frame
+// is the one drawn from the camera's direction in that body frame; the card turns in the screen to match the drawing's
+// up, and the ski board turns with her.
+const flipC = new THREE.Vector3(), flipUp = new THREE.Vector3();
+function drawFlip(p) {
+  sk.frame = FRAMES.flip;
+  bodyF.set(Math.sin(sk.heading), 0, -Math.cos(sk.heading));
+  bodyR.crossVectors(bodyF, UP);
+  // the turning point sits where it is in the tuck when she is upright, so the skis start on her feet
+  flipC.set(p.x, p.y, p.z).addScaledVector(UP, -FLIP_SKIS[0]).addScaledVector(bodyF, -FLIP_SKIS[1]);
+  const c = Math.cos(sk.flip), s = Math.sin(sk.flip);
+  bodyU.copy(UP).multiplyScalar(c).addScaledVector(bodyF, s);
+  bodyF.multiplyScalar(c).addScaledVector(UP, -s);
+  skierMat.uniforms.nudge.value = 0.5;
+  camera.updateMatrixWorld();
+  cardZ.setFromMatrixColumn(camera.matrixWorld, 2);
+  camD.copy(camera.position).sub(flipC).normalize();
+  const side = camD.dot(bodyR), mirror = side < 0;
+  const yi = Math.round(Math.atan2(Math.abs(side), -camD.dot(bodyF)) * DEG / 22.5);
+  const ei = Math.round((Math.asin(clamp(camD.dot(bodyU), -1, 1)) * DEG + 90) / 22.5);
+  const yaw = SHEET_YAWS[yi], elev = AIR_ELEVS[ei];
+  const [fx, fy, fw, fh, ax, ay] = GOLDIE_AIR.frames.flip[elev][yaw];
+  const U = skierMat.uniforms, [AW, AH] = GOLDIE_AIR.size;
+  U.map.value = goldieAirT; U.normalMap.value = goldieAirN;
+  U.rect.value.set(fx / AW, fy / AH, fw / AW, fh / AH);
+  U.mirror.value = mirror ? 1 : 0;
+  // the drawing's up: her up tipped toward the camera by its elevation, round the side the camera is on
+  const y = yaw / DEG, e = elev / DEG;
+  flipUp.copy(bodyU).multiplyScalar(Math.cos(e)).addScaledVector(bodyF, Math.cos(y) * Math.sin(e)).addScaledVector(bodyR, (mirror ? 1 : -1) * Math.sin(y) * Math.sin(e));
+  cardU.copy(flipUp).addScaledVector(cardZ, -flipUp.dot(cardZ));
+  if (cardU.lengthSq() < 1e-6) cardU.setFromMatrixColumn(camera.matrixWorld, 1);
+  cardU.normalize();
+  cardR.crossVectors(cardU, cardZ).normalize();
+  skierMesh.position.copy(flipC).addScaledVector(cardR, -(mirror ? fw - ax : ax) / SHEET_PX).addScaledVector(cardU, -(fh - ay) / SHEET_PX);
+  skierMesh.quaternion.setFromRotationMatrix(cardM.makeBasis(cardR, cardU, cardZ));
+  skierMesh.scale.set(fw / SHEET_PX, fh / SHEET_PX, 1);
+  U.sunLocal.value.set(SUN_DIR.dot(cardR), SUN_DIR.dot(cardU), SUN_DIR.dot(cardZ));
+  skis.visible = true;
+  skiUp.copy(bodyU);
+  skiR.crossVectors(bodyF, bodyU).normalize();
+  skis.quaternion.setFromRotationMatrix(cardM.makeBasis(skiR, bodyF, bodyU));
+  skis.position.copy(flipC).addScaledVector(bodyU, FLIP_SKIS[0]).addScaledVector(bodyF, FLIP_SKIS[1]);
+}
 function drawSkier(p, riding, dY) {
   let pose = riding ? FRAMES.sit : pickFrame();
+  if (pose === FRAMES.flip) { drawFlip(p); return; }
   const crashed = sk.crashed && !riding;
   const n = normalFrom(sample(p.x, p.z), skiN);
   const moving = !riding && !crashed && sk.grounded && sk.vel.length() > 0.5 && pose !== FRAMES.air && pose !== FRAMES.celebrate;
@@ -192,6 +237,7 @@ function drawSkier(p, riding, dY) {
   if (crashed) { tilt = 12; yaw = 0; }
   const [fx, fy, fw, fh, ax, ay] = GOLDIE.frames[pose][tilt][yaw];
   const U = skierMat.uniforms;
+  U.map.value = goldieT; U.normalMap.value = goldieN;
   U.rect.value.set(fx / SHEET_W, fy / SHEET_H, fw / SHEET_W, fh / SHEET_H);
   U.mirror.value = mirror ? 1 : 0;
   const w = fw / SHEET_PX;
@@ -345,7 +391,7 @@ window.__golden = {
   get free() { return free; },
   get menuOpen() { return !debugEl.hidden; },
   freecam(on) { setFreecam(on); },
-  // run n fixed steps; hold overrides input: { steer, tuck, brake, jump }
+  // run n fixed steps; hold overrides input: { steer, flip, tuck, brake, jump }
   step(n, hold) {
     state.testHold = hold || null;
     for (let k = 0; k < n; k++) {
