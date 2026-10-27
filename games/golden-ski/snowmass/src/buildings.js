@@ -416,21 +416,23 @@ function mass(P, b, frame, spec, st) {
   return { lo, hi, top };
 }
 
-// The Westin (pins 4 and 5, one complex), v2 after Jack's lodge photos (references/buildings/westin-snowmass/style-*):
-// one continuous building dug into the slope under a single roofline, nine floors above its mean ground. Dark brown
-// walls on a stone base, stone chimney towers, steep snowy gables with timber trim and glass gable ends on the wings
-// facing the run, glass balcony rails. Pin 5 is a lower wing in the same style.
-const LODGE = { wall: [0.36, 0.27, 0.21], stone: [1.12, 1.0, 0.86], roof: [0.3, 0.31, 0.33], timber: [1.2, 1.05, 0.9],
-  rail: [0.4, 0.5, 0.56], FH: 3.2 };
-// one piece: walls from below its lowest ground to `top`, a stone base two floors up from its downhill side, window
-// bands and balconies above, and a gable roof whose ridge runs along local x or z (gable ends at the other two sides).
-function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what) {
+// The Westin (pins 4 and 5, one complex), after the FLUX render Jack picked (art/buildings/westin/flux/westin-flux-58):
+// one long lodge dug into the slope under one big snowy roof, eight floors above its mean ground. A two-floor sandstone
+// base, warm brown wood above with dark-railed balconies, a gabled wing at the left end, a wing angled toward the run at
+// the right end (it guides skiers to the walkway), four steep gabled bays along the front, a terrace with a snowy roof
+// on timber posts over the ground floor, and two tall stone chimneys. Pin 5 is a lower wing in the same style.
+const LODGE = { wall: [0.98, 0.84, 0.74], stone: [1.9, 1.6, 1.2], roof: [0.3, 0.31, 0.33], timber: [1.2, 1.05, 0.9],
+  rail: [0.16, 0.14, 0.13], FH: 3.2 };
+// one piece: walls from below its lowest ground to `top`, a stone base (two floors above its highest ground),
+// tall windows and run-side balconies above, and a gable roof whose ridge runs along local x or z (gable ends at the
+// other two sides). wall: the wall color (the stone tower passes the stone color).
+function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what, wall = LODGE.wall) {
   const M = F.m(0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, bw = x1 - x0, bl = z1 - z0;
   const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
   const g = [[x0, z0], [x1, z0], [x0, z1], [x1, z1], [cx, cz]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
-  const lo = Math.min(...g) - 1, stoneTop = lo + 1 + 3 * LODGE.FH;
+  const lo = Math.min(...g) - 1, stoneTop = Math.max(...g) + 7.4;
   P.push(part(BOX(bw + 0.5, stoneTop - lo, bl + 0.5, cx, lo, cz), LODGE.stone, M, TILES.stone));
-  P.push(part(BOX(bw, top - stoneTop, bl, cx, stoneTop, cz), LODGE.wall, M, TILES.siding));
+  P.push(part(BOX(bw, top - stoneTop, bl, cx, stoneTop, cz), wall, M, wall === LODGE.wall ? TILES.siding : TILES.stone));
   P.push(part(BOX(bw + 0.8, 0.5, bl + 0.8, cx, top - 0.3, cz), LODGE.timber, M, TILES.cedar));                  // eave band
   const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]];
   for (let y = lo + 1 + 0.9; y < top - 2; y += LODGE.FH) for (const [len, alongX, sg] of faces) {
@@ -441,9 +443,9 @@ function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what) {
       const wb = (alongX ? BOX(2.6, 1.9, 0.1, cx + c, y, cz + sg * (bl / 2 + 0.3)) : BOX(0.1, 1.9, 2.6, cx + sg * (bw / 2 + 0.3), y, cz + c));
       P.push(part(wb, WIN, M, TILES.window));
     }
-    if (y > stoneTop && alongX && sg > 0) {                              // balconies on the run side: slab and glass rail
-      P.push(part(box(len * 0.6, 0.25, y - 0.9, 0.8, 1.6), LODGE.wall, M));
-      P.push(part(box(len * 0.6, 1.05, y - 0.65, 1.55, 0.08), LODGE.rail, M));
+    if (y > stoneTop && alongX && sg > 0 && wall === LODGE.wall) {      // balconies on the run side: slab and dark rail
+      P.push(part(box(len - 2, 0.25, y - 0.9, 0.8, 1.6), LODGE.wall, M));
+      P.push(part(box(len - 2, 1.05, y - 0.65, 1.55, 0.08), LODGE.rail, M));
     }
   }
   // roof: dark metal gable with an overhang, snow on top; timber trim and glass in the gable ends
@@ -471,19 +473,39 @@ function lodgeTop(b, F, floors) {                                          // on
   return hi + 0.5 + floors * LODGE.FH;
 }
 export function addWestin(b) {
-  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [], top = lodgeTop(b, F, 9);
-  const zb = -L / 2 + L * 0.55;                                                      // back bar | wings toward the run
-  const bar = lodgePiece(P, b, F, { x0: -W / 2, x1: W / 2, z0: -L / 2, z1: zb }, top, 'x', 8, 'Westin');
-  const ww = 28;
-  for (const xc of [-W / 2 + ww / 2 + 4, 0, W / 2 - ww / 2 - 4]) {
-    const wide = xc === 0 ? 34 : ww;
-    lodgePiece(P, b, F, { x0: xc - wide / 2, x1: xc + wide / 2, z0: zb - 2, z1: L / 2 }, top - (xc === 0 ? 0 : LODGE.FH), 'z', 10, 'Westin');
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [], top = lodgeTop(b, F, 8), zf = L / 2 - 10;   // zf: main front wall
+  const xr = W / 2 - 34;                                                                       // where the angled wing starts
+  const bar = lodgePiece(P, b, F, { x0: -W / 2 + 2, x1: xr, z0: -L / 2, z1: zf }, top, 'x', 14, 'Westin');
+  const piece = (xc, w, z0, z1, gh) => lodgePiece(P, b, F, { x0: xc - w / 2, x1: xc + w / 2, z0, z1 }, top, 'z', gh, 'Westin');
+  piece(-W / 2 + 15, 26, zf - 22, zf + 4, 12);                                                // left end wing
+  for (const [xc, w] of [[-0.24 * W, 15], [-0.1 * W, 13], [0.03 * W, 17], [0.16 * W, 13]]) piece(xc, w, zf - 4, zf + 2, 10);   // bays
+  // the angled right wing: its own frame, turned 35 degrees so its far end comes forward toward the run
+  const ang = -0.61, sub = { m: (y) => F.m(y).multiply(new THREE.Matrix4().makeTranslation(xr - 4, 0, (zf - L / 2) / 2 + 8)).multiply(new THREE.Matrix4().makeRotationY(ang)) };
+  lodgePiece(P, { ...b, yaw: b.yaw + ang }, sub, { x0: 0, x1: 40, z0: -18, z1: 6 }, top, 'x', 12, 'Westin');
+  const SM = sub.m(0);
+  // terrace over the ground floor along the middle of the front: stone below, a snowy roof on timber posts
+  const tx0 = -0.32 * W, tx1 = 0.24 * W, tz = zf + 2 + 4;
+  const gAt = (lx, lz, m = M) => { const q = new THREE.Vector3(lx, 0, lz).applyMatrix4(m); return groundY(q.x, q.z); };
+  const tg = Math.min(gAt(tx0, tz + 4), gAt(0, tz + 4), gAt(tx1, tz + 4)), ty = Math.max(gAt(tx0, zf), gAt(tx1, zf)) + 4.2;
+  P.push(part(BOX(tx1 - tx0, ty - tg + 1, 8, (tx0 + tx1) / 2, tg - 1, tz), LODGE.stone, M, TILES.stone));
+  for (let k = 0; k <= 8; k++) {
+    const x = tx0 + 0.4 + k * (tx1 - tx0 - 0.8) / 8;
+    P.push(part(BOX(2.6, 2.6, 0.12, x + (tx1 - tx0) / 16, ty - 3.4, tz + 4.06), WIN, M, TILES.window));     // ground-floor windows
+    P.push(part(BOX(0.4, 3.0, 0.4, x, ty, tz + 3.6), LODGE.timber, M, TILES.cedar));
   }
-  // stone chimney towers where the wings meet the bar
-  for (const xc of [-W / 2 + ww + 10, W / 2 - ww - 10]) {
-    P.push(part(BOX(6, top + 10 - bar.lo, 6, xc, bar.lo, zb - 3), LODGE.stone, M, TILES.stone));
-    P.push(part(BOX(7, 0.6, 7, xc, top + 10, zb - 3), LODGE.roof, M));
-    P.push(part(BOX(6.4, 0.15, 6.4, xc, top + 10.6, zb - 3), SNOWCAP, M));
+  P.push(part(BOX(tx1 - tx0 + 1, 0.5, 8.6, (tx0 + tx1) / 2, ty + 3.0, tz), LODGE.timber, M, TILES.cedar));
+  P.push(part(BOX(tx1 - tx0 + 0.6, 0.35, 8.2, (tx0 + tx1) / 2, ty + 3.5, tz), SNOWCAP, M));
+  P.push(part(BOX(tx1 - tx0, 1.0, 0.08, (tx0 + tx1) / 2, ty, tz + 4.1), LODGE.rail, M));
+  const tc = new THREE.Vector3((tx0 + tx1) / 2, 0, tz).applyMatrix4(M), long = b.w >= b.l;
+  solidBox(tc.x, tc.z, b.yaw, long ? tx1 - tx0 : 8, long ? 8 : tx1 - tx0, tg - 1, ty + 4 - tg, 'Westin');
+  // two tall stone chimneys: at the left wing's front corner, and at the far end of the angled wing
+  for (const [cx, cz, m] of [[-W / 2 + 30, zf + 3, M], [36, -14, SM]]) {
+    const lo = gAt(cx, cz, m) - 1;
+    P.push(part(BOX(6, top + 20 - lo, 6, cx, lo, cz), LODGE.stone, m, TILES.stone));
+    P.push(part(BOX(6.8, 0.6, 6.8, cx, top + 20, cz), LODGE.roof, m));
+    P.push(part(BOX(6.4, 0.15, 6.4, cx, top + 20.6, cz), SNOWCAP, m));
+    const q = new THREE.Vector3(cx, 0, cz).applyMatrix4(m);
+    solidBox(q.x, q.z, b.yaw, 6, 6, lo, top + 21 - lo, 'chimney');
   }
   bucket(STAND_INS, b.x, b.z, ...P);
 }
