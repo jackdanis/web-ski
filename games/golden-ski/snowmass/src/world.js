@@ -197,6 +197,7 @@ const MOGUL_AT = [                                             // centre, length
 const MOGUL = { h: 0.8, wave: 5, fade: 6 };                    // m: bump height, spacing along a row, edge fade
 export const KICK_LIP = 1.2;                                          // m of mat up to the lip
 export const KICKERS = [];
+export const GROUND_ADD = [];                                         // more shaped snow added in sample(): fn(x, z, out)
 {
   const kB = { h: 0, gx: 0, gz: 0 };
   // fall line averaged over 20 m
@@ -268,6 +269,7 @@ export function sample(x, z, out = samp) {
     out.h = h; out.gx = (stationH(st, x + E, z) - h) / E; out.gz = (stationH(st, x, z + E) - h) / E;
   }
   if (KICKERS.length) addKick(x, z, out);
+  for (const f of GROUND_ADD) f(x, z, out);
   if (BRIDGES.length && state.solidY !== null) bridgeTop(x, z, out);
   return state.solidY !== null && SOLIDS.length ? solidTop(x, z, out) : out;
 }

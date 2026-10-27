@@ -6,6 +6,7 @@ import { BOUNCE, FOG, LIGHT, SH_PX, SH_SIZE, SKIES, SKY_COLOR, SNOW_ALBEDO, SUN_
 import { casters, lampList } from './buildings.js';
 import { atlas, pages, treeMat } from './trees.js';
 import { kickMatMat, kickSnowMat } from './lifts.js';
+import { mogulMat } from './snow.js';
 import { placeCarriers } from './ride.js';
 
 export let timeOfDay = 'noon';
@@ -141,7 +142,7 @@ export function applyTime(key) {
 }
 // every Snowlight material, in the scene or not yet (run and kicker meshes), recompiled with or without LAMPS
 function setLamps(on) {
-  const mats = new Set([state.PATCH && state.PATCH.mat, kickSnowMat, kickMatMat]);
+  const mats = new Set([state.PATCH && state.PATCH.mat, kickSnowMat, kickMatMat, mogulMat]);
   scene.traverse((o) => { if (o.material) mats.add(o.material); });
   for (const m of mats) {
     if (!m || !m.isShaderMaterial || !m.fragmentShader.includes('lamps(') || !!(m.defines && m.defines.LAMPS) === on) continue;

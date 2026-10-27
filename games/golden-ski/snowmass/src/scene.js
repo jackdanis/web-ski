@@ -138,7 +138,9 @@ export const terrainMat = new THREE.ShaderMaterial({
     uAspen: { value: new THREE.Vector3(0.46, 0.44, 0.4) },
     // the 10 m ground is cut away under the 2 m run mesh
     uPMask: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uPMin: { value: new THREE.Vector2() }, uPSize: { value: new THREE.Vector2(1, 1) },
-    uPOn: { value: 0 }, uPFar: { value: 0 } }, LIGHT),
+    uPOn: { value: 0 }, uPFar: { value: 0 },
+    // each run's snow (snow.js) on the 10 m grid: red bumps, green chopped
+    uSnowT: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uSnowG: { value: new THREE.Vector4(X0 - CELL / 2, Z0 - CELL / 2, NX * CELL, NZ * CELL) } }, LIGHT),
   vertexShader: /* glsl */ `
     attribute vec4 aCov;
     attribute vec3 aN;
@@ -148,7 +150,9 @@ export const terrainMat = new THREE.ShaderMaterial({
       vP = w.xyz; vCov = aCov; vN = aN;
       vec4 mv = viewMatrix * w;
       // skirts sit just behind the ground so the ground wins depth ties and no seams show
+#ifndef MOGUL
       if (dot(aN, aN) > 0.0) mv.xyz *= 1.003;
+#endif
       vD = -mv.z;
       gl_Position = projectionMatrix * mv;
     }`,
@@ -157,6 +161,11 @@ export const terrainMat = new THREE.ShaderMaterial({
     uniform sampler2D uCord, uCordN, uPow, uPowN;
     uniform vec3 uRock, uForest, uAspen;
     uniform sampler2D uPMask; uniform vec2 uPMin, uPSize; uniform float uPOn, uPFar;
+    uniform sampler2D uSnowT; uniform vec4 uSnowG;
+    float vnoise(vec2 p) {
+      vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
     varying vec3 vP; varying vec4 vCov; varying float vD; varying vec3 vN;
     void main() {
 #ifndef PATCH
@@ -168,7 +177,7 @@ export const terrainMat = new THREE.ShaderMaterial({
       if (distance(vP.xz, cameraPosition.xz) > uPFar) discard;
 #endif
       vec3 fn = normalize(cross(dFdx(vP), dFdy(vP)));
-      if (dot(vN, vN) > 1e-8) fn = normalize(vN);            // skirt: lit like the ground above it
+      if (dot(vN, vN) > 1e-8) fn = normalize(vN);            // skirt: lit like the ground above it; moguls: softened normals
       vec2 uv = vec2(vP.x, -vP.z) / 8.0;
       float dith = (hash(vP.xz * 0.5) - 0.5) * 0.6;          // ragged 2 m blocks at groomed / powder / rock edges
 #ifdef PATCH
@@ -181,6 +190,18 @@ export const terrainMat = new THREE.ShaderMaterial({
       float near = 1.0 - smoothstep(60.0, 300.0, vD);        // texture lighting fades with distance...
       vec3 n = normalize(fn + vec3(tn.x, 0.0, -tn.y) * (groomed ? 0.12 : 0.18) * near);
       alb = mix(uSnow, alb, 0.45 * near);                    // ...and so does the pattern
+      // the run's own snow: bumps (never groomed) or chopped (skied off since the groomer)
+      vec2 sn = texture2D(uSnowT, (vP.xz - uSnowG.xy) / uSnowG.zw).rg;
+      if (edge < 0.0 && sn.r + sn.g > 0.02) {
+        vec3 pw = mix(uSnow, texture2D(uPow, uv).rgb * uSnow, 0.45 * near);
+        // bump runs: ungroomed snow (the moguls themselves are snow.js tiles)
+        alb = mix(alb, pw, sn.r);
+        // chopped: corduroy scraped away in patches, small lumps where it was pushed around
+        float scrape = smoothstep(0.42, 0.6, vnoise(vP.xz * 0.25) * 0.7 + vnoise(vP.xz * 0.9) * 0.3);
+        vec2 lg = vec2(vnoise(vP.xz * 1.1 + 7.0) - vnoise(vP.xz * 1.1 + vec2(7.4, 7.0)), vnoise(vP.xz * 1.1 + 7.0) - vnoise(vP.xz * 1.1 + vec2(7.0, 7.4))) * 0.9;
+        alb = mix(alb, pw, sn.g * scrape);
+        n = normalize(n + vec3(lg.x, 0.0, lg.y) * sn.g * scrape * near);
+      }
       // windrow just off the groomed edge, then a thin shadow line
       if (edge > 0.0 && edge < 1.6) { alb = mix(alb, vec3(1.0), 0.35); n = normalize(n + vec3(0.0, 0.25, 0.0)); }
       else if (edge >= 1.6 && edge < 2.4) alb *= 0.82;

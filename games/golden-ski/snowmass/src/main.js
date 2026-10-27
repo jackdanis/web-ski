@@ -15,6 +15,8 @@ import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
 import { paintTracks, recordTrack, tracks } from './tracks.js';
+import { updateMoguls } from './snow.js';
+import { MAP } from '../data/mountain.js';
 
 // ---------- Rendering ----------
 const view = new THREE.Vector3(), camDir = new THREE.Vector3(0, 0, -1), camPos = new THREE.Vector3(), look = new THREE.Vector3();
@@ -295,6 +297,7 @@ function render(alpha, dt) {
   updateTerrain();
   updatePatch();
   updateKickers();
+  updateMoguls();
   updateRings();
   updateTrees(snap);
   sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
@@ -419,6 +422,6 @@ window.__golden = {
   map: { get ready() { return !!hudMap.plain; }, get paintMs() { return hudMap.paintMs; }, setFull: setFullMap, drawMini: drawMiniMap },
   get patch() { return state.PATCH; }, patchEdge, setPatch, groundY, starts: STARTS, get fps() { return fps; },
   streamTo: (x, z) => Promise.all(runStream ? runStream(x, z, true) : []),
-  solids: SOLIDS, bail, BAIL, kickers: KICKERS,
+  solids: SOLIDS, bail, BAIL, kickers: KICKERS, mapRuns: MAP.runs,
   get work() { return work.size; }, perf, ringed, addBuilding, rides: RIDES, ride, startRide, skipRide, notes, tracks,
 };
