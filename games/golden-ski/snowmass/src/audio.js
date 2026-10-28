@@ -7,6 +7,7 @@ import { POLE_PHASES, sk } from './play.js';
 
 const V_TOP = 30;                     // m/s (67 mph): the hiss and wind are at full here
 const PLANT = POLE_PHASES[0];         // where in a double-pole push the poles hit the snow
+const VOLUME = 0.2;                   // master level (was 0.7, Jack: way too loud)
 
 let ctx = null, master, noise;
 let hiss, scrape, wind;
@@ -36,7 +37,7 @@ function start() {
   if (!AC) return;
   ctx = new AC();
   master = ctx.createGain();
-  master.gain.value = 0.7;
+  master.gain.value = VOLUME;
   master.connect(ctx.destination);
   noise = noiseBuffer();
   hiss = loop('bandpass', 2500, 0.6, 0);
@@ -87,7 +88,7 @@ function thump(k, sloppy) {
 // Called once per rendered frame.
 export function updateAudio() {
   if (!ctx) return;
-  set(master.gain, state.sound ? 0.7 : 0, 0.03);
+  set(master.gain, state.sound ? VOLUME : 0, 0.03);
   const skiing = state.phase === 'skiing';
   const speed = skiing ? sk.vel.length() : 0;
   const v = clamp(speed / V_TOP, 0, 1.3);
