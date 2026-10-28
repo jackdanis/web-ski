@@ -196,6 +196,8 @@ export const terrainMat = new THREE.ShaderMaterial({
         vec3 pw = mix(uSnow, texture2D(uPow, uv).rgb * uSnow, 0.45 * near);
         // bump runs: ungroomed snow (the moguls themselves are snow.js tiles)
         alb = mix(alb, pw, sn.r);
+        vec3 pn = texture2D(uPowN, uv).rgb * 2.0 - 1.0;          // no corduroy ridges under the thick snow
+        n = normalize(mix(n, normalize(fn + vec3(pn.x, 0.0, -pn.y) * 0.18 * near), sn.r));
         // chopped: corduroy scraped away in patches, small lumps where it was pushed around
         float scrape = smoothstep(0.42, 0.6, vnoise(vP.xz * 0.25) * 0.7 + vnoise(vP.xz * 0.9) * 0.3);
         vec2 lg = vec2(vnoise(vP.xz * 1.1 + 7.0) - vnoise(vP.xz * 1.1 + vec2(7.4, 7.0)), vnoise(vP.xz * 1.1 + 7.0) - vnoise(vP.xz * 1.1 + vec2(7.0, 7.4))) * 0.9;
