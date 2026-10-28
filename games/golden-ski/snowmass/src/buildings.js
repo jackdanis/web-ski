@@ -1,6 +1,5 @@
 // Low-poly kit models, detail rings, rocks, chairlift and gondola terminals, the Elk Camp restaurant.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-import { ELK_REST_MODEL } from '../assets/models/elk_rest.js';
 import { UP_Y, clamp, hash2 } from './config.js';
 import { CELL, LIFT_CUT, NX, NZ, PAGE, SOLIDS, STATIONS, X0, Z0, addObstacle, deckDist, groundY, sampleBase, stB, stationH } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, loadTex, scene, stationN, stationT } from './scene.js';
@@ -65,16 +64,6 @@ export const modelMat = new THREE.ShaderMaterial({
              + uBounce * band0(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 + lamps(vP, n) * 1.2 + 0.05;
       gl_FragColor = vec4(finish(alb, l, vD, 1.25), 1.0);
     }`,
-});
-// Elk Camp restaurant model (TRELLIS v1): station shader, albedo from the model's texture
-const elkT = await loadTex('models/elk_rest');
-elkT.flipY = false;
-const elkMat = new THREE.ShaderMaterial({
-  vertexColors: true,
-  uniforms: Object.assign({ uElk: { value: elkT } }, modelMat.uniforms),
-  vertexShader: modelMat.vertexShader.replace('varying vec3 vT;', 'varying vec3 vT; varying vec2 vUv;').replace('vT = aT;', 'vT = aT; vUv = uv;'),
-  fragmentShader: modelMat.fragmentShader.replace('uniform sampler2D uAtlas, uAtlasN;', 'uniform sampler2D uAtlas, uAtlasN, uElk; varying vec2 vUv;')
-    .replace('vec3 alb = vC;', 'vec3 alb = vC * texture2D(uElk, vUv).rgb;'),
 });
 export const STEEL = [0.46, 0.48, 0.52], DARK = [0.2, 0.21, 0.25], CONC = [0.62, 0.6, 0.56],
   WALL = [0.5, 0.36, 0.24], SNOWCAP = [0.92, 0.95, 1.0], GLASS = [0.15, 0.2, 0.3];
@@ -912,27 +901,46 @@ function elkCampTop(arm, lowShop) {
   }
   return P;
 }
-// Restaurant: the TRELLIS v1 model stretched over its footprint and deck. Model deck (y 0.02) at the terminal floor (0.5),
-// deck side toward -z; a stone footing fills down to the snow where the slope drops below the model.
-const ELK_REST_H = 10.0;
+// Restaurant, hand-built after Jack's photo (references/buildings/elk-camp/elk_photo_crop.png): a grey stone base
+// dug into the slope, a cedar-clad ground floor with big glass, a black upper floor with glass bands, a deep flat roof
+// with a cedar soffit and a snow cap, and a sun deck with a black rail on the -z side. Floor at the terminal floor (0.5).
+const ELK_REST_H = 7.6;                                        // floor to roof top
+const ELK = { stone: [1.05, 1.05, 1.05], cedar: [1.12, 1.0, 0.92], black: [0.13, 0.13, 0.15], glass: [0.85, 0.95, 1.1], rail: [0.1, 0.1, 0.11] };
 function elkCampRestaurant(arm, lowRest) {
-  const [x0, x1, z0, z1] = ELK_REST(arm), dz0 = z0 - ELK_REST_DECK;
-  const b64 = (t) => Uint8Array.from(atob(t), (ch) => ch.charCodeAt(0)).buffer;
-  const M = ELK_REST_MODEL, g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(b64(M.pos)), 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(b64(M.uv)), 2));
-  g.setIndex(new THREE.BufferAttribute(M.i32 ? new Uint32Array(b64(M.idx)) : new Uint16Array(b64(M.idx)), 1));
-  const ys = ELK_REST_H / 0.7525, cy = 0.5 - 0.02 * ys, bottom = cy - 0.3775 * ys;
-  g.rotateY(Math.PI).scale(x1 - x0, ys, (z1 - dz0) / 0.881).translate((x0 + x1) / 2, cy, (z1 + dz0) / 2);
-  const footing = [];
-  if (lowRest < bottom) footing.push(part(new THREE.BoxGeometry(x1 - x0 - 1.0, bottom - lowRest + 0.6, z1 - dz0 - 1.0)
-    .translate((x0 + x1) / 2, (bottom + lowRest - 0.4) / 2 + 0.1, (z1 + dz0) / 2), W, null, TILES.stone));
-  // the three après posters, on the model's wall that faces the terminal (1.7 m in from the footprint edge)
+  const [x0, x1, z0, z1] = ELK_REST(arm), dz0 = z0 - ELK_REST_DECK, P = [], add = (g, c, tile = -1) => P.push(part(g, c, null, tile));
+  const xc = (x0 + x1) / 2, zc = (z0 + z1) / 2, w = x1 - x0 - 1.0, l = z1 - z0 - 0.6, f0 = 0.5, f1 = f0 + 3.4, f2 = f1 + 3.3;
+  // stone base from the snow up to the floor, under the building and the deck
+  add(BOX(x1 - x0, f0 - lowRest + 0.6, z1 - dz0, xc, lowRest - 0.6, (z1 + dz0) / 2), ELK.stone, TILES.stone);
+  // ground floor: cedar walls, glass across the deck side and the side facing the terminal
+  add(BOX(w, f1 - f0, l, xc, f0, zc), ELK.cedar, TILES.cedar);
+  add(BOX(w - 2.0, 2.6, 0.12, xc, f0 + 0.3, z0 + 0.3 - 0.06), ELK.glass, TILES.window);
+  add(BOX(0.12, 2.4, l - 6.0, x1 - 0.5 + 0.06, f0 + 0.5, zc - 2.0), ELK.glass, TILES.window);
+  add(BOX(0.12, 2.4, l - 4.0, x0 + 0.5 - 0.06, f0 + 0.5, zc), ELK.glass, TILES.window);
+  // a black band between the floors, then the black upper floor with glass bands, slightly over the ground floor
+  add(BOX(w + 0.4, 0.45, l + 0.4, xc, f1 - 0.2, zc), ELK.black, TILES.darkPanel);
+  add(BOX(w + 0.2, f2 - f1 - 0.25, l + 0.2, xc, f1 + 0.25, zc), ELK.black, TILES.darkPanel);
+  add(BOX(w - 1.2, 2.2, 0.12, xc, f1 + 0.6, z0 + 0.2 - 0.06), ELK.glass, TILES.window);
+  add(BOX(w - 1.2, 2.2, 0.12, xc, f1 + 0.6, z1 - 0.2 + 0.06), ELK.glass, TILES.window);
+  for (const sx of [x0 + 0.4 - 0.06, x1 - 0.4 + 0.06]) add(BOX(0.12, 2.2, l - 3.0, sx, f1 + 0.6, zc), ELK.glass, TILES.window);
+  // deep flat roof: cedar soffit, black fascia, snow on top; over the deck too
+  const rw = x1 - x0 + 3.0, rl = z1 - dz0 + 1.5, rz = (z1 + dz0) / 2 - 0.5;
+  add(BOX(rw, 0.12, rl, xc, f2, rz), ELK.cedar, TILES.cedar);
+  add(BOX(rw, 0.45, rl, xc, f2 + 0.12, rz), ELK.black, TILES.darkPanel);
+  add(BOX(rw - 0.3, 0.35, rl - 0.3, xc, f2 + 0.57, rz), W, TILES.roofSnow);
+  // posts under the roof's deck corners
+  for (const px of [x0 + 0.4, x1 - 0.4]) add(BOX(0.35, f2 - f0, 0.35, px, f0, dz0 + 0.4), ELK.black);
+  // sun deck: boards and a black rail on its three open sides
+  add(BOX(x1 - x0, 0.1, ELK_REST_DECK, xc, f0 - 0.05, z0 - ELK_REST_DECK / 2), W, TILES.deck);
+  add(BOX(x1 - x0, 0.08, 0.08, xc, f0 + 1.05, dz0 + 0.1), ELK.rail);
+  for (const rx of [x0 + 0.1, x1 - 0.1]) add(BOX(0.08, 0.08, ELK_REST_DECK, rx, f0 + 1.05, z0 - ELK_REST_DECK / 2), ELK.rail);
+  for (let k = 0; k <= 8; k++) add(BOX(0.06, 1.05, 0.06, x0 + 0.1 + (x1 - x0 - 0.2) * k / 8, f0, dz0 + 0.1), ELK.rail);
+  for (const rx of [x0 + 0.1, x1 - 0.1]) for (let k = 1; k <= 2; k++) add(BOX(0.06, 1.05, 0.06, rx, f0, dz0 + 0.1 + (ELK_REST_DECK - 0.1) * k / 3), ELK.rail);
+  // the three après posters on the cedar wall that faces the terminal, beside the glass
   [TILES.posterA, TILES.posterB, TILES.posterC].forEach((t, k) => {
-    const pg = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 - 1.65, 2.4, (z0 + z1) / 2 - 2.4 + k * 2.4);
-    footing.push(partUV(pg, W, t, 11 / 64, 53 / 64, 0, 1));
+    const pg = new THREE.PlaneGeometry(1.0, 1.52).rotateY(Math.PI / 2).translate(x1 - 0.5 + 0.03, 2.1, z1 - 1.6 - k * 1.4);
+    P.push(partUV(pg, W, t, 11 / 64, 53 / 64, 0, 1));
   });
-  return { model: part(g, W), footing };
+  return P;
 }
 // Gondola tower: galvanized column with a ladder, crossarm with a railed walkway, sheave trains. Base y = 0, line along z.
 export function gondolaTower(th, arm) {
@@ -989,15 +997,8 @@ export function gondolaStation(sd, arm, hh, base, m, elkTop) {
   const R = ELK_REST(arm), S = ELK_SHOP(arm);
   const lowR = low([R[0], R[1], R[2] - ELK_REST_DECK, R[3]]), lowS = low(S);
   liftParts.push(...placed(elkCampTop(arm, lowS), m));
-  const rest = elkCampRestaurant(arm, lowR);
-  liftParts.push(...placed(rest.footing, m));
-  // the model within 250 m, a charcoal box with a snowy roof to 800 m (collision is the boxes above)
-  {
-    const [u, v] = [(R[0] + R[1]) / 2, (R[2] - ELK_REST_DECK + R[3]) / 2], [x, z] = toW(u, v);
-    addBuilding({ x, z, yaw: Math.atan2(sd.s, sd.c), w: R[1] - R[0], l: R[3] - R[2] + ELK_REST_DECK, bot: base + lowR, top: y + 5.8,
-      color: DARK, roof: SNOWCAP, near: () => new THREE.Mesh(placed([rest.model], m)[0], elkMat), solid: false });
-  }
-  box(R[0], R[1], R[2], R[3], base + lowR - 0.5, y + 5.6);
+  liftParts.push(...placed(elkCampRestaurant(arm, lowR), m));
+  box(R[0], R[1], R[2], R[3], base + lowR - 0.5, y + 0.5 + ELK_REST_H);
   box(R[0], R[1], R[2] - ELK_REST_DECK, R[2], base + lowR - 0.5, y + 1.55);
   box(S[0], S[1], S[2], S[3], base + lowS - 0.5, y + 5.0);
   cut(R[0] - 2.5, R[1] + 2.5, R[2] - ELK_REST_DECK - 1.5, R[3] + 1.5, 4);
