@@ -139,6 +139,16 @@ for (const lift of LIFTS) {
       for (let jj = Math.floor((sd.bz0 - Z0) / CELL); jj <= Math.ceil((sd.bz1 - Z0) / CELL); jj++)
         for (let ii = Math.floor((sd.bx0 - X0) / CELL); ii <= Math.ceil((sd.bx1 - X0) / CELL); ii++)
           if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && deckDist(sd, X0 + ii * CELL, Z0 + jj * CELL) < sd.A + 4) LIFT_CUT[jj * NX + ii] = 1;
+    } else {
+      // T-bar and platter terminal: frame legs and hut are solid; the platform is ridden over
+      const cs = Math.cos(yaw), sn = Math.sin(yaw), toW = (u, v) => [pts[i][0] + cs * u + sn * v, pts[i][1] - sn * u + cs * v];
+      for (const u of [-1.2, 1.2]) {
+        const [x, z] = toW(u, 0);
+        addObstacle({ x, z, y: base, r: 0.5, height: hh, what: 'terminal leg' });
+      }
+      const [hutX, hutZ] = toW(arm + 3.6, -3);
+      const y0 = Math.min(base, groundY(hutX, hutZ)) - 0.5, y1 = base + 3.4;
+      SOLIDS.push({ x: hutX, z: hutZ, y: (y0 + y1) / 2, hx: 1.6, hy: (y1 - y0) / 2, hz: 1.6, c: cs, s: sn, what: 'lift hut' });
     }
     if (!isGondola) casters.push({ x: pts[i][0], z: pts[i][1], h: hh, w: arm + 1 });
     lampList.push((neu && isGondola ? new THREE.Vector3(GW(arm) + 1.2, 4.9, -19.6) : neu ? new THREE.Vector3(sd.hut * (arm + 3.4 - 1.6), 4.9, -7 + 3.2 - 1.6) : new THREE.Vector3(arm + 1.6, 5.6, -1.2)).applyMatrix4(m));
