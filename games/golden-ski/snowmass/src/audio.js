@@ -8,7 +8,8 @@ import { POLE_PHASES, sk } from './play.js';
 const V_TOP = 30;                     // m/s (67 mph): the hiss and wind are at full here
 const PLANT = POLE_PHASES[0];         // where in a double-pole push the poles hit the snow
 const VOLUME = 0.7;                   // master level: pole plants and thumps play at this
-const SNOW_VOL = 0.15;                // ski hiss and skid scrape, kept quiet under it (Jack: snow was deafening)
+const SNOW_VOL = 0.15;                // skid scrape, kept quiet under it (Jack: snow was deafening)
+const HISS_VOL = 0.04;                // ski hiss: a faint bed under everything (Jack: it drowned out everything)
 
 let ctx = null, master, noise;
 let hiss, scrape, wind;
@@ -97,9 +98,9 @@ export function updateAudio() {
   const powder = onSnow && surfaceAt(sk.pos.x, sk.pos.z).friction > 0.1;
 
   // Ski hiss: louder and brighter with speed, sharper on a hard edge, muffled in powder.
-  const hv = onSnow ? SNOW_VOL * Math.min(1, speed / 3) * (0.12 + 0.3 * v) * (powder ? 0.7 : 1) : 0;
+  const hv = onSnow ? HISS_VOL * Math.min(1, speed / 3) * (0.12 + 0.3 * v) * (powder ? 0.7 : 1) : 0;
   set(hiss.gain.gain, hv);
-  set(hiss.filter.frequency, (powder ? 1100 : 1800) + 2200 * v + 1500 * sk.edge);
+  set(hiss.filter.frequency, (powder ? 700 : 1000) + 900 * v + 500 * sk.edge);
   // Skid: a rougher, lower scrape while the skis slide sideways or brake.
   set(scrape.gain.gain, onSnow ? clamp(sk.skid, 0, 1) * Math.min(1, speed / 4) * 0.45 * SNOW_VOL : 0);
   // Wind: grows with speed squared, a slow gust on top, and stays on through the air.
