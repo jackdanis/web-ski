@@ -29,9 +29,9 @@ export const MO = {
   DRAG: 0.0045,                 // per (m/s)^2 standing (75 kg skier)
   TUCK_DRAG: 0.0024,            // ...and tucked
   POLE: 1.7,                    // m/s per double-pole push from a standstill...
-  POLE_MAX: 8,                  // ...fading to zero at this speed (18 mph): her arms can't push the snow faster than it passes
+  POLE_MAX: 17.88,              // ...fading to zero at this speed (40 mph); at or above it she doesn't pole at all
   POLE_T: 0.5,                  // s for one push (reach, plant, crunch, follow-through) from a standstill...
-  POLE_T_V: 0.035,              // ...plus this per m/s she is going (0.78 s at 18 mph)
+  POLE_T_V: 0.035,              // ...plus this per m/s she is going (1.13 s at 40 mph)
   OLLIE_MIN: 3.0,               // m/s pop from a tap...
   OLLIE_MAX: 5.5,               // ...up to this after OLLIE_CHARGE s of loading
   OLLIE_CHARGE: 0.5,

@@ -340,13 +340,13 @@ const travelYaw = () => Math.atan2(sk.vel.x, -sk.vel.z);
 
 // Double-poling: reach, plant, crunch, follow-through, timed by her arms rather than a clock. A press starts a push
 // at once if her arms are free, or queues the next one; holding Up keeps them coming. One push takes longer the faster
-// she goes, and the shove (while the poles are planted) weakens until her arms can't push the snow faster than it passes.
+// she goes, and the shove (while the poles are planted) weakens to nothing at 40 mph; from there on she doesn't pole.
 export const POLE_PHASES = [0.30, 0.12, 0.30, 0.28];
 const SHOVE = [POLE_PHASES[0], POLE_PHASES[0] + POLE_PHASES[1] + POLE_PHASES[2]];
 function poleStep(dt, f, speed) {
   const go = sk.pole || state.poleTap;
   state.poleTap = false;
-  if (sk.tuck || sk.brake) { sk.poleP = -1; sk.poleQ = false; return; }
+  if (sk.tuck || sk.brake || speed >= MO.POLE_MAX) { sk.poleP = -1; sk.poleQ = false; return; }
   if (sk.poleP < 0) { if (!go) return; sk.poleP = 0; }
   else if (go) sk.poleQ = true;
   const p0 = sk.poleP, p1 = p0 + dt / (MO.POLE_T + MO.POLE_T_V * speed);
