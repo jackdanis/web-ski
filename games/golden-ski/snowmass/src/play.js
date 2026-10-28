@@ -121,6 +121,7 @@ const DEBUG_ITEMS = [
   { name: 'Freecam', get: () => free.on, set: (on) => setFreecam(on) },
   { name: 'Crashes: Steep-style bails', get: () => physics.crashes, set: (on) => { physics.crashes = on; } },
   { name: 'Show collision shapes', get: () => physics.shapes, set: (on) => { physics.shapes = on; } },
+  { name: 'Sound', get: () => state.sound, set: (on) => { state.sound = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
   { name: 'Perf stats (triangles, draws, frame ms)', get: () => perf.on, set: (on) => { perf.on = on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },

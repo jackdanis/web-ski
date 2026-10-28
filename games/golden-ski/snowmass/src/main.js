@@ -16,6 +16,7 @@ import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
 import { paintTracks, recordTrack, tracks } from './tracks.js';
 import { updateMoguls } from './snow.js';
+import { updateAudio } from './audio.js';
 import { MAP } from '../data/mountain.js';
 
 // ---------- Rendering ----------
@@ -383,6 +384,7 @@ function frame(now) {
     if (n === 6) acc = 0;
   }
   render(manual ? 1 : acc / STEP, dt);
+  updateAudio();
   perf.ms += (performance.now() - t0 - perf.ms) * 0.1;
 }
 resize();

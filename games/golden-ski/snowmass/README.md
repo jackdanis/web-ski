@@ -7,7 +7,7 @@ Sunnyside. What's in the game and what comes next is in the
 
 - Controls: arrows or WASD steer, Up/W poles, Down/S brakes, Shift tucks, hold Space to load an ollie.
   On phones, drag to steer, swipe down to pole, swipe up to brake. M or a two-finger tap opens the map.
-- Tab menu (three-finger tap on phones), for testing: Freecam, Crashes (off by default), collision shapes, speed
+- Tab menu (three-finger tap on phones), for testing: Freecam, Crashes (off by default), collision shapes, Sound, speed
   readout (mph and frame rate), perf stats, pixel look, detailed runs (2 m), Noon / Golden hour / Night / Storm, and
   a start at the top or bottom of any lift.
 
@@ -31,6 +31,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/tracks.js` | Her ski tracks: grooves painted around her, shaded by Snowlight |
 | `src/snow.js` | Each run's snow: real moguls on Long Shot and Timberline, chopped snow on The Edge, Slot and Campground |
 | `src/play.js` | Input, Tab menu, freecam, and the simulation (skiing, jumps, collisions, bails) |
+| `src/audio.js` | Sound effects synthesized with Web Audio: ski hiss, wind, pole plants, landing thump |
 | `src/hudmap.js` | Minimap and full map |
 | `src/main.js` | Rendering, main loop, test hooks (`window.__golden`) |
 | `assets/sprites/` | Goldie's sheet, trees, poles, signs (each with a `_n` normal map) |

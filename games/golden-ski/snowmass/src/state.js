@@ -10,4 +10,5 @@ export const state = {
   shAt: null,                   // shadow canvas centre...
   shDirty: false,               // ...and a page built inside it marks it for a repaint
   testHold: null,               // test hooks: input held for scripted steps
+  sound: true,                  // Tab: Sound
 };
