@@ -58,10 +58,10 @@ const BERM = { pts: [[550, -3385], [556, -3430], [545, -3470], [532, -3492]], h:
 // park rides over it on one bank of packed snow: up from below Cabin's medium kicker, keeping right, over the culvert,
 // then down toward the large kicker. over: the bank point above the culvert; top: half width of the bank's flat top;
 // side: m the bank's sides drop per m
-const BANK = { pts: [[530, -3448], [511, -3478], [520, -3524], [545.5, -3568.2]], over: 2, top: 5, side: 1.1 };
-// along Lunchline; m of snow over the crown; a0..a1 m along the axis from c, the bank's whole footprint, so the snow bridge
-// is one piece from portal to portal
-const CULVERT = { c: [520, -3524], ax: [-0.625, -0.781], r: 4, a0: -15, a1: 11, cover: 1.0 };
+const BANK = { pts: [[530, -3448], [511, -3478], [520, -3524], [545.5, -3568.2]], over: 2, top: 8, side: 0.5 };
+// along Lunchline; m of snow over the crown; a0..a1 m along the axis from c, set below to the bank's whole footprint, so
+// the snow bridge is one piece from portal to portal
+const CULVERT = { c: [520, -3524], ax: [-0.625, -0.781], r: 4, a0: 0, a1: 0, cover: 2.5 };
 
 // nearest point on a polyline: s along it, d away
 function polyline(pts) {
@@ -99,6 +99,18 @@ function bankY(x, z) {
   bankLine.near(x, z, sd);
   return bankTop(sd[0]) - Math.max(0, sd[1] - BANK.top) * BANK.side;
 }
+// the culvert runs on until the bank's sides are down to the snow on both its edges, plus a little metal showing
+{
+  const C = CULVERT, deep = (a) => [-C.r, 0, C.r].some((t) => {
+    const x = C.c[0] + C.ax[0] * a - C.ax[1] * t, z = C.c[1] + C.ax[1] * a + C.ax[0] * t;
+    return bankY(x, z) - base(x, z) > 0.3;
+  });
+  for (const sg of [-1, 1]) {
+    let a = 0;
+    while (deep(a + sg) && Math.abs(a) < 80) a += sg;
+    C[sg < 0 ? 'a0' : 'a1'] = a + sg * 1.5;
+  }
+}
 // the snow over the culvert: the bank's surface, never below the metal
 function capY(x, z) {
   const C = CULVERT, dx = x - C.c[0], dz = z - C.c[1], a = dx * C.ax[0] + dz * C.ax[1], t = dz * C.ax[0] - dx * C.ax[1];
@@ -122,7 +134,9 @@ function pathFeature(pts, reach, f) {
     total += len;
   }
   const [px, pz] = pts[0], [qx, qz] = pts[pts.length - 1], L = Math.hypot(qx - px, qz - pz), fx = (qx - px) / L, fz = (qz - pz) / L;
-  const k = { x: px - fx * reach, z: pz - fz * reach, fx, fz, hw: reach, h: 0, L: 0, end: L + 2 * reach, prof: () => 0, size: 'park', plain: true, mode: -1, mesh: null, len: total };
+  // the snow grid is drawn across the chord, so it has to reach past the line's widest bend
+  const bend = Math.max(...pts.map(([x, z]) => Math.abs((z - pz) * fx - (x - px) * fz)));
+  const k = { x: px - fx * reach, z: pz - fz * reach, fx, fz, hw: reach + bend, h: 0, L: 0, end: L + 2 * reach, prof: () => 0, size: 'park', plain: true, mode: -1, mesh: null, len: total };
   k.hAt = (u, v) => {
     const x = k.x + fx * u - fz * v, z = k.z + fz * u + fx * v;
     let best = 1e9, s = 0;
@@ -159,7 +173,7 @@ const spineK = (() => {
   });
 })();
 // the bank: open where the culvert runs through it, so Lunchline skiers ride the snow inside
-const bankK = pathFeature(BANK.pts, BANK.top + 9, (s, d, x, z) => inCulvert(x, z) ? 0 : bankTop(s) - Math.max(0, d - BANK.top) * BANK.side - base(x, z));
+const bankK = pathFeature(BANK.pts, BANK.top + 28, (s, d, x, z) => inCulvert(x, z) ? 0 : bankTop(s) - Math.max(0, d - BANK.top) * BANK.side - base(x, z));
 // ---------- boxes, rails and the snow over the culvert: ground only from above ----------
 // each: start x z, unit dir, length, half width, top y at both ends (set when the snow under them is known)
 const tops = [];
@@ -238,16 +252,17 @@ function buildMesh() {
   const at = (a, t) => {
     const cx = C.c[0] + C.ax[0] * a, cz = C.c[1] + C.ax[1] * a, x = cx - C.ax[1] * t, z = cz + C.ax[0] * t;
     const arch = base(cx, cz) - 0.3 + Math.sqrt(Math.max(0, C.r * C.r - t * t));
-    return [x - o[0], capY(x, z) - o[1], z - o[2], arch - o[1]];
+    return [x - o[0], capY(x, z) + 0.05 - o[1], z - o[2], arch - o[1]];
   };
-  const cap = [], N = Math.round(2 * C.r / STEP);
+  // a little wider than the arch so it laps over the stepped edge of the bank's snow grid
+  const W = C.r + 0.75, cap = [], N = Math.round(2 * W / STEP);
   for (let a = C.a0; a < C.a1 - 1e-6; a += STEP) for (let k = 0; k < N; k++) {
-    const t0 = -C.r + k * STEP, p = at(a, t0), q = at(a + STEP, t0), r = at(a + STEP, t0 + STEP), t = at(a, t0 + STEP);
+    const t0 = -W + k * STEP, p = at(a, t0), q = at(a + STEP, t0), r = at(a + STEP, t0 + STEP), t = at(a, t0 + STEP);
     cap.push(...p.slice(0, 3), ...r.slice(0, 3), ...q.slice(0, 3), ...p.slice(0, 3), ...t.slice(0, 3), ...r.slice(0, 3));
     cap.push(...p.slice(0, 3), ...q.slice(0, 3), ...r.slice(0, 3), ...p.slice(0, 3), ...r.slice(0, 3), ...t.slice(0, 3));
   }
   for (const a of [C.a0, C.a1]) for (let k = 0; k < N; k++) {
-    const t0 = -C.r + k * STEP, p = at(a, t0), q = at(a, t0 + STEP);
+    const t0 = -W + k * STEP, p = at(a, t0), q = at(a, t0 + STEP);
     const pl = [p[0], p[3], p[2]], ql = [q[0], q[3], q[2]];
     cap.push(...pl, ...q.slice(0, 3), ...p.slice(0, 3), ...pl, ...ql, ...q.slice(0, 3), ...pl, ...p.slice(0, 3), ...q.slice(0, 3), ...pl, ...q.slice(0, 3), ...ql);
   }
