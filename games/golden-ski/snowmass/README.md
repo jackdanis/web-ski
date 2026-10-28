@@ -31,11 +31,12 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/tracks.js` | Her ski tracks: grooves painted around her, shaded by Snowlight |
 | `src/snow.js` | Each run's snow: real moguls on Long Shot and Timberline, chopped snow on The Edge, Slot and Campground |
 | `src/play.js` | Input, Tab menu, freecam, and the simulation (skiing, jumps, collisions, bails) |
-| `src/audio.js` | Sound effects synthesized with Web Audio: ski hiss, wind, pole plants, landing thump |
+| `src/audio.js` | Sound effects synthesized with Web Audio (ski hiss, wind, pole plants, landing thump) and the music player (songs crossfade, small-speaker filter) |
 | `src/hudmap.js` | Minimap and full map |
 | `src/main.js` | Rendering, main loop, test hooks (`window.__golden`) |
 | `assets/sprites/` | Goldie's sheet, trees, poles, signs (each with a `_n` normal map) |
 | `assets/textures/` | Snow textures and the station atlas |
+| `assets/music/` | Jack's songs (his own recordings and ACE-Step versions of them) |
 | `assets/sky/` | One sky strip per time of day |
 | `assets/models/` | The Elk Camp restaurant model and texture |
 | `data/mountain.js` | Terrain, forest, lifts and run lines (10 m) |

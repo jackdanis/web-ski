@@ -1,5 +1,6 @@
 // Sound effects, all synthesized with Web Audio (no recorded files): ski hiss on the snow, wind that rises with speed,
-// pole plants and the landing thump. Phones only allow sound after a touch, so it starts on the first tap or key.
+// pole plants and the landing thump. Music: Jack's own tracks, played one after another with a crossfade, through a
+// small-speaker filter (the We Ski sound). Phones only allow sound after a touch, so it starts on the first tap or key.
 import { state } from './state.js';
 import { clamp } from './config.js';
 import { surfaceAt } from './world.js';
@@ -10,10 +11,14 @@ const PLANT = POLE_PHASES[0];         // where in a double-pole push the poles h
 const VOLUME = 0.7;                   // master level: pole plants and thumps play at this
 const SNOW_VOL = 0.15;                // skid scrape, kept quiet under it (Jack: snow was deafening)
 const HISS_VOL = 0.04;                // ski hiss: a faint bed under everything (Jack: it drowned out everything)
+const MUSIC_VOL = 0.35;               // music under the effects
+const XFADE = 4;                      // s of crossfade between songs
+const SONGS = ['jack-jazz.mp3'].map((f) => `assets/music/${f}`);
 
 let ctx = null, master, noise;
 let hiss, scrape, wind;
 let was = { grounded: true, crashed: false, poleP: -1, air: 0 };
+const music = { decks: [], cur: 0, song: 0, fails: 0 };
 
 function noiseBuffer() {
   const b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -45,11 +50,56 @@ function start() {
   hiss = loop('bandpass', 2500, 0.6, 0);
   scrape = loop('bandpass', 700, 1.4, 0.5);
   wind = loop('lowpass', 400, 0.9, 1.1);
+  startMusic();
+}
+
+// Two decks so one song can fade into the next. The speaker: no lows or highs, a little squash.
+function startMusic() {
+  const hp = Object.assign(ctx.createBiquadFilter(), { type: 'highpass' }); hp.frequency.value = 320;
+  const lp = Object.assign(ctx.createBiquadFilter(), { type: 'lowpass' }); lp.frequency.value = 3200;
+  const squash = ctx.createDynamicsCompressor(); squash.threshold.value = -20; squash.ratio.value = 3;
+  const bus = ctx.createGain(); bus.gain.value = MUSIC_VOL;
+  hp.connect(lp).connect(squash).connect(bus).connect(master);
+  for (let k = 0; k < 2; k++) {
+    const el = new Audio();
+    el.preload = 'auto';
+    const gain = ctx.createGain(); gain.gain.value = 0;
+    ctx.createMediaElementSource(el).connect(gain).connect(hp);
+    // a song that won't load is skipped; if none load, the music just stays off
+    el.addEventListener('error', () => { if (music.decks[music.cur].el === el && ++music.fails < SONGS.length) nextSong(); });
+    el.addEventListener('playing', () => { music.fails = 0; });
+    music.decks.push({ el, gain });
+  }
+  // Phones only let an audio element play if it was first started from a touch: wake the spare deck now too.
+  const spare = music.decks[1].el;
+  spare.src = SONGS[0]; spare.play().then(() => spare.pause(), () => {});
+  playSong(0, 1.5);
+}
+function playSong(i, fade) {
+  const d = music.decks[music.cur];
+  music.song = i;
+  d.el.src = SONGS[i];
+  d.el.currentTime = 0;
+  d.el.play().catch(() => {});
+  d.gain.gain.cancelScheduledValues(ctx.currentTime);
+  d.gain.gain.setValueAtTime(0, ctx.currentTime);
+  d.gain.gain.linearRampToValueAtTime(1, ctx.currentTime + fade);
+}
+function nextSong() {
+  const old = music.decks[music.cur];
+  old.gain.gain.cancelScheduledValues(ctx.currentTime);
+  old.gain.gain.setValueAtTime(old.gain.gain.value, ctx.currentTime);
+  old.gain.gain.linearRampToValueAtTime(0, ctx.currentTime + XFADE);
+  setTimeout(() => old.el.pause(), XFADE * 1000 + 100);
+  music.cur = 1 - music.cur;
+  playSong((music.song + 1) % SONGS.length, XFADE);
 }
 for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, start, { capture: true });
 document.addEventListener('visibilitychange', () => {
   if (!ctx) return;
   if (document.hidden) ctx.suspend(); else ctx.resume();
+  const el = music.decks[music.cur]?.el;
+  if (el) { if (document.hidden) el.pause(); else el.play().catch(() => {}); }
 });
 
 const set = (param, v, tc = 0.06) => param.setTargetAtTime(v, ctx.currentTime, tc);
@@ -91,6 +141,8 @@ function thump(k, sloppy) {
 export function updateAudio() {
   if (!ctx) return;
   set(master.gain, state.sound ? VOLUME : 0, 0.03);
+  const el = music.decks[music.cur].el;
+  if (el.duration && el.duration - el.currentTime < XFADE) nextSong();
   const skiing = state.phase === 'skiing';
   const speed = skiing ? sk.vel.length() : 0;
   const v = clamp(speed / V_TOP, 0, 1.3);
