@@ -190,6 +190,8 @@ const KICK_AT = [                                              // m down the run
   { at: [2417.7, -3868.7], size: 'lip' },                      // laser note 8 (2026-10-27): "can we make it a bit larger?"
   { at: [3288.9, -4782.7], size: 'lipS' },                     // laser note 17: the roll-over Jack liked, smoothed away
                                                                // when the snow past it became a run, built back
+  { at: [400.8, -3289.1], size: 'small' },                     // terrain park jump line beside the jibs (batch 4, park.js)
+  { at: [465.2, -3339.0], size: 'medium' },                    // then on to Cabin's medium kicker
 ];
 const MOGUL_AT = [                                             // centre, length down the fall line, width across
   { at: [-30.5, -2186.9], len: 60, wide: 32 },                 // Mick's Gully, laser note 24 (2026-10-27)

@@ -16,6 +16,8 @@ import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
 import { paintTracks, recordTrack, tracks } from './tracks.js';
 import { updateMoguls } from './snow.js';
+import { updatePark } from './park.js';
+import { updateLandforms } from './landforms.js';
 import { updateAudio } from './audio.js';
 import { MAP } from '../data/mountain.js';
 
@@ -298,6 +300,8 @@ function render(alpha, dt) {
   updateTerrain();
   updatePatch();
   updateKickers();
+  updatePark();
+  updateLandforms();
   updateMoguls();
   updateRings();
   updateTrees(snap);

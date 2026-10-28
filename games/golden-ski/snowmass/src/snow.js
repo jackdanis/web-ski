@@ -28,6 +28,8 @@ const PATCHES = [
   { at: [3744.1, -2620.5], len: 45, wide: 22, style: 'wide' },    // 8: this side, by the trees
   { at: [3818.5, -2796.5], len: 22, wide: 18, style: 'tight' },   // 9: some in the corner
   { at: [3764.0, -2990.6], len: 50, wide: 16, style: 'wide' },    // 10: this side of the tree split
+  // batch 4 pin 7: "a ton of spread out moguls" on Slot (Upper), its chopped snow turned thick around them
+  { at: [-294.7, -3439.7], len: 80, wide: 20, style: 'wide', thick: true },
 ];
 const PATCH_FADE = 8;                             // m inside a patch's edge before the bumps are full size
 // Timberline: none along the Big Burn lift line, kept past its bottom terminal (pin 1); [ax, az, bx, bz, radius m]
@@ -63,6 +65,14 @@ export const SNOW_KIND = new Uint8Array(NX * NZ);
     }
   }
   for (let k = 0; k < NX * NZ; k++) SNOW_KIND[k] = owner[k] < 0 ? 0 : owner[k];
+  for (const p of PATCHES) {
+    if (!p.thick) continue;
+    const r = Math.max(p.len, p.wide), i0 = Math.round((p.at[0] - X0) / CELL), j0 = Math.round((p.at[1] - Z0) / CELL), n = Math.ceil(r / CELL);
+    for (let j = j0 - n; j <= j0 + n; j++) for (let i = i0 - n; i <= i0 + n; i++) {
+      const k = j * NX + i;
+      if (Math.hypot(i - i0, j - j0) * CELL <= r && SNOW_KIND[k] === 2) SNOW_KIND[k] = 3;
+    }
+  }
   const px = new Uint8Array(NX * NZ * 4);
   for (let k = 0; k < NX * NZ; k++) { px[k * 4] = SNOW_KIND[k] === 1 || SNOW_KIND[k] === 3 ? 255 : 0; px[k * 4 + 1] = SNOW_KIND[k] === 2 ? 255 : 0; }
   const tex = new THREE.DataTexture(px, NX, NZ);
