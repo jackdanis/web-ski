@@ -103,8 +103,8 @@ export function updateAudio() {
   // Skid: a rougher, lower scrape while the skis slide sideways or brake.
   set(scrape.gain.gain, onSnow ? clamp(sk.skid, 0, 1) * Math.min(1, speed / 4) * 0.45 * SNOW_VOL : 0);
   // Wind: grows with speed squared, a slow gust on top, and stays on through the air.
-  const gust = 0.85 + 0.15 * Math.sin(ctx.currentTime * 0.7) * Math.sin(ctx.currentTime * 1.9);
-  set(wind.gain.gain, skiing ? 0.5 * v * v * gust : 0, 0.15);
+  const gust = 0.75 + 0.25 * Math.sin(ctx.currentTime * 0.7) * Math.sin(ctx.currentTime * 1.9);
+  set(wind.gain.gain, skiing ? 0.65 * v * v * gust : 0, 0.15);
   set(wind.filter.frequency, 250 + 900 * v);
 
   if (skiing) {
