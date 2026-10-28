@@ -1,5 +1,6 @@
 // Ski tracks: two grooves painted top down around Goldie; Snowlight shades them from the sun.
-// The canvas holds groove depth in red and lip height in green, both drawn with 'lighten' (the max), so
+// The canvas holds groove depth in red, lip height in green and the inside of the turn in blue (the edge cuts a
+// steep wall there, shaded in scene.js), all drawn with 'lighten' (the max), so
 // segments can be added one at a time in any order. A new segment uploads only its own rectangle.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { LIGHT, renderer } from './scene.js';
@@ -32,7 +33,9 @@ export function recordTrack() {
   // (a carve always slips a little, so the first 0.2 doesn't count)
   const across = Math.max(0, Math.abs(Math.sin(sk.heading - Math.atan2(sk.vel.x, -sk.vel.z))) - 0.2) / 0.8;
   const carve = SOFT + (1 - SOFT) * THREE.MathUtils.smoothstep(Math.abs(sk.edgeA), 0.35, 1.0);
-  pts.push({ x, z, rx: Math.cos(sk.heading), rz: Math.sin(sk.heading), w: SKI_W + across * SKI_L * 0.45, a: across, d: carve / (1 + across * 3), s: skied });
+  // the turn's inside: the right side when the edge angle is positive; a gentle turn barely marks it
+  const inside = Math.sign(sk.edgeA) * THREE.MathUtils.smoothstep(Math.abs(sk.edgeA), 0.08, 0.5) / (1 + across * 3);
+  pts.push({ x, z, rx: Math.cos(sk.heading), rz: Math.sin(sk.heading), w: SKI_W + across * SKI_L * 0.45, a: across, d: carve / (1 + across * 3), in: inside, s: skied });
   while (pts.length && skied - pts[0].s > FADE) { pts.shift(); painted = Math.max(0, painted - 1); }
 }
 
@@ -53,6 +56,20 @@ function stroke(i0, i1, fade) {
         if (i === i0) g.moveTo(x, z); else g.lineTo(x, z);
         x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z);
       }
+      g.stroke();
+    }
+  }
+  // inside wall: a narrow stroke along the half of each groove toward the turn's centre
+  g.lineWidth = Math.max(1, b.w * 0.55 * k);
+  for (const side of [-0.5, 0.5]) {
+    for (let i = i0; i < i1; i++) {
+      const q = pts[i], q1 = pts[i + 1], v = Math.round(255 * fade * Math.abs(q1.in));
+      if (!v || Math.sign(q.in) !== Math.sign(q1.in)) continue;
+      const o = Math.sign(q1.in) * b.w * 0.28;
+      g.strokeStyle = `rgb(0,0,${v})`;
+      g.beginPath();
+      g.moveTo((q.x + q.rx * (GAP * side + o) - origin.x) * k, (q.z + q.rz * (GAP * side + o) - origin.z) * k);
+      g.lineTo((q1.x + q1.rx * (GAP * side + o) - origin.x) * k, (q1.z + q1.rz * (GAP * side + o) - origin.z) * k);
       g.stroke();
     }
   }

@@ -52,12 +52,16 @@ export const LIGHT_GLSL = /* glsl */ `
     if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
     return texture2D(uShadow, vec2(uv.x, 1.0 - uv.y)).r;
   }
-  // ski tracks around Goldie (tracks.js, 96 m across): groove depth in red, lip in green; height in m
-  float trackH(vec2 xz) {
+  // ski tracks around Goldie (tracks.js, 96 m across): groove depth in red, lip in green, the inside of the turn
+  // in blue (cut deeper there, so the groove has a steep wall inside and a ramp outside); height in m
+  vec3 trackT(vec2 xz) {
     vec2 uv = (xz - uTrO) / 96.0;
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
-    vec2 t = texture2D(uTrack, vec2(uv.x, 1.0 - uv.y)).rg;
-    return 0.06 * t.g * (1.0 - min(1.0, t.r * 6.0)) - 0.16 * t.r;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);
+    return texture2D(uTrack, vec2(uv.x, 1.0 - uv.y)).rgb;
+  }
+  float trackH(vec2 xz) {
+    vec3 t = trackT(xz);
+    return 0.06 * t.g * (1.0 - min(1.0, t.r * 6.0)) - 0.16 * t.r - 0.1 * t.b * min(1.0, t.r * 4.0);
   }
   // LAMPS is defined only at night (applyTime), so daytime shaders skip the loop
   vec3 lamps(vec3 p, vec3 n) {
@@ -214,6 +218,9 @@ export const terrainMat = new THREE.ShaderMaterial({
         vec2 tg = vec2(trackH(vP.xz + vec2(E, 0.0)) - trackH(vP.xz - vec2(E, 0.0)), trackH(vP.xz + vec2(0.0, E)) - trackH(vP.xz - vec2(0.0, E))) / (2.0 * E);
         n = normalize(n + vec3(-tg.x, 0.0, -tg.y) * 1.4 * (1.0 - smoothstep(40.0, 70.0, vD)));
         alb *= mix(vec3(1.0), vec3(0.86, 0.9, 1.0), clamp(-th * 7.0, 0.0, 1.0));
+        // the inside wall is shaded whatever the sun, so the dark side swaps with the turn
+        vec3 tt = trackT(vP.xz);
+        alb *= mix(vec3(1.0), vec3(0.72, 0.79, 0.95), tt.b * min(1.0, tt.r * 3.0));
       }
       if (vCov.y + dith > 0.5) alb = uRock;
       float far = smoothstep(uTreeFar * 0.6, uTreeFar, vD);
