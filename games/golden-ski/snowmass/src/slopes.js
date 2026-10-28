@@ -6,7 +6,7 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 
@@ -18,6 +18,10 @@ const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, 
 const SKIP = [[-338.6, -2933.0],                      // a shed footprint inside the trail-map stand
   [1300.1, -4972.3]];                                  // a box overlapping the Westin, which hid it
 // Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
+// Rich cabins (batch 4, pins 8 to 15): every stand-in inside this box, the section between Lower Banzai, Adams' Avenue
+// (Lower) and Green Cabin (Lower) above Snowmass Mall; [x0, x1, z0, z1]
+const RICH_AREA = [1190, 1720, -4860, -4180];
+const RICH_KINDS = ['garage', 'chalet', 'hip'];
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
 function nearestRunPoint(x, z) {
   let best = Infinity, at = [x, z + 1];
@@ -288,6 +292,14 @@ if (RUN_DATA) {
       // local z in the world, as placeM turns it: the door side faces the run
       const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
       addIndustrial({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 });
+      continue;
+    }
+    if (x > RICH_AREA[0] && x < RICH_AREA[1] && z > RICH_AREA[2] && z < RICH_AREA[3]) {
+      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
+      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
+      // small footprints get the garage house; the rest alternate by position so neighbours differ
+      const kind = w * l < 260 ? 'garage' : RICH_KINDS[1 + (Math.round(x * 7 + z * 3) & 1)];
+      addRichCabin({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 }, kind);
       continue;
     }
     addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h, what: 'stand-in building' });

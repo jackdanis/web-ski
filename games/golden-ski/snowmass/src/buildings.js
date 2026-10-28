@@ -523,6 +523,129 @@ export function addTanHotel(b) {
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 
+// Rich cabins (batch 4, pins 8 to 15: every stand-in in the section between Lower Banzai, Adams' Avenue and Green Cabin),
+// three variants after Jack's photos (references/buildings/rich-cabins/):
+// 'garage' (ref 1): a stone ground floor with cedar garage doors, a cedar and copper upper floor under a gable facing
+//   the run, heavy timber trusses in the gable end, a copper chimney;
+// 'chalet' (ref 2): stone ground floor and corner piers, dark wood above, a long rust roof with two cross gables at
+//   the ends, a covered balcony stack between them, two stone chimneys;
+// 'hip' (ref 3): stone ground floor, dark wood above, a grey hipped main roof, gabled wings forward at both ends,
+//   a two-floor porch in the middle and one stone chimney.
+const RICH = { stone: [1.75, 1.5, 1.2], cedar: [1.25, 1.05, 0.88], dark: [0.62, 0.47, 0.36], copper: [0.74, 0.4, 0.26],
+  rust: [0.5, 0.3, 0.24], slate: [0.36, 0.37, 0.4], shingle: [0.34, 0.34, 0.36], timber: [0.9, 0.72, 0.55], rail: [0.16, 0.14, 0.13], FH: 3.1 };
+// hip roof over w (x) by l (z), ridge along x, height h
+function hip(w, l, h) {
+  const r = Math.max(0, (w - l) / 2), pos = [];
+  const A = [-w / 2, 0, -l / 2], B = [w / 2, 0, -l / 2], C = [w / 2, 0, l / 2], D = [-w / 2, 0, l / 2], E = [-r, h, 0], F = [r, h, 0];
+  pos.push(...D, ...C, ...F, ...D, ...F, ...E, ...B, ...A, ...E, ...B, ...E, ...F, ...C, ...B, ...F, ...A, ...D, ...E);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return g;
+}
+export function addRichCabin(b, variant) {
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
+  const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  const gs = [[-W / 2, -L / 2], [W / 2, -L / 2], [-W / 2, L / 2], [W / 2, L / 2], [0, 0]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+  const lo = Math.min(...gs) - 1, hi = Math.max(...gs) + 0.3, f1 = hi + RICH.FH;
+  const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2);
+  // windows on a face: n tall panes across len, centred at c along the face
+  const panes = (w, h, y, face, len, n, c = 0) => {
+    for (let k = 0; k < n; k++) {
+      const u = c - len / 2 + (k + 0.5) * len / n;
+      const g = face === 'f' ? BOX(w, h, 0.12, u, y, L / 2 + 0.05) : face === 'b' ? BOX(w, h, 0.12, u, y, -L / 2 - 0.05)
+        : BOX(0.12, h, w, (face === 'r' ? 1 : -1) * (W / 2 + 0.05), y, u);
+      P.push(part(g, WIN, M, TILES.window));
+    }
+  };
+  const roofOf = (geo, col, y, snowGeo) => {
+    P.push(part(geo.translate(0, y, 0), col, M, TILES.metalRoof));
+    P.push(part(snowGeo.translate(0, y + 0.22, 0), SNOWCAP, M));
+  };
+  const chimney = (x, z, w, top, col, tile) => {
+    P.push(part(BOX(w, top - lo, w, x, lo, z), col, M, tile));
+    P.push(part(BOX(w + 0.3, 0.12, w + 0.3, x, top, z), SNOWCAP, M));
+  };
+  let roofTop;
+  if (variant === 'garage') {
+    const f2 = f1 + RICH.FH + 0.4, gh = Math.min(6, W * 0.32);
+    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W + 0.5, f2 - f1, L + 0.5, 0, f1, 0), RICH.cedar, M, TILES.cedar));
+    P.push(part(BOX(W + 0.7, 0.25, L + 0.7, 0, f1 - 0.1, 0), RICH.timber, M, TILES.cedar));          // floor beam
+    const nd = Math.max(1, Math.min(3, Math.floor(W / 5)));                                         // garage doors
+    for (let k = 0; k < nd; k++) P.push(part(BOX(Math.min(4.6, W / nd - 1.2), 2.4, 0.14, -W / 2 + (k + 0.5) * W / nd, hi, L / 2 + 0.04), RICH.cedar, M, TILES.cedar));
+    panes(1.5, 2.2, f1 + 0.5, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
+    panes(1.5, 2.2, f1 + 0.5, 'l', L - 3, Math.max(1, Math.floor(L / 5)));
+    panes(1.5, 2.2, f1 + 0.5, 'r', L - 3, Math.max(1, Math.floor(L / 5)));
+    // gable along z: its end faces the run; copper panel in the gable, truss beams in front of it
+    roofOf(gable(W + 2.4, L + 2.2, gh), RICH.shingle, f2, gable(W + 1.8, L + 1.6, gh));
+    P.push(part(gable(W + 1.6, 0.12, gh - 0.2).translate(0, f2, L / 2 + 1.18), RICH.copper, M));          // over the roof's end
+    P.push(part(BOX(W + 0.6, 0.45, 0.45, 0, f2 + 0.2, L / 2 + 1.45), RICH.timber, M, TILES.cedar));
+    P.push(part(BOX(0.45, gh - 0.6, 0.45, 0, f2 + 0.2, L / 2 + 1.45), RICH.timber, M, TILES.cedar));
+    for (const s of [-1, 1]) P.push(part(BOX(0.4, f2 - hi, 0.4, s * (W / 2 + 0.2), hi, L / 2 + 1.45), RICH.timber, M, TILES.cedar));   // corner posts
+    roofTop = f2 + gh;
+    chimney(-W / 4, -L / 4, 1.6, roofTop + 1.2, RICH.copper);
+  } else if (variant === 'chalet') {
+    const f2 = f1 + RICH.FH, f3 = f2 + RICH.FH, gh = Math.min(7, L * 0.45), wing = Math.min(7, W * 0.28);
+    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, f3 - f1, L, 0, f1, 0), RICH.dark, M, TILES.siding));
+    for (const s of [-1, 1]) P.push(part(BOX(2.0, f3 - lo, 1.6, s * (W / 2 - 1.0), lo, L / 2 - 0.5), RICH.stone, M, TILES.stone));   // stone piers
+    // main roof: gable with its ridge along x; cross gables over both end wings, set forward
+    roofOf(gable(L + 2.4, W + 2.4, gh).applyMatrix4(rotZ), RICH.rust, f3, gable(L + 1.8, W + 1.6, gh).applyMatrix4(rotZ));
+    for (const s of [-1, 1]) {
+      const cx = s * (W / 2 - wing / 2);
+      P.push(part(BOX(wing, f3 - f1, 1.2, cx, f1, L / 2 + 0.6), RICH.dark, M, TILES.siding));
+      P.push(part(gable(wing + 1.6, L / 2 + 2.5, gh * 0.85).translate(cx, f3, L / 4 + 0.6), RICH.rust, M, TILES.metalRoof));
+      P.push(part(gable(wing + 1.0, L / 2 + 2.0, gh * 0.85).translate(cx, f3 + 0.22, L / 4 + 0.6), SNOWCAP, M));
+      P.push(part(gable(wing + 1.2, 0.12, gh * 0.85 - 0.2).translate(cx, f3, L / 2 + 1.92), RICH.cedar, M, TILES.cedar));
+      for (const y of [f1 + 0.5, f2 + 0.5]) P.push(part(BOX(wing - 2.2, 2.2, 0.12, cx, y, L / 2 + 1.25), WIN, M, TILES.window));
+      chimney(s * (W / 2 - 0.9), -L / 4, 1.8, f3 + gh + 1.5, RICH.stone, TILES.stone);
+    }
+    // covered balcony stack in the middle: slabs, dark rails, timber columns
+    const bw = Math.max(3, W - 2 * wing - 1);
+    for (const y of [f1, f2]) {
+      P.push(part(BOX(bw, 0.25, 2.2, 0, y - 0.1, L / 2 + 1.1), RICH.timber, M, TILES.cedar));
+      P.push(part(BOX(bw, 1.0, 0.08, 0, y + 0.15, L / 2 + 2.15), RICH.rail, M));
+    }
+    for (const s of [-1, 0, 1]) P.push(part(BOX(0.45, f3 - hi, 0.45, s * (bw / 2 - 0.3), hi, L / 2 + 2.0), RICH.timber, M, TILES.cedar));
+    for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) panes(1.6, 2.2, y, 'f', bw - 1, Math.max(2, Math.floor(bw / 2.5)));
+    for (const y of [f1 + 0.5, f2 + 0.5]) { panes(1.6, 2.2, y, 'l', L - 3, 3); panes(1.6, 2.2, y, 'r', L - 3, 3); }
+    // wood over both ends of the roof, one window each
+    for (const s of [-1, 1]) {
+      P.push(part(gable(L + 2.0, 0.12, gh - 0.2).applyMatrix4(rotZ).translate(s * (W / 2 + 1.27), f3, 0), RICH.dark, M, TILES.siding));
+      P.push(part(BOX(0.12, 2.0, 2.4, s * (W / 2 + 1.36), f3 + 0.6, 0), WIN, M, TILES.window));
+    }
+    roofTop = f3 + gh;
+  } else {
+    const f2 = f1 + RICH.FH, f3 = f2 + RICH.FH, gh = Math.min(6.5, L * 0.4), wing = Math.min(8, W * 0.3);
+    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, f3 - f1, L, 0, f1, 0), RICH.dark, M, TILES.siding));
+    roofOf(hip(W + 2.4, L + 2.4, gh), RICH.slate, f3, hip(W + 1.8, L + 1.8, gh));
+    // wings: forward of the main block at both ends, stone up to the first floor, a gable facing the run
+    for (const s of [-1, 1]) {
+      const cx = s * (W / 2 - wing / 2), d = 3.0, cz = L / 2 + d / 2;
+      P.push(part(BOX(wing, f1 - lo, d, cx, lo, cz), RICH.stone, M, TILES.stone));
+      P.push(part(BOX(wing, f3 - f1, d, cx, f1, cz), RICH.dark, M, TILES.siding));
+      P.push(part(gable(wing + 1.4, d + 3, gh * 0.9).translate(cx, f3, L / 2 + d / 2 - 0.5), RICH.rust, M, TILES.metalRoof));
+      P.push(part(gable(wing + 0.8, d + 2.6, gh * 0.9).translate(cx, f3 + 0.22, L / 2 + d / 2 - 0.5), SNOWCAP, M));
+      for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) P.push(part(BOX(wing - 3, 2.3, 0.12, cx, y, L / 2 + d + 0.05), WIN, M, TILES.window));
+      P.push(part(gable(wing + 1.0, 0.12, gh * 0.9 - 0.2).translate(cx, f3, L / 2 + d + 1.05), RICH.dark, M, TILES.siding));
+      P.push(part(BOX(wing - 3.6, 1.6, 0.12, cx, f3 + 0.3, L / 2 + d + 1.12), WIN, M, TILES.window));   // the gable window
+    }
+    // two-floor porch between the wings: posts, a slab with a dark rail, a shed roof
+    const pw = Math.max(3, W - 2 * wing - 1);
+    P.push(part(BOX(pw, 0.25, 2.6, 0, f1 - 0.1, L / 2 + 1.3), RICH.timber, M, TILES.cedar));
+    P.push(part(BOX(pw, 1.0, 0.08, 0, f1 + 0.15, L / 2 + 2.55), RICH.rail, M));
+    for (const s of [-1, 1]) P.push(part(BOX(0.5, f3 - hi, 0.5, s * (pw / 2 - 0.3), hi, L / 2 + 2.4), RICH.timber, M, TILES.cedar));
+    for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) panes(1.6, 2.2, y, 'f', pw - 1, Math.max(2, Math.floor(pw / 2.5)));
+    for (const y of [f1 + 0.5, f2 + 0.5]) { panes(1.4, 2.0, y, 'l', L - 3, 2); panes(1.4, 2.0, y, 'r', L - 3, 2); }
+    roofTop = f3 + gh;
+    chimney(-W / 2 + 1.2, 0, 2.0, roofTop + 1.0, RICH.stone, TILES.stone);
+  }
+  const long = b.w >= b.l;
+  solidBox(b.x, b.z, b.yaw, long ? W : L, long ? L : W, lo, roofTop - lo, 'cabin');
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+
 // Venga Venga (pin 3), v2: a low two-storey cantina. Stone base, a cedar-clad ground floor with big windows, a cream
 // stucco upper floor, a low snowy gable roof on timber eaves, and a wooden deck on the run side with dark rails and a
 // string of red and orange flags (Jack's photos).
