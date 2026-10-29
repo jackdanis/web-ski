@@ -13,7 +13,7 @@ const SNOW_VOL = 0.15;                // skid scrape, kept quiet under it (Jack:
 const HISS_VOL = 0.04;                // ski hiss: a faint bed under everything (Jack: it drowned out everything)
 const MUSIC_VOL = 0.35;               // music under the effects
 const XFADE = 4;                      // s of crossfade between songs
-const SONGS = ['jack-jazz.mp3'].map((f) => `assets/music/${f}`);
+const SONGS = ['jack-jazz.mp3', 'atmos-0.3.mp3', 'atmos-0.5.mp3'].map((f) => `assets/music/${f}`);
 
 let ctx = null, master, noise;
 let hiss, scrape, wind;
