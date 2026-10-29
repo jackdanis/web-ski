@@ -306,10 +306,46 @@ if (RUN_DATA) {
   }
   flushBuildings();
 }
+// Groomer frame for the 2 m run mesh: each vertex's distance along and across the nearest groomed run line (and that
+// line's direction), so the corduroy runs down the run in lanes. On PRISTINE runs the direction is doubled: no skier wear.
+// Segments bucketed in 40 m cells; a vertex looks in its cell and the 8 around it.
+const GSEG = 40, gsegs = new Map();
+const PRISTINE = ['Dawdler'];                     // Jack: finely groomed, always nice lines
+for (const r of RUNS) {
+  if (r.area || r.kind !== 'groomed' || r.points.length < 2) continue;
+  let along = 0;
+  for (let i = 1; i < r.points.length; i++) {
+    const [ax, az] = r.points[i - 1], [bx, bz] = r.points[i], len = Math.hypot(bx - ax, bz - az);
+    if (len < 0.01) continue;
+    const pk = PRISTINE.includes(r.name) ? 2 : 1;
+    const sg = { ax, az, dx: (bx - ax) / len, dz: (bz - az) / len, len, s0: along, pk };
+    along += len;
+    const seen = new Set();
+    for (let t = 0; t <= len + GSEG; t += GSEG / 2) {
+      const q = Math.min(t, len), k = Math.floor((ax + sg.dx * q) / GSEG) * 4096 + Math.floor((az + sg.dz * q) / GSEG);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!gsegs.has(k)) gsegs.set(k, []);
+      gsegs.get(k).push(sg);
+    }
+  }
+}
+function groomFrame(x, z) {
+  const ci = Math.floor(x / GSEG), cj = Math.floor(z / GSEG);
+  let best = Infinity, u = 0, v = 0, dx = 0, dz = 1;
+  for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+    for (const sg of gsegs.get((ci + di) * 4096 + cj + dj) || []) {
+      const px = x - sg.ax, pz = z - sg.az, t = Math.max(0, Math.min(sg.len, px * sg.dx + pz * sg.dz));
+      const ex = px - sg.dx * t, ez = pz - sg.dz * t, d = ex * ex + ez * ez;
+      if (d < best) { best = d; u = sg.s0 + t; v = px * sg.dz - pz * sg.dx; dx = sg.dx * sg.pk; dz = sg.dz * sg.pk; }
+    }
+  }
+  return [u, v, dx, dz];
+}
 function buildGroupMesh(P, g, level) {
   if (P.ready) P.ready(g);
   const s = PATCH_STEP[level], side = TILE * MESH_TILES, { hr, edge, wmin } = P;
-  const vert = new Map(), pos = [], cov = [], nrm = [], idx = [];
+  const vert = new Map(), pos = [], cov = [], nrm = [], run = [], idx = [];
   const h = (a, j) => { const c = P.at(a, j); return c < 0 ? null : hr[c]; };
   const v = (a, j, drop) => {
     const key = (j * P.nx + a) * 3 + (drop === undefined ? 0 : drop ? 2 : 1);   // surface, skirt top, skirt foot
@@ -320,6 +356,7 @@ function buildGroupMesh(P, g, level) {
       vert.set(key, n);
       pos.push(x, hr[c] - (drop ? 1.5 * s : 0), z);
       cov.push(edge[c], isRock(k) && edge[c] > 3 ? 1 : 0, conifer(k), aspen(k));
+      run.push(...groomFrame(x, z));
       if (drop === undefined) nrm.push(0, 0, 0);
       else {
         // skirt normals match the run beside them
@@ -356,6 +393,7 @@ function buildGroupMesh(P, g, level) {
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   geo.setAttribute('aCov', new THREE.BufferAttribute(new Float32Array(cov), 4));
   geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  geo.setAttribute('aRun', new THREE.BufferAttribute(new Float32Array(run), 4));
   geo.setIndex(idx);
   geo.computeBoundingSphere();
   const mesh = new THREE.Mesh(geo, P.mat);

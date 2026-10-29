@@ -149,9 +149,15 @@ export const terrainMat = new THREE.ShaderMaterial({
     attribute vec4 aCov;
     attribute vec3 aN;
     varying vec3 vP; varying vec4 vCov; varying float vD; varying vec3 vN;
+#ifdef PATCH
+    attribute vec4 aRun; varying vec4 vRun;
+#endif
     void main() {
       vec4 w = modelMatrix * vec4(position, 1.0);
       vP = w.xyz; vCov = aCov; vN = aN;
+#ifdef PATCH
+      vRun = aRun;
+#endif
       vec4 mv = viewMatrix * w;
       // skirts sit just behind the ground so the ground wins depth ties and no seams show
 #ifndef MOGUL
@@ -171,6 +177,9 @@ export const terrainMat = new THREE.ShaderMaterial({
       return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
     }
     varying vec3 vP; varying vec4 vCov; varying float vD; varying vec3 vN;
+#ifdef PATCH
+    varying vec4 vRun;
+#endif
     void main() {
 #ifndef PATCH
       if (uPOn > 0.5 && distance(vP.xz, cameraPosition.xz) < uPFar) {
@@ -189,11 +198,45 @@ export const terrainMat = new THREE.ShaderMaterial({
 #endif
       float edge = vCov.x + dith * 2.5;                      // m from the groomed edge
       bool groomed = edge < 0.0;
-      vec3 alb = (groomed ? texture2D(uCord, uv).rgb : texture2D(uPow, uv).rgb) * uSnow;
-      vec3 tn = (groomed ? texture2D(uCordN, uv).rgb : texture2D(uPowN, uv).rgb) * 2.0 - 1.0;
+      vec3 tx = vec3(1.0, 0.0, 0.0), ty = vec3(0.0, 0.0, -1.0);   // world directions of the texture's x and y
+      vec2 cuv = uv;
+      float lane = 0.0, seam = 0.0, worn = 1.0;
+#ifdef PATCH
+      // groomer lanes: the corduroy runs down the run in 5 m passes, each a touch off line and a shade different
+      vec2 rd = normalize(vRun.zw + vec2(0.0, 1e-4));
+      float li = floor(vRun.y / 5.0), lf = fract(vRun.y / 5.0);
+      lane = hash(vec2(li, 3.1)) - 0.5;
+      cuv = vec2(vRun.y + vRun.x * lane * 0.06, vRun.x + hash(vec2(li, 8.7)) * 8.0) / 8.0;
+      tx = vec3(rd.y, 0.0, -rd.x); ty = vec3(rd.x, 0.0, rd.y);
+      seam = 1.0 - smoothstep(0.0, 0.05, min(lf, 1.0 - lf));   // the ridge where two passes overlap
+      worn = 1.0 - smoothstep(1.2, 1.8, length(vRun.zw));       // pristine runs (slopes.js) stay fresh corduroy
+#endif
+      vec3 alb = (groomed ? texture2D(uCord, cuv).rgb : texture2D(uPow, uv).rgb) * uSnow;
+      vec3 tn = (groomed ? texture2D(uCordN, cuv).rgb : texture2D(uPowN, uv).rgb) * 2.0 - 1.0;
       float near = 1.0 - smoothstep(60.0, 300.0, vD);        // texture lighting fades with distance...
-      vec3 n = normalize(fn + vec3(tn.x, 0.0, -tn.y) * (groomed ? 0.12 : 0.18) * near);
-      alb = mix(uSnow, alb, 0.45 * near);                    // ...and so does the pattern
+      float wear = 0.0, hard = 0.0;
+      if (groomed) {
+        // skier wear: fresh corduroy at the sides, the middle skied smooth, hardpack showing on the steep pitches
+        wear = worn * smoothstep(4.0, 12.0, -edge) * smoothstep(0.25, 0.65, vnoise(vP.xz * 0.04) * 0.6 + vnoise(vP.xz * 0.15) * 0.4 + 0.15);
+        hard = smoothstep(0.1, 0.22, 1.0 - fn.y) * smoothstep(0.45, 0.7, vnoise(vP.xz * 0.08 + 3.0)) * wear;
+        tn *= 1.0 - 0.85 * wear;
+      }
+      vec3 n = normalize(fn + (tx * tn.x + ty * tn.y) * (groomed ? 0.12 : 0.18) * near);
+      alb = mix(uSnow, alb, 0.45 * near * (1.0 - 0.8 * wear));   // ...and so does the pattern
+      if (groomed) {
+        alb *= 1.0 + lane * 0.05 * near * (1.0 - wear);
+        alb = mix(alb, vec3(1.0), seam * 0.25 * near * (1.0 - wear));
+        // worn snow: flat and a little grey
+        alb *= 1.0 - 0.04 * wear;
+#ifdef PATCH
+        // faint scraped streaks down the run, crossing a little either side of the fall line
+        vec2 sa = vec2(dot(vP.xz, rd), dot(vP.xz, vec2(rd.y, -rd.x)));
+        float st = max(vnoise(vec2(sa.y * 0.97 + sa.x * 0.26, (sa.x * 0.97 - sa.y * 0.26) * 0.04) * vec2(1.2, 1.0)),
+                       vnoise(vec2(sa.y * 0.97 - sa.x * 0.26, (sa.x * 0.97 + sa.y * 0.26) * 0.04) * vec2(1.2, 1.0) + 9.0));
+        alb *= 1.0 - 0.035 * wear * smoothstep(0.7, 0.92, st) * near;
+#endif
+        alb = mix(alb, alb * vec3(0.88, 0.92, 0.99), hard);
+      }
       // the run's own snow: bumps (never groomed) or chopped (skied off since the groomer)
       vec2 sn = texture2D(uSnowT, (vP.xz - uSnowG.xy) / uSnowG.zw).rg;
       if (edge < 0.0 && sn.r + sn.g > 0.02) {
