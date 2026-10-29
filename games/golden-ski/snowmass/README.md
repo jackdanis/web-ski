@@ -36,7 +36,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/main.js` | Rendering, main loop, test hooks (`window.__golden`) |
 | `assets/sprites/` | Goldie's sheet, trees, poles, signs (each with a `_n` normal map) |
 | `assets/textures/` | Snow textures and the station atlas |
-| `assets/music/` | Jack's songs (his own recordings and ACE-Step versions of them) |
+| `assets/music/` | Jack's songs |
 | `assets/sky/` | One sky strip per time of day |
 | `assets/models/` | The Elk Camp restaurant model and texture |
 | `data/mountain.js` | Terrain, forest, lifts and run lines (10 m) |
