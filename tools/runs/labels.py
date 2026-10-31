@@ -89,8 +89,8 @@ def main(out_dir):
     depth, unreached = drain_fill(h0, dom, lift_outlets(run.shape, dom, h0))
     keep_names = np.zeros(lab.max() + 1, bool)
     for i, r in runs.items():
-        # batch 2 laser-note paths and areas were placed by hand on ground checked to drain
-        keep_names[i + 1] = r['cat_track'] or r['name'] in LINE_FIX or r['osm'] == 'jack-laser-2026-10-27'
+        # batch 2 and 5 laser-note paths and areas were placed by hand on ground checked to drain
+        keep_names[i + 1] = r['cat_track'] or r['name'] in LINE_FIX or r['osm'] in ('jack-laser-2026-10-27', 'jack-laser-2026-10-29')
     trim = run & (depth > TRIM) & ~keep_names[lab]
     pockets = []
     pl, pn = ndi.label(trim, structure=np.ones((3, 3)))

@@ -17,6 +17,8 @@ const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, 
   [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan']];   // batch 3
 const SKIP = [[-338.6, -2933.0],                      // a shed footprint inside the trail-map stand
   [1300.1, -4972.3]];                                  // a box overlapping the Westin, which hid it
+// Areas whose stand-ins go [x0, x1, z0, z1]: the houses behind Two Creeks (batch 5, pin 14)
+const GONE = [[4080, 4200, -6180, -5900]];
 // Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
 // Rich cabins (batch 4, pins 8 to 15): every stand-in inside this box, the section between Lower Banzai, Adams' Avenue
 // (Lower) and Green Cabin (Lower) above Snowmass Mall; [x0, x1, z0, z1]
@@ -268,6 +270,7 @@ if (RUN_DATA) {
   // INDUSTRIAL blocks get the industrial building instead, SPECIAL blocks their named building.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {
     if (SKIP.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) continue;
+    if (GONE.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1)) continue;
     const special = SPECIAL.find(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1);   // named buildings always stand
     if (!special && (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z)))) continue;
     if (special) {
