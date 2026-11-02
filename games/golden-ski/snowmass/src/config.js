@@ -65,7 +65,7 @@ export const CV = {
                                 // toward 0.6x at speed
   LEAN_T: 0.22,                 // s: body lean lag behind the stick
 };
-export const physics = { crashes: false, shapes: false };
+export const physics = { crashes: false, shapes: false, world: false };
 // ---------- Collision shapes and bails ----------
 // Goldie is a capsule (hits walls and boxes) on a thin ski plate (meets the snow). A square hit, a sideways landing
 // or a huge drop bails her: both shapes become one flat box that tumbles until it settles. Off by default (Tab: Crashes).

@@ -28,6 +28,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/props.js` | Mountain operations props: snow guns, snowcats, patrol huts, map boards and rope mazes at lift bottoms, ski racks |
 | `src/glades.js` | Trees through the glade runs, with tree wells |
 | `src/landforms.js` | Rock bands, cornices, wind lips and rock outcrops on the expert terrain |
+| `src/collview.js` | World collision view (Tab: Show world collision): turquoise ground grid at the ride height, purple walls |
 | `src/ride.js` | The chairlift ride cutscene |
 | `src/atmosphere.js` | Lamps, shadows, storm snow, time of day, pixel look |
 | `src/goldie.js` | Goldie's sprite, skis, shadow and spray |

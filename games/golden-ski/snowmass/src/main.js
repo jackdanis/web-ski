@@ -19,6 +19,7 @@ import { updateMoguls } from './snow.js';
 import { updatePark } from './park.js';
 import { updateLandforms } from './landforms.js';
 import { updateAudio } from './audio.js';
+import { updateWorldCollision } from './collview.js';
 import { MAP } from '../data/mountain.js';
 
 // ---------- Rendering ----------
@@ -329,6 +330,7 @@ function render(alpha, dt) {
   runWork();
   state.workAll = false;
   updateNotes();
+  updateWorldCollision();
   renderer.render(scene, camera);
   perf.tris = renderer.info.render.triangles; perf.calls = renderer.info.render.calls;
   updateHudMap();
