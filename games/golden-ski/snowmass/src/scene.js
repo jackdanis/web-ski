@@ -108,7 +108,7 @@ goldiePoleT.flipY = goldiePoleN.flipY = false;
 export const GOLDIE_POLE = await (await fetch(new URL('../assets/sprites/goldie_pole.json', import.meta.url))).json();
 export const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
-export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign'];
+export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign', 'gate_red', 'gate_blue'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });
 export const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n']).map((n) => loadImg(`sprites/${n}`)));
 // storm: the snow-plastered spruce replaces the spruce

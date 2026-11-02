@@ -266,6 +266,15 @@ if (RUN_DATA) {
     addProp(t);
     addObstacle(t);
   }
+  // Flagged course on Scooper (Lower) (batch 5, pin 4): red and blue gates alternating every 20 m down a line 50 m
+  // beside the Scooper lift, 5 m either side of it. Markers only, no timing and no collision (gates bend).
+  {
+    const top = [275, -4218], d = [0.5, -0.867], n = [0.867, 0.5];
+    for (let g = 0; g < 9; g++) {
+      const a = 40 + g * 20, off = 50 + (g % 2 ? -5 : 5), x = top[0] + d[0] * a + n[0] * off, z = top[1] + d[1] * a + n[1] * off;
+      addProp({ x, z, y: groundY(x, z) - 0.1, height: 2, r: 0, kind: g % 2 ? KIND.gate_blue : KIND.gate_red });
+    }
+  }
   // Stand-in blocks on building footprints until real buildings exist; skipped where they overlap a station or solid.
   // INDUSTRIAL blocks get the industrial building instead, SPECIAL blocks their named building.
   for (const [x, z, w, l, yawD, h, y0, y1] of B.blocks) {

@@ -40,7 +40,10 @@ const CLUMPS = [
   }),
 ];
 export const atlas = (() => {
-  const W = SLOT * TREE_KINDS.length + CLUMP_W * CLUMPS.length;
+  // one slot per kind, SLOT px or the sprite's width if wider (the race gates)
+  const slotX = [0];
+  TREE_KINDS.forEach((k, n) => slotX.push(slotX[n] + Math.max(SLOT, treeImgs[n * 2].width)));
+  const KINDS_W = slotX[TREE_KINDS.length], W = KINDS_W + CLUMP_W * CLUMPS.length;
   const mk = (cv) => {
     const t = new THREE.CanvasTexture(cv);
     t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapLinearFilter; t.generateMipmaps = true;
@@ -56,12 +59,12 @@ export const atlas = (() => {
     const img = (n) => (storm && n === 0 ? stormImgs[normal ? 1 : 0] : treeImgs[n * 2 + (normal ? 1 : 0)]);
     const size = (n) => [treeImgs[n * 2].width, treeImgs[n * 2].height];
     TREE_KINDS.forEach((k, n) => {
-      const [w, h] = size(n), x = n * SLOT + Math.floor((SLOT - w) / 2), y = 128 - h;
+      const [w, h] = size(n), x = slotX[n] + Math.floor((slotX[n + 1] - slotX[n] - w) / 2), y = 128 - h;
       g.drawImage(img(n), x, y, w, h);
       if (!normal && !storm) rects[n] = { u0: x / W, u1: (x + w) / W, v1: h / 128, aspect: w / h };
     });
     CLUMPS.forEach((c, m) => {
-      const x0 = SLOT * TREE_KINDS.length + m * CLUMP_W;
+      const x0 = KINDS_W + m * CLUMP_W;
       let left = CLUMP_W, right = 0, top = 128;
       for (const [n, sc, x, rise] of c.trees) {
         const [w, h] = size(n), dw = Math.round(w * sc), dh = Math.round(h * sc), y = 128 - rise - dh;
@@ -77,8 +80,8 @@ export const atlas = (() => {
 })();
 const CLUMP_IDS = { conifer: [], aspen: [], snowghost: [] };
 atlas.rects.forEach((r, n) => { if (r.clump) CLUMP_IDS[r.clump].push(n); });
-export const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5 };
-export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0];      // trunk radius as a share of height
+export const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5, gate_red: 6, gate_blue: 7 };
+export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0, 0, 0];      // trunk radius as a share of height
 export const pages = new Map();
 export function makePage(pi, pj) {
   const key = pi * 1000 + pj;
