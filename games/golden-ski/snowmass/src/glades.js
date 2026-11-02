@@ -1,16 +1,20 @@
-// Glades (2026-11-02): the named glade runs get trees standing through them, about 11 m apart, with a clear line down
+// Glades (2026-11-02): the named glade runs get trees standing through them, about 15 m apart, with a clear line down
 // the middle, and a tree well round each new tree: a dip in the snow (physics) drawn as two rings of shaded snow.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from '../data/mountain.js';
 import { cellKey, hash2 } from './config.js';
 import { GROUND_ADD, addObstacle, groundY, nearSolid, treeCells } from './world.js';
-import { bucket, part, propBatch } from './buildings.js';
+import { addByPage, bucket, modelMat, part } from './buildings.js';
 import { KIND, TRUNK_R, addProp } from './trees.js';
 
 export const GLADE_RUNS = ['Glade One', 'Glade Two', 'Glade Three', 'Coney Glade', 'Powerline Glades', 'Sneaky\'s Glades',
   'Hanging Valley Glades', 'Frog Pond Glades', 'Weird Woods'];
-const SPACING = 11, CLEAR = 4, WELL_R = 2.4, WELL_D = 0.4;
+const SPACING = 15, CLEAR = 4, WELL_R = 2.4, WELL_D = 0.4;
 const WELL_IN = [0.62, 0.7, 0.9], WELL_OUT = [0.8, 0.86, 0.98];
+// the rings draw just in front of the snow (the 2 m run mesh and groundY differ by a few cm, which hid most of them)
+const ringMat = modelMat.clone();
+Object.assign(ringMat, { uniforms: modelMat.uniforms, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
+const RINGS = new Map();
 const wells = new Map();                                     // 8 m cells -> trees with wells
 const ease = (t) => t * t * (3 - 2 * t);
 const treeNear = (x, z, r) => {
@@ -20,7 +24,7 @@ const treeNear = (x, z, r) => {
 };
 // a ring of shaded snow round the trunk, from r0 to r1, laid on the ground
 function ring(x, z, r0, r1, col) {
-  const pos = [], N = 10, y = (a, r) => groundY(x + Math.cos(a) * r, z + Math.sin(a) * r) + 0.06;
+  const pos = [], N = 10, y = (a, r) => groundY(x + Math.cos(a) * r, z + Math.sin(a) * r) + 0.12;
   for (let k = 0; k < N; k++) {
     const a = k / N * Math.PI * 2, b = (k + 1) / N * Math.PI * 2;
     const p = [x + Math.cos(a) * r0, y(a, r0), z + Math.sin(a) * r0], q = [x + Math.cos(b) * r0, y(b, r0), z + Math.sin(b) * r0];
@@ -57,11 +61,12 @@ export function addGlades() {
           if (!wells.has(ck)) wells.set(ck, []);
           wells.get(ck).push(t);
         }
-        bucket(propBatch, x, z, ring(x, z, t.r + 0.1, 1.3, WELL_IN), ring(x, z, 1.3, WELL_R, WELL_OUT));
+        bucket(RINGS, x, z, ring(x, z, t.r + 0.1, 1.3, WELL_IN), ring(x, z, 1.3, WELL_R, WELL_OUT));
         n++;
       }
     }
   }
+  addByPage(RINGS, ringMat);
   return n;
 }
 // the well: snow dips WELL_D at the trunk, easing back to level at WELL_R
