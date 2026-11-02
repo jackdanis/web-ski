@@ -415,8 +415,10 @@ export function addAnnouncer(b, uphill) {
 // on brown timber posts with round rafter tails at the eave, one big low hip roof with a windowed clerestory on the
 // ridge and two small gables over the doors, and a heavy timber entrance gable standing free at the east end.
 const TC_TAN = [1.35, 1.5, 1.7], TC_BLUE = [0.42, 0.5, 0.6], TC_TIMBER = [0.72, 0.68, 0.7], TC_ROOF = [0.55, 0.55, 0.58];
-export function addTwoCreeks(b) {
-  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot, H = dy + 4.4;
+// The check-in building (pin 12, Jack: "similar to 13") is the variant checkin: a taller storey, a longer clerestory, and
+// the timber gable standing over the porch in the middle of the front as its entrance instead of past the east end.
+export function addTwoCreeks(b, checkin = false) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot, H = dy + (checkin ? 5.6 : 4.4);
   const PD = 3.6, bz = -PD / 2, BL = L - PD;                     // the body sits back; the porch fills the front PD m
   const P = [
     part(BOX(W, H, BL, 0, 0, bz), TC_TAN, M, TILES.siding),
@@ -424,7 +426,7 @@ export function addTwoCreeks(b) {
     part(BOX(W, 0.25, PD, 0, dy - 0.1, L / 2 - PD / 2), WALL, M, TILES.deck),                                      // porch deck
   ];
   // front windows in pairs, blue-grey frames; doors under the two small gables
-  const zf = bz + BL / 2 + 0.05, doors = [-W / 4, W / 4];
+  const zf = bz + BL / 2 + 0.05, doors = checkin ? [0] : [-W / 4, W / 4];
   for (let cx = -W / 2 + 3; cx <= W / 2 - 3; cx += 3.2) {
     if (doors.some((d) => Math.abs(cx - d) < 2)) continue;
     P.push(part(BOX(2.3, 2.9, 0.1, cx, dy + 1.0, zf), TC_BLUE, M), part(BOX(1.9, 2.5, 0.12, cx, dy + 1.2, zf + 0.02), WIN, M, TILES.window));
@@ -443,33 +445,33 @@ export function addTwoCreeks(b) {
     P.push(part(new THREE.CylinderGeometry(0.17, 0.17, 1.0, 6).applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2)).translate(rx, H - 0.15, L / 2 + ov - 0.2), TC_TIMBER, M, TILES.cedar));
   }
   // clerestory on the ridge: a band of windows under its own low hip
-  const cw = W * 0.5, cl = 5, cy = H + RH * 0.55;
+  const cw = W * (checkin ? 0.7 : 0.5), cl = checkin ? 4 : 5, cy = H + RH * 0.55;
   P.push(part(BOX(cw, 2.4, cl, 0, cy - 0.3), TC_TAN, M, TILES.siding));
   for (const s of [-1, 1]) P.push(part(BOX(cw - 1, 1.5, 0.1, 0, cy + 0.3, s * (cl / 2 + 0.05)), WIN, M, TILES.window));
   P.push(part(hip(cw + 1.6, cl + 1.6, 1.4).translate(0, cy + 2.1, 0), TC_ROOF, M, TILES.metalRoof), part(hip(cw + 1.0, cl + 1.0, 1.3).translate(0, cy + 2.3, 0), SNOWCAP, M));
   // small gables over the doors, standing out of the front roof slope
-  for (const d of doors) {
+  for (const d of checkin ? [] : doors) {
     P.push(part(gable(6, 4, 2.6).translate(d, H, L / 2 + ov - 2), TC_ROOF, M, TILES.metalRoof), part(gable(5.4, 3.8, 2.3).translate(d, H + 0.2, L / 2 + ov - 2), SNOWCAP, M));
     P.push(part(gable(5.2, 0.1, 2.2).translate(d, H, L / 2 + ov), TC_TAN, M, TILES.siding));
   }
-  // the timber entrance gable, free standing past the east end
-  const ex = W / 2 + 5, ew = 7, ed = 6, eh = dy + 4.2;
+  // the timber entrance gable (gable ends to the front and back): past the east end, or over the check-in's porch
+  const ex = checkin ? 0 : W / 2 + 5, ew = checkin ? 8 : 7, ed = 6, eh = dy + 4.2, ez = checkin ? L / 2 + 2 : L / 2 - ed / 2;
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    P.push(part(BOX(0.6, eh - dy, 0.6, ex + sx * (ew / 2 - 0.4), dy, L / 2 - ed / 2 + sz * (ed / 2 - 0.4)), TC_TIMBER, M, TILES.cedar));
-    P.push(part(BOX(0.8, 0.6, 0.8, ex + sx * (ew / 2 - 0.4), dy - 0.3, L / 2 - ed / 2 + sz * (ed / 2 - 0.4)), [1, 1, 1], M, TILES.stone));
+    P.push(part(BOX(0.6, eh - dy, 0.6, ex + sx * (ew / 2 - 0.4), dy, ez + sz * (ed / 2 - 0.4)), TC_TIMBER, M, TILES.cedar));
+    P.push(part(BOX(0.8, 0.6, 0.8, ex + sx * (ew / 2 - 0.4), dy - 0.3, ez + sz * (ed / 2 - 0.4)), [1, 1, 1], M, TILES.stone));
   }
-  P.push(part(gable(ew + 1.4, ed + 1.0, 4.6).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(ex, eh, L / 2 - ed / 2), TC_ROOF, M, TILES.metalRoof));
-  P.push(part(gable(ew + 0.8, ed + 0.6, 4.3).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(ex, eh + 0.2, L / 2 - ed / 2), SNOWCAP, M));
+  P.push(part(gable(ew + 1.4, ed + 1.0, 4.6).translate(ex, eh, ez), TC_ROOF, M, TILES.metalRoof));
+  P.push(part(gable(ew + 1.2, ed + 1.2, 4.45).translate(ex, eh + 0.35, ez), SNOWCAP, M));
   for (const sz of [-1, 1]) {
-    const zz = L / 2 - ed / 2 + sz * (ed / 2 - 0.4);
+    const zz = ez + sz * (ed / 2 - 0.4);
     P.push(part(BOX(ew, 0.5, 0.5, ex, eh - 0.5, zz), TC_TIMBER, M, TILES.cedar));                                  // tie beams
     for (const s of [-1, 1]) {                                                                                     // rafters
-      const g = BOX(0.4, 4.6, 0.4).translate(0, -2.3, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(s * 2.3)).translate(ex, eh + 4.0, zz);
+      const g = BOX(0.4, 4.6, 0.4).translate(0, -2.3, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(s * 0.84)).translate(ex, eh + 4.1, zz);
       P.push(part(g, TC_TIMBER, M, TILES.cedar));
     }
   }
   bucket(STAND_INS, x, z, ...P);
-  solidBox(x, z, yaw, w, l, bot, H + RH, 'Two Creeks base camp');
+  solidBox(x, z, yaw, w, l, bot, H + RH, checkin ? 'Two Creeks check-in' : 'Two Creeks base camp');
 }
 
 // The Base (pin 7, ref in references/buildings/base-7/): a large building on a distinctive grey rock base, with the

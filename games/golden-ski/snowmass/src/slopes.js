@@ -17,6 +17,7 @@ const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, 
   [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan'],   // batch 3
   [424.2, -4442.9, 'lizard'], [447.5, -4368.0, 'announcer'],
   // Two Creeks base camp: drawn on the B block as one rectangle over both B and C (C is skipped)
+  [4107.2, -5710.2, 'checkin'],                                                   // Two Creeks check-in (pin 12)
   [4161.0, -5709.5, 'twocreeks', { x: 4186.5, z: -5702.1, yawD: -16.6, w: 78, l: 26, y0: 2470.6, y1: 2475.1 }]];                                                   // batch 5
 const SKIP = [[-338.6, -2933.0], [4203.8, -5696.7],   // the second Two Creeks block, inside the base camp                      // a shed footprint inside the trail-map stand
   [1300.1, -4972.3]];                                  // a box overlapping the Westin, which hid it
@@ -299,6 +300,7 @@ if (RUN_DATA) {
       else if (special[2] === 'tan') addTanHotel(b);
       else if (special[2] === 'lizard') addLizardLodge(b);
       else if (special[2] === 'twocreeks') addTwoCreeks(b);
+      else if (special[2] === 'checkin') addTwoCreeks(b, true);
       else {
         const g = sampleBase(x, z, { h: 0, gx: 0, gz: 0 }), n = Math.hypot(g.gx, g.gz) || 1;
         (special[2] === 'announcer' ? addAnnouncer : addUp4Pizza)(b, [g.gx / n, g.gz / n]);
