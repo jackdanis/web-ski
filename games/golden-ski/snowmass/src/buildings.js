@@ -16,7 +16,7 @@ while (TILE_AVG.length < 32) TILE_AVG.push([1, 1, 1]);
 export const modelMat = new THREE.ShaderMaterial({
   vertexColors: true,
   uniforms: Object.assign({ uAtlas: { value: stationT }, uAtlasN: { value: stationN },
-    uAvg: { value: TILE_AVG.map((c) => new THREE.Vector3(...c)) } }, LIGHT),
+    uAvg: { value: TILE_AVG.map((c) => new THREE.Vector3(...c)) }, uGlow: { value: 0 } }, LIGHT),
   vertexShader: /* glsl */ `
     attribute float aH;
     attribute vec3 aT;
@@ -35,7 +35,7 @@ export const modelMat = new THREE.ShaderMaterial({
     }`,
   fragmentShader: /* glsl */ `
     ${LIGHT_GLSL}
-    uniform sampler2D uAtlas, uAtlasN; uniform vec3 uAvg[32];
+    uniform sampler2D uAtlas, uAtlasN; uniform vec3 uAvg[32]; uniform float uGlow;
     varying vec3 vC; varying vec3 vP; varying float vD; varying float vH; varying vec3 vT;
     void main() {
       vec3 n = normalize(cross(dFdx(vP), dFdy(vP)));
@@ -62,6 +62,7 @@ export const modelMat = new THREE.ShaderMaterial({
       float lit = 1.0 - shade(vP + vec3(sunXZ.x, 0.0, sunXZ.y) * 1.5) * (1.0 - smoothstep(0.0, 4.0, vH));
       vec3 l = uSunC * band(max(0.0, dot(n, uSun))) * lit + uSky * (0.35 + 0.35 * n.y)
              + uBounce * band0(max(0.0, -n.y * 0.8 + 0.15)) * 0.5 + lamps(vP, n) * 1.2 + 0.05;
+      if (vT.z < -0.5) l = mix(l, vec3(1.25), uGlow);
       gl_FragColor = vec4(finish(alb, l, vD, 1.25), 1.0);
     }`,
 });
@@ -89,6 +90,12 @@ export function part(g, col, m, tile = -1) {
   if (m) g.applyMatrix4(m);
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   g.setAttribute('aH', new THREE.BufferAttribute(h, 1));
+  return g;
+}
+// mark a part as lit from inside: it shows its own colour, unshaded, at dusk and night (uGlow, set by applyTime)
+export function glow(g) {
+  const t = g.attributes.aT.array;
+  for (let i = 2; i < t.length; i += 3) t[i] = -1;
   return g;
 }
 function partUV(g, col, tile, u0 = 0, u1 = 1, v0 = 0, v1 = 1) {
@@ -826,8 +833,7 @@ export function addVenga(b) {
 //   one long gable roof.
 // 'chalet' (chalet house): a stone plinth, two dark wood floors, a steep gable whose end faces the run, a balcony and a
 //   tall window in the gable, a stone chimney.
-// 'village' (village block): shop windows under striped awnings on the ground floor, two stucco floors with rows of
-//   windows, a low roof behind a parapet.
+// 'village' (village block): Snowmass Mall, see the village branch below.
 // 'hut' (on-mountain hut): one log storey (two on big footprints), a deep snowy gable, a door and a window to the run,
 //   a stove pipe.
 // Colours vary by position from a short palette per look, so neighbours differ.
@@ -835,15 +841,20 @@ const KIT = {
   condo: [{ wall: [1.15, 0.95, 0.8], trim: [0.9, 0.72, 0.55], roof: [0.34, 0.34, 0.36] }, { wall: [0.62, 0.72, 0.9], trim: [0.85, 0.85, 0.85], roof: [0.3, 0.32, 0.36] },
     { wall: [1.4, 1.35, 1.3], trim: [0.62, 0.47, 0.36], roof: [0.5, 0.3, 0.24] }],
   chalet: [{ wall: [0.62, 0.47, 0.36], roof: [0.34, 0.34, 0.36] }, { wall: [0.9, 0.7, 0.52], roof: [0.5, 0.3, 0.24] }, { wall: [0.5, 0.55, 0.5], roof: [0.3, 0.31, 0.33] }],
-  village: [{ wall: [0.88, 0.82, 0.68], awn: [[0.7, 0.16, 0.12], [0.95, 0.93, 0.88]] }, { wall: [0.74, 0.64, 0.5], awn: [[0.15, 0.3, 0.55], [0.95, 0.93, 0.88]] },
-    { wall: [0.8, 0.74, 0.7], awn: [[0.2, 0.42, 0.28], [0.95, 0.93, 0.88]] }],
+  village: [{ white: [1.42, 1.4, 1.36], trim: [1.2, 1.18, 1.15], wood: [0.62, 0.45, 0.32] }, { white: [1.3, 1.3, 1.32], trim: [0.95, 0.95, 0.97], wood: [0.5, 0.38, 0.29] },
+    { white: [1.38, 1.32, 1.22], trim: [1.1, 1.05, 0.98], wood: [0.7, 0.52, 0.36] }],
   hut: [{ wall: [1.0, 0.82, 0.68], roof: [0.5, 0.3, 0.24] }, { wall: [0.85, 0.7, 0.58], roof: [0.34, 0.34, 0.36] }],
 };
 const KIT_RAIL = [0.16, 0.14, 0.13], KIT_SLAB = [0.9, 0.72, 0.55];
+const MALL_WALK = 2.6, MALL_WOOD = [0.55, 0.4, 0.28], MALL_FASCIA = [0.32, 0.24, 0.18], MALL_BAND = [0.42, 0.47, 0.56], MALL_EDGE = [0.5, 0.52, 0.56];
+const MALL_SHOP = [1.55, 1.15, 0.6], MALL_SIGN = [[0.3, 0.2, 0.14], [0.55, 0.16, 0.12], [0.16, 0.26, 0.4], [0.2, 0.32, 0.22]];
 export function addKitBuilding(b, kind) {
-  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
+  const F = frameOf(b), { W, L } = F, P = [];
+  let M = F.m(0);
   const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
   const gs = [[-W / 2, -L / 2], [W / 2, -L / 2], [-W / 2, L / 2], [W / 2, L / 2], [0, 0]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+  // the Mall's walkway goes on the uphill long side, where it meets the snow at grade
+  if (kind === 'village' && gs[0] + gs[1] > gs[2] + gs[3]) M = M.clone().multiply(new THREE.Matrix4().makeRotationY(Math.PI));
   const lo = Math.min(...gs) - 1, hi = Math.max(...gs) + 0.3, pal = KIT[kind][Math.abs(Math.round(b.x * 3 + b.z * 7)) % KIT[kind].length];
   const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2), FH = 3.0;
   // a row of n windows across len on the front (+z) or back face, or along a side
@@ -892,27 +903,87 @@ export function addKitBuilding(b, kind) {
     P.push(part(BOX(1.3, top + 0.8 - lo, 1.3, W / 2 - 1.2, lo, -L / 4), RICH.stone, M, TILES.stone));
     P.push(part(BOX(1.6, 0.12, 1.6, W / 2 - 1.2, top + 0.8, -L / 4), SNOWCAP, M));
   } else if (kind === 'village') {
-    const f1 = hi + 3.6, floors = Math.max(1, Math.min(3, Math.round((b.h || 10) / FH) - 1)), fT = f1 + floors * FH;
-    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
-    P.push(part(BOX(W, fT - f1, L, 0, f1, 0), pal.wall, M));
-    P.push(part(BOX(W + 0.3, 0.6, L + 0.3, 0, fT, 0), pal.wall.map((c) => c * 0.8), M));                 // parapet
-    P.push(part(BOX(W - 0.4, 0.12, L - 0.4, 0, fT + 0.3, 0), SNOWCAP, M));                                // snow inside it
-    const shops = Math.max(1, Math.min(6, Math.floor(W / 6)));
-    for (let k = 0; k < shops; k++) {
-      const cx = -W / 2 + (k + 0.5) * W / shops, sw = W / shops - 1.2;
-      P.push(part(BOX(sw, 2.6, 0.12, cx, hi + 0.2, L / 2 + 0.05), WIN, M, TILES.window));
-      // awning: a sloped slab in stripes of the two colours
-      const n = Math.max(2, Math.round(sw / 0.8));
-      for (let s = 0; s < n; s++) {
-        const g = BOX(sw / n, 0.08, 1.4, cx - sw / 2 + (s + 0.5) * sw / n, 0, 0).applyMatrix4(new THREE.Matrix4().makeRotationX(0.35)).translate(0, hi + 3.2, L / 2 + 0.75);
-        P.push(part(g, pal.awn[s % 2], M));
+    // Snowmass Mall (Jack's photos 2026-11-02, references/buildings/snowmass-mall/): every block has the Mall's ground
+    // floor, warm shop windows under a covered wood walkway with a deck and rail on top. Big blocks rise above it as
+    // tiered white hotels: floors step back from the run, each tier a dark band of windows and balconies under a white
+    // slab, flat snowy roofs. Small blocks are brown wood lodges with flat roofs and a balcony on each floor.
+    const f1 = hi + 3.6, hotel = W * L >= 700;
+    const floors = hotel ? Math.max(3, Math.min(6, Math.round((b.h || 14) / FH))) : Math.max(1, Math.min(3, Math.round((b.h || 10) / FH) - 1));
+    // on a slope the building goes on down to the snow as walkout floors (windows on the back and sides) above a low
+    // stone plinth, so the downhill side is not one tall stone wall
+    const nb = Math.max(0, Math.floor((hi - lo - 1.2) / FH)), yb = hi - nb * FH;
+    P.push(part(BOX(W, yb - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    if (nb) {
+      P.push(hotel ? part(BOX(W, hi - yb, L, 0, yb, 0), pal.white, M) : part(BOX(W, hi - yb, L, 0, yb, 0), pal.wood, M, TILES.siding));
+      for (let f = 0; f < nb; f++) {
+        const fy = yb + f * FH;
+        if (hotel) {
+          P.push(part(BOX(W - 1.2, 1.5, 0.1, 0, fy + 0.8, -L / 2 - 0.06), MALL_BAND, M));
+          for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, L - 2, s * (W / 2 + 0.06), fy + 0.8, 0), MALL_BAND, M));
+        } else {
+          row(fy + 0.6, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+          for (const s of ['l', 'r']) row(fy + 0.6, 1.6, s, L - 3, Math.max(1, Math.floor(L / 4)), 1.1);
+        }
       }
     }
-    for (let f = 0; f < floors; f++) {
-      row(f1 + f * FH + 0.6, 1.7, 'f', W - 2, Math.max(2, Math.floor(W / 2.6)), 1.1);
-      row(f1 + f * FH + 0.6, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+    // shop storey: stone on the walkway side only, the building's own wall (and a row of windows) round the rest
+    P.push(hotel ? part(BOX(W, f1 - hi, L, 0, hi, 0), pal.white, M) : part(BOX(W, f1 - hi, L, 0, hi, 0), pal.wood, M, TILES.siding));
+    P.push(part(BOX(W + 0.1, f1 - hi, 0.3, 0, hi, L / 2 - 0.1), RICH.stone, M, TILES.stone));
+    if (nb && hotel) {
+      P.push(part(BOX(W - 1.2, 1.5, 0.1, 0, hi + 1.0, -L / 2 - 0.06), MALL_BAND, M));
+      for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, L - 2, s * (W / 2 + 0.06), hi + 1.0, 0), MALL_BAND, M));
+    } else if (nb) row(hi + 0.8, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+    const shops = Math.max(1, Math.min(6, Math.floor(W / 6)));
+    for (let k = 0; k < shops; k++) {
+      const cx = -W / 2 + (k + 0.5) * W / shops, sw = W / shops - 1.4;
+      P.push(glow(part(BOX(sw, 2.7, 0.12, cx, hi + 0.15, L / 2 + 0.05), MALL_SHOP, M)));                       // lit at dusk and night
+      const bars = Math.max(1, Math.round(sw / 1.5));                                                        // mullions
+      for (let m = 0; m <= bars; m++) P.push(part(BOX(0.12, 2.7, 0.08, cx - sw / 2 + m * sw / bars, hi + 0.15, L / 2 + 0.13), MALL_FASCIA, M));
+      P.push(part(BOX(sw, 0.12, 0.08, cx, hi + 2.0, L / 2 + 0.13), MALL_FASCIA, M));
+      P.push(part(BOX(sw + 0.4, 0.5, 0.16, cx, hi + 2.95, L / 2 + 0.08), MALL_SIGN[(k + Math.round(b.x)) % MALL_SIGN.length], M));   // sign board
     }
-    top = fT + 0.6;
+    const posts = Math.max(2, Math.round(W / 4) + 1), dz = L / 2 + MALL_WALK;
+    for (let k = 0; k < posts; k++) P.push(part(BOX(0.3, f1 - hi, 0.3, -W / 2 + 0.3 + k * (W - 0.6) / (posts - 1), hi, dz - 0.2), MALL_WOOD, M, TILES.cedar));
+    P.push(part(BOX(W, 0.35, MALL_WALK, 0, f1 - 0.35, L / 2 + MALL_WALK / 2), MALL_WOOD, M, TILES.cedar));                  // deck
+    P.push(part(BOX(W - 0.2, 0.1, MALL_WALK - 0.2, 0, f1, L / 2 + MALL_WALK / 2), SNOWCAP, M));
+    P.push(part(BOX(W, 1.0, 0.08, 0, f1, dz - 0.05), KIT_RAIL, M));                                                         // rail
+    if (hotel) {
+      // tiers: floors share out over 2-3 steps, each set back 8 m from the walkway and 3 m from the sides
+      const tiers = Math.min(3, Math.max(2, Math.floor(floors / 2))), per = Math.ceil(floors / tiers);
+      let y = f1, w = W, back = 0;
+      for (let t = 0, left = floors; t < tiers && left > 0 && w > 8 && L - back > 8; t++) {
+        const n = Math.min(per, left), d = L - back, cz = -L / 2 + d / 2;
+        P.push(part(BOX(w, n * FH, d, 0, y, cz), pal.white, M));
+        for (let f = 0; f < n; f++) {
+          const fy = y + f * FH;
+          P.push(part(BOX(w - 1.2, 1.5, 0.1, 0, fy + 0.8, cz + d / 2 + 0.06), MALL_BAND, M));            // window band
+          P.push(part(BOX(w - 1.2, 1.5, 0.1, 0, fy + 0.8, cz - d / 2 - 0.06), MALL_BAND, M));
+          for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, d - 2, s * (w / 2 + 0.06), fy + 0.8, cz), MALL_BAND, M));
+          P.push(part(BOX(w - 0.8, 0.9, 0.08, 0, fy + 0.15, cz + d / 2 + 1.1), pal.trim, M));                           // balcony rail
+          P.push(part(BOX(w - 0.8, 0.18, 1.2, 0, fy - 0.03, cz + d / 2 + 0.6), pal.white, M));                         // balcony slab
+        }
+        y += n * FH; left -= n;
+        P.push(part(BOX(w + 0.4, 0.6, d + 0.4, 0, y, cz), MALL_EDGE, M));                                              // grey roof edge
+        P.push(part(BOX(w - 0.2, 0.14, d - 0.2, 0, y + 0.42, cz), SNOWCAP, M));                                        // snow on the roof
+        w -= 6; back += 8;
+      }
+      top = y + 0.6;
+    } else {
+      const fT = f1 + floors * FH;
+      P.push(part(BOX(W, fT - f1, L, 0, f1, 0), pal.wood, M, TILES.siding));
+      for (let f = 0; f < floors; f++) {
+        const fy = f1 + f * FH;
+        row(fy + 0.6, 1.8, 'f', W - 2, Math.max(2, Math.floor(W / 3)), 1.6);
+        row(fy + 0.6, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+        if (f > 0) {
+          P.push(part(BOX(W - 1, 0.22, 1.6, 0, fy - 0.1, L / 2 + 0.8), MALL_WOOD, M, TILES.cedar));
+          P.push(part(BOX(W - 1, 1.0, 0.07, 0, fy + 0.12, L / 2 + 1.58), KIT_RAIL, M));
+        }
+      }
+      P.push(part(BOX(W + 1.2, 0.55, L + 1.2, 0, fT, 0), MALL_FASCIA, M, TILES.cedar));                               // flat roof, deep fascia
+      P.push(part(BOX(W + 0.9, 0.16, L + 0.9, 0, fT + 0.52, 0), SNOWCAP, M));
+      top = fT + 0.7;
+    }
   } else {
     const floors = W * L > 500 ? 2 : 1, wt = hi + floors * FH, gh = Math.min(5, L * 0.42);
     P.push(part(BOX(W, hi + 0.4 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));

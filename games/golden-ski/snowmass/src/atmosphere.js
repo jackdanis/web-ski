@@ -3,7 +3,7 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
 import { state } from './state.js';
 import { CELL, PAGE, X0, Z0 } from './world.js';
 import { BOUNCE, FOG, LIGHT, SH_PX, SH_SIZE, SKIES, SKY_COLOR, SKY_EDGE, SKY_TOPS, SNOW_ALBEDO, SUN_COLOR, SUN_DIR, TIMES, camera, canvas, renderer, scene, sky } from './scene.js';
-import { casters, lampList } from './buildings.js';
+import { casters, lampList, modelMat } from './buildings.js';
 import { atlas, pages, treeMat } from './trees.js';
 import { kickMatMat, kickSnowMat } from './lifts.js';
 import { mogulMat } from './snow.js';
@@ -139,6 +139,7 @@ export function applyTime(key) {
   treeMat.uniforms.uA.value = key === 'storm' ? atlas.stormMap : atlas.map;
   treeMat.uniforms.uN.value = key === 'storm' ? atlas.stormNormal : atlas.normal;
   bulbMat.color.set(key === 'night' ? 0xffe9a8 : 0x2a2a2a);
+  modelMat.uniforms.uGlow.value = key === 'night' ? 1 : key === 'golden' ? 0.45 : 0;     // shop windows
   flakes.visible = key === 'storm';
   setLamps(key === 'night');
   paintShadows(true);
