@@ -131,40 +131,37 @@ export const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n'
 // storm: the snow-plastered spruce replaces the spruce
 export const stormImgs = await Promise.all(['sprites/storm_spruce', 'sprites/storm_spruce_n'].map(loadImg));
 
-// Sky strip on an open cylinder that rides with the camera, drawn behind everything.
+// The sky (2026-11-02): one sphere that rides with the camera, drawn behind everything. Each direction picks its colour
+// from its height above the horizon: the time of day's sky strip wraps the lower sky (mirrored four times round, as
+// the old cylinder did), and from about 20 degrees up it blends into the sky-top image, laid over the zenith like a
+// fisheye photo. Storm has no sky-top image: its strip fades into the strip's own top colour.
 export const sky = (() => {
-  for (const t of Object.values(SKIES)) {
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.wrapS = THREE.MirroredRepeatWrapping;
-    t.repeat.set(4, 0.86);
-    t.offset.set(0, 0.14);
-  }
-  const R = 1000, HS = 2 * Math.PI * R / 4 * (192 / 344) * 0.86;
-  const mat = new THREE.MeshBasicMaterial({ map: skyT, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false });
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(R, R, HS, 48, 1, true), mat);
-  m.renderOrder = -2;
-  m.frustumCulled = false;
-  m.userData.h = HS;
-  // the top of the skybox (2026-11-02): a disc over the strip with the sky-top image for the time of day, fading at its
-  // rim into the colour of the strip's top row so the two meet without a seam. Storm has no image: the rim colour only.
-  const cap = new THREE.Mesh(new THREE.CircleGeometry(R, 48).rotateX(Math.PI / 2).translate(0, HS / 2, 0), new THREE.ShaderMaterial({
-    uniforms: { uMap: { value: SKY_TOPS.noon }, uEdge: { value: new THREE.Color() }, uHas: { value: 1 } },
-    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-    fragmentShader: `uniform sampler2D uMap; uniform vec3 uEdge; uniform float uHas; varying vec2 vUv;
+  for (const t of [...Object.values(SKIES), ...Object.values(SKY_TOPS)]) { t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.needsUpdate = true; }
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uStrip: { value: skyT }, uTop: { value: SKY_TOPS.noon }, uEdge: { value: new THREE.Color() }, uHas: { value: 1 } },
+    vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D uStrip, uTop; uniform vec3 uEdge; uniform float uHas; varying vec3 vDir;
       void main() {
-        float r = length(vUv - 0.5) * 2.0;
-        vec3 c = uHas > 0.5 ? texture2D(uMap, vUv).rgb : uEdge;
-        gl_FragColor = vec4(mix(c, uEdge, smoothstep(0.55, 1.0, r)), 1.0);
+        vec3 d = normalize(vDir);
+        float e = asin(clamp(d.y, -1.0, 1.0));
+        // strip: 4 mirrored copies round the horizon; its rows run from 6 degrees below the horizon to 33 above
+        float x = (atan(d.z, d.x) / 6.2831853 + 0.5) * 4.0, m = mod(x, 2.0), u = m < 1.0 ? m : 2.0 - m;
+        float v = clamp((tan(clamp(e, -0.5, 1.2)) + 0.105) / 0.754, 0.0, 1.0);
+        vec3 strip = texture2D(uStrip, vec2(u, 0.14 + 0.86 * v)).rgb;
+        strip = mix(strip, uEdge, smoothstep(0.75, 1.0, v));
+        // top: fisheye over the zenith, its rim at about 20 degrees up
+        vec2 q = d.xz / (1.0 + d.y);
+        vec3 top = uHas > 0.5 ? texture2D(uTop, 0.5 + q * 0.62).rgb : uEdge;
+        gl_FragColor = vec4(mix(strip, top, smoothstep(0.30, 0.62, e)), 1.0);
         #include <colorspace_fragment>
       }`,
-    side: THREE.DoubleSide, depthWrite: false, depthTest: false, fog: false,
-  }));
-  cap.renderOrder = -2;
-  cap.frustumCulled = false;
-  m.add(cap);
-  m.userData.cap = cap;
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+  });
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24), mat);
+  m.renderOrder = -2;
+  m.frustumCulled = false;
   scene.add(m);
-  // below the strip, the haze color
+  // below the sky, the haze color
   scene.background = new THREE.Color().setRGB(FOG.x, FOG.y, FOG.z, THREE.SRGBColorSpace);
   return m;
 })();

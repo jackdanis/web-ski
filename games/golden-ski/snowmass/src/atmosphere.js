@@ -131,10 +131,10 @@ export function applyTime(key) {
   LIGHT.uFogNear.value = T.fog[0]; LIGHT.uFogFar.value = T.fog[1];
   BOUNCE.copy(SUN_COLOR).multiplyScalar(Math.max(0, SUN_DIR.y)).addScaledVector(SKY_COLOR, 0.6).multiply(SNOW_ALBEDO);
   LIGHT.uLampC.value.set(...T.lamp);
-  sky.material.map = SKIES[key]; sky.material.needsUpdate = true;
-  const capU = sky.userData.cap.material.uniforms;
-  capU.uHas.value = SKY_TOPS[key] ? 1 : 0; if (SKY_TOPS[key]) capU.uMap.value = SKY_TOPS[key];
-  capU.uEdge.value.copy(SKY_EDGE[key]);
+  const skyU = sky.material.uniforms;
+  skyU.uStrip.value = SKIES[key];
+  skyU.uHas.value = SKY_TOPS[key] ? 1 : 0; if (SKY_TOPS[key]) skyU.uTop.value = SKY_TOPS[key];
+  skyU.uEdge.value.copy(SKY_EDGE[key]);
   scene.background.setRGB(FOG.x, FOG.y, FOG.z, THREE.SRGBColorSpace);
   treeMat.uniforms.uA.value = key === 'storm' ? atlas.stormMap : atlas.map;
   treeMat.uniforms.uN.value = key === 'storm' ? atlas.stormNormal : atlas.normal;

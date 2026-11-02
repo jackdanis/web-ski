@@ -305,7 +305,7 @@ function render(alpha, dt) {
   updateMoguls();
   updateRings();
   updateTrees(snap);
-  sky.position.set(camera.position.x, camera.position.y + sky.userData.h * 0.36, camera.position.z);
+  sky.position.copy(camera.position);
 
   const dY = riding ? 0 : drawnSnowDY(p.x, p.z);
   drawSkier(p, riding, dY);
