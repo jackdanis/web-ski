@@ -81,7 +81,9 @@ export const atlas = (() => {
 const CLUMP_IDS = { conifer: [], aspen: [], snowghost: [] };
 atlas.rects.forEach((r, n) => { if (r.clump) CLUMP_IDS[r.clump].push(n); });
 export const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5, gate_red: 6, gate_blue: 7, outcrop: 8 };
-export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0, 0, 0, 0];      // trunk radius as a share of height
+export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0, 0, 0, 0];      // branch reach as a share of height (keeps trees off run edges)
+// Collision is the trunk only, as wide as the sprite draws it, so a skier can thread between trees.
+export const TRUNK_R = [0.024, 0.02, 0.03, 0.12, 0, 0, 0, 0, 0];
 export const pages = new Map();
 export function makePage(pi, pj) {
   const key = pi * 1000 + pj;
@@ -125,7 +127,7 @@ export function makePage(pi, pj) {
         const x = X0 + (i + ox) * CELL, z = Z0 + (j + oz) * CELL;
         const height = kind === KIND.snowghost ? 2.2 + r3 * 1.6 : kind === KIND.aspen ? 10 + r4 * 5 : kind === KIND.spruce ? 15 + r3 * 9 : 12 + r4 * 8;
         if (!clear(x, z, TREE_R[kind] * height)) continue;
-        const t = { x, z, y: groundY(x, z) - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TREE_R[kind] * height, kind };
+        const t = { x, z, y: groundY(x, z) - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TRUNK_R[kind] * height, kind };
         list.push(t);
         addObstacle(t);
       }

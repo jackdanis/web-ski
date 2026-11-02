@@ -5,7 +5,7 @@ import { MAP } from '../data/mountain.js';
 import { cellKey, hash2 } from './config.js';
 import { GROUND_ADD, addObstacle, groundY, nearSolid, treeCells } from './world.js';
 import { bucket, part, propBatch } from './buildings.js';
-import { KIND, TREE_R, addProp } from './trees.js';
+import { KIND, TRUNK_R, addProp } from './trees.js';
 
 export const GLADE_RUNS = ['Glade One', 'Glade Two', 'Glade Three', 'Coney Glade', 'Powerline Glades', 'Sneaky\'s Glades',
   'Hanging Valley Glades', 'Frog Pond Glades', 'Weird Woods'];
@@ -49,7 +49,7 @@ export function addGlades() {
         const ground = groundY(x, z), r3 = hash2(Math.round(x * 3), Math.round(z * 3)), r4 = hash2(Math.round(z * 5), Math.round(x * 2));
         const kind = ground > 3380 && r3 < 0.35 ? KIND.snowghost : r4 < (ground < 3000 ? 0.7 : 0.5) ? KIND.spruce : KIND.fir;
         const height = kind === KIND.snowghost ? 2.2 + r3 * 1.6 : kind === KIND.spruce ? 13 + r3 * 8 : 11 + r4 * 7;
-        const t = { x, z, y: ground - 0.3, height, r: TREE_R[kind] * height, kind };
+        const t = { x, z, y: ground - 0.3, height, r: TRUNK_R[kind] * height, kind };
         addProp(t);
         addObstacle(t);
         for (let ci = Math.floor((x - WELL_R) / 8); ci <= Math.floor((x + WELL_R) / 8); ci++) for (let cj = Math.floor((z - WELL_R) / 8); cj <= Math.floor((z + WELL_R) / 8); cj++) {

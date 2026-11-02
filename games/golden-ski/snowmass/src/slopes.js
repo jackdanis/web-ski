@@ -7,7 +7,7 @@ import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
 import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addKitBuilding, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
-import { KIND, TREE_R, addProp } from './trees.js';
+import { KIND, TRUNK_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 import { addMountainProps } from './props.js';
 import { addGlades } from './glades.js';
@@ -269,7 +269,7 @@ if (RUN_DATA) {
   for (let n = 0; n < B.ntrees; n++) {
     const o = n * 8, x = dv.getInt16(o, true) / 2, z = dv.getInt16(o + 2, true) / 2, height = dv.getUint8(o + 4) / 10, kind = dv.getUint8(o + 5) & 127;
     const ground = STATIONS.length && stationAt(x, z) ? groundY(x, z) : dv.getUint16(o + 6, true) / 10;
-    const t = { x, z, y: ground - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TREE_R[kind] * height, kind, fill: dv.getUint8(o + 5) >> 7 };
+    const t = { x, z, y: ground - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TRUNK_R[kind] * height, kind, fill: dv.getUint8(o + 5) >> 7 };
     addProp(t);
     addObstacle(t);
   }
