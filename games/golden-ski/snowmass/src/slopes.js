@@ -6,9 +6,11 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addKitBuilding, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
+import { addMountainProps } from './props.js';
+import { addGlades } from './glades.js';
 
 // ---------- Run props: trail signs, rope lines, fence ----------
 export const RUNS = MAP.runs || [];
@@ -28,6 +30,7 @@ const GONE = [[4080, 4200, -6180, -5900]];
 // (Lower) and Green Cabin (Lower) above Snowmass Mall; [x0, x1, z0, z1]
 const RICH_AREA = [1190, 1720, -4860, -4180];
 const RICH_KINDS = ['garage', 'chalet', 'hip'];
+const VILLAGE = MAP.meta.village;                     // the boilerplate kit's village blocks stand within 450 m of it
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
 function nearestRunPoint(x, z) {
   let best = Infinity, at = [x, z + 1];
@@ -270,6 +273,7 @@ if (RUN_DATA) {
     addProp(t);
     addObstacle(t);
   }
+  addGlades();                                     // after the real trees, so glade trees keep clear of them
   // Flagged course on Scooper (Lower) (batch 5, pin 4): red and blue gates alternating every 20 m down a line 50 m
   // beside the Scooper lift, 5 m either side of it. Markers only, no timing and no collision (gates bend).
   {
@@ -322,8 +326,16 @@ if (RUN_DATA) {
       addRichCabin({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 }, kind);
       continue;
     }
-    addBuilding({ x, z, yaw: yawD * Math.PI / 180, w, l, bot: y0 - 1, top: y1 + h, what: 'stand-in building' });
+    // the boilerplate kit (2026-11-02): huts on the mountain, village blocks round the Mall, condos on big footprints,
+    // chalet houses on the rest
+    {
+      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z), a = w * l;
+      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
+      const kind = y1 > 2900 || a < 40 ? 'hut' : Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < 450 && a >= 300 ? 'village' : a >= 400 ? 'condo' : 'chalet';
+      addKitBuilding({ x, z, yaw, w, l, h, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 }, kind);
+    }
   }
+  addMountainProps();
   flushBuildings();
 }
 // Groomer frame for the 2 m run mesh: each vertex's distance along and across the nearest groomed run line (and that

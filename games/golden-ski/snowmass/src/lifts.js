@@ -218,7 +218,7 @@ export const kickMatMat = modelMat.clone();
 Object.assign(kickMatMat, { uniforms: modelMat.uniforms, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
 const KICK_RED = [0.78, 0.12, 0.1], KICK_WHITE = [0.95, 0.96, 1.0];
 function buildKicker(k) {
-  const kB = { h: 0, gx: 0, gz: 0 }, step = 0.5, side = k.hw + k.h + step, y0 = sampleBase(k.x, k.z, kB).h;
+  const kB = { h: 0, gx: 0, gz: 0 }, step = k.step || 0.5, side = k.hw + k.h + step, y0 = sampleBase(k.x, k.z, kB).h;
   const toW = (u, v) => [k.x + k.fx * u - k.fz * v, k.z + k.fz * u + k.fx * v];
   const ground = (u, v) => { const [x, z] = toW(u, v); return [x, sampleBase(x, z, kB).h, z]; };
   // snow grid over the footprint, unlifted cells left out
@@ -238,6 +238,7 @@ function buildKicker(k) {
   for (let b = 0; b < vs.length - 1; b++) for (let a = 0; a < us.length - 1; a++) {
     const p = grid[b][a], q = grid[b][a + 1], r = grid[b + 1][a + 1], t = grid[b + 1][a];
     if (p[3] <= 0 && q[3] <= 0 && r[3] <= 0 && t[3] <= 0) continue;
+    if (k.cliff && vs[b] < -1e-6) continue;            // a cliff's lip ends sharp at v = 0: its face is drawn below it
     tri(p, q, r); tri(p, r, t);
   }
   const n = pos.length / 3, cov = new Float32Array(n * 4);

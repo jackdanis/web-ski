@@ -181,6 +181,7 @@ export function addByPage(map, mat, join = merge) {
 // Without a near model the box draws from 0, batched by page until flushBuildings(). near is a geometry, a mesh,
 // or a function returning either, called when the camera first comes within RING_NEAR.
 const STAND_INS = new Map();
+export const propBatch = STAND_INS;               // props.js batches its props with the stand-ins
 export function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof = null, near = null, mat = modelMat, solid = true, what = 'building' }) {
   const roofH = roof ? Math.min(0.5, (top - bot) * 0.1) : 0, m = placeM(x, bot, z, yaw);
   const box = [part(new THREE.BoxGeometry(w, top - bot - roofH, l).translate(0, (top - bot - roofH) / 2, 0), color, m)];
@@ -820,9 +821,118 @@ export function addVenga(b) {
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 
+// ---------- Boilerplate kit (2026-11-02): every stand-in left gets one of four looks, picked from its size and place ----------
+// 'condo' (slopeside condo): a stone ground floor, two to four wood floors with a balcony on each along the run side,
+//   one long gable roof.
+// 'chalet' (chalet house): a stone plinth, two dark wood floors, a steep gable whose end faces the run, a balcony and a
+//   tall window in the gable, a stone chimney.
+// 'village' (village block): shop windows under striped awnings on the ground floor, two stucco floors with rows of
+//   windows, a low roof behind a parapet.
+// 'hut' (on-mountain hut): one log storey (two on big footprints), a deep snowy gable, a door and a window to the run,
+//   a stove pipe.
+// Colours vary by position from a short palette per look, so neighbours differ.
+const KIT = {
+  condo: [{ wall: [1.15, 0.95, 0.8], trim: [0.9, 0.72, 0.55], roof: [0.34, 0.34, 0.36] }, { wall: [0.62, 0.72, 0.9], trim: [0.85, 0.85, 0.85], roof: [0.3, 0.32, 0.36] },
+    { wall: [1.4, 1.35, 1.3], trim: [0.62, 0.47, 0.36], roof: [0.5, 0.3, 0.24] }],
+  chalet: [{ wall: [0.62, 0.47, 0.36], roof: [0.34, 0.34, 0.36] }, { wall: [0.9, 0.7, 0.52], roof: [0.5, 0.3, 0.24] }, { wall: [0.5, 0.55, 0.5], roof: [0.3, 0.31, 0.33] }],
+  village: [{ wall: [0.88, 0.82, 0.68], awn: [[0.7, 0.16, 0.12], [0.95, 0.93, 0.88]] }, { wall: [0.74, 0.64, 0.5], awn: [[0.15, 0.3, 0.55], [0.95, 0.93, 0.88]] },
+    { wall: [0.8, 0.74, 0.7], awn: [[0.2, 0.42, 0.28], [0.95, 0.93, 0.88]] }],
+  hut: [{ wall: [1.0, 0.82, 0.68], roof: [0.5, 0.3, 0.24] }, { wall: [0.85, 0.7, 0.58], roof: [0.34, 0.34, 0.36] }],
+};
+const KIT_RAIL = [0.16, 0.14, 0.13], KIT_SLAB = [0.9, 0.72, 0.55];
+export function addKitBuilding(b, kind) {
+  const F = frameOf(b), { W, L } = F, M = F.m(0), P = [];
+  const at = (lx, lz) => new THREE.Vector3(lx, 0, lz).applyMatrix4(M);
+  const gs = [[-W / 2, -L / 2], [W / 2, -L / 2], [-W / 2, L / 2], [W / 2, L / 2], [0, 0]].map(([u, v]) => { const q = at(u, v); return groundY(q.x, q.z); });
+  const lo = Math.min(...gs) - 1, hi = Math.max(...gs) + 0.3, pal = KIT[kind][Math.abs(Math.round(b.x * 3 + b.z * 7)) % KIT[kind].length];
+  const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2), FH = 3.0;
+  // a row of n windows across len on the front (+z) or back face, or along a side
+  const row = (y, h, face, len, n, pw = 1.4) => {
+    for (let k = 0; k < n; k++) {
+      const u = -len / 2 + (k + 0.5) * len / n;
+      const g = face === 'f' ? BOX(pw, h, 0.12, u, y, L / 2 + 0.05) : face === 'b' ? BOX(pw, h, 0.12, u, y, -L / 2 - 0.05)
+        : BOX(0.12, h, pw, (face === 'r' ? 1 : -1) * (W / 2 + 0.05), y, u);
+      P.push(part(g, WIN, M, TILES.window));
+    }
+  };
+  const snowRoof = (geo, snowGeo, col, y) => {
+    P.push(part(geo.translate(0, y, 0), col, M, TILES.metalRoof));
+    P.push(part(snowGeo.translate(0, y + 0.22, 0), SNOWCAP, M));
+  };
+  let top;
+  if (kind === 'condo') {
+    const floors = Math.max(2, Math.min(4, Math.round((b.h || 10) / FH) - 1)), f1 = hi + FH, fT = f1 + floors * FH, gh = Math.min(5, L * 0.32);
+    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, fT - f1, L, 0, f1, 0), pal.wall, M, TILES.siding));
+    row(hi + 0.4, 2.0, 'f', W - 2, Math.max(2, Math.floor(W / 4)));
+    for (let f = 0; f < floors; f++) {
+      const y = f1 + f * FH;
+      row(y + 0.5, 2.1, 'f', W - 2, Math.max(2, Math.floor(W / 3)));
+      row(y + 0.6, 1.6, 'b', W - 2, Math.max(2, Math.floor(W / 4)), 1.2);
+      P.push(part(BOX(W - 1, 0.22, 1.8, 0, y - 0.1, L / 2 + 0.9), KIT_SLAB, M, TILES.cedar));            // balcony slab
+      P.push(part(BOX(W - 1, 1.0, 0.07, 0, y + 0.12, L / 2 + 1.78), KIT_RAIL, M));                       // rail
+    }
+    snowRoof(gable(L + 2.2, W + 1.6, gh).applyMatrix4(rotZ), gable(L + 1.6, W + 1.0, gh).applyMatrix4(rotZ), pal.roof, fT);
+    for (const s of [-1, 1]) P.push(part(gable(L, 0.12, gh - 0.1).applyMatrix4(rotZ).translate(s * (W / 2 + 0.02), fT, 0), pal.trim, M, TILES.cedar));
+    top = fT + gh;
+  } else if (kind === 'chalet') {
+    const f1 = hi + FH, f2 = f1 + FH, gh = Math.min(6, W * 0.45);
+    P.push(part(BOX(W, hi + 0.6 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, f2 - hi - 0.6, L, 0, hi + 0.6, 0), pal.wall, M, TILES.siding));
+    // gable along z: its end, with a balcony and a tall window, faces the run
+    snowRoof(gable(W + 2.2, L + 2.0, gh), gable(W + 1.6, L + 1.4, gh), pal.roof, f2);
+    P.push(part(gable(W, 0.12, gh - 0.1).translate(0, f2, L / 2 + 0.02), pal.wall, M, TILES.siding));
+    P.push(part(BOX(Math.min(2.4, W * 0.3), Math.min(3.0, gh - 0.6), 0.12, 0, f2 + 0.1, L / 2 + 0.08), WIN, M, TILES.window));
+    row(hi + 0.7, 2.0, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
+    row(f1 + 0.5, 2.1, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
+    for (const s of ['l', 'r']) row(f1 + 0.6, 1.6, s, L - 3, Math.max(1, Math.floor(L / 5)), 1.2);
+    P.push(part(BOX(W - 0.6, 0.22, 1.6, 0, f1 - 0.1, L / 2 + 0.8), KIT_SLAB, M, TILES.cedar));
+    P.push(part(BOX(W - 0.6, 1.0, 0.07, 0, f1 + 0.12, L / 2 + 1.58), KIT_RAIL, M));
+    top = f2 + gh;
+    P.push(part(BOX(1.3, top + 0.8 - lo, 1.3, W / 2 - 1.2, lo, -L / 4), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(1.6, 0.12, 1.6, W / 2 - 1.2, top + 0.8, -L / 4), SNOWCAP, M));
+  } else if (kind === 'village') {
+    const f1 = hi + 3.6, floors = Math.max(1, Math.min(3, Math.round((b.h || 10) / FH) - 1)), fT = f1 + floors * FH;
+    P.push(part(BOX(W, f1 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, fT - f1, L, 0, f1, 0), pal.wall, M));
+    P.push(part(BOX(W + 0.3, 0.6, L + 0.3, 0, fT, 0), pal.wall.map((c) => c * 0.8), M));                 // parapet
+    P.push(part(BOX(W - 0.4, 0.12, L - 0.4, 0, fT + 0.3, 0), SNOWCAP, M));                                // snow inside it
+    const shops = Math.max(1, Math.min(6, Math.floor(W / 6)));
+    for (let k = 0; k < shops; k++) {
+      const cx = -W / 2 + (k + 0.5) * W / shops, sw = W / shops - 1.2;
+      P.push(part(BOX(sw, 2.6, 0.12, cx, hi + 0.2, L / 2 + 0.05), WIN, M, TILES.window));
+      // awning: a sloped slab in stripes of the two colours
+      const n = Math.max(2, Math.round(sw / 0.8));
+      for (let s = 0; s < n; s++) {
+        const g = BOX(sw / n, 0.08, 1.4, cx - sw / 2 + (s + 0.5) * sw / n, 0, 0).applyMatrix4(new THREE.Matrix4().makeRotationX(0.35)).translate(0, hi + 3.2, L / 2 + 0.75);
+        P.push(part(g, pal.awn[s % 2], M));
+      }
+    }
+    for (let f = 0; f < floors; f++) {
+      row(f1 + f * FH + 0.6, 1.7, 'f', W - 2, Math.max(2, Math.floor(W / 2.6)), 1.1);
+      row(f1 + f * FH + 0.6, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+    }
+    top = fT + 0.6;
+  } else {
+    const floors = W * L > 500 ? 2 : 1, wt = hi + floors * FH, gh = Math.min(5, L * 0.42);
+    P.push(part(BOX(W, hi + 0.4 - lo, L, 0, lo, 0), RICH.stone, M, TILES.stone));
+    P.push(part(BOX(W, wt - hi - 0.4, L, 0, hi + 0.4, 0), pal.wall, M, TILES.cedar));
+    snowRoof(gable(L + 2.4, W + 2.0, gh).applyMatrix4(rotZ), gable(L + 1.8, W + 1.4, gh).applyMatrix4(rotZ), pal.roof, wt);
+    for (const s of [-1, 1]) P.push(part(gable(L, 0.12, gh - 0.1).applyMatrix4(rotZ).translate(s * (W / 2 + 0.02), wt, 0), pal.wall, M, TILES.cedar));
+    P.push(part(BOX(1.1, 2.2, 0.12, -W / 4, hi + 0.4, L / 2 + 0.06), RICH.dark, M, TILES.cedar));           // door
+    row(hi + 1.2, 1.2, 'f', W / 2, Math.max(1, Math.floor(W / 6)), 1.4);
+    if (floors > 1) row(hi + FH + 0.8, 1.6, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
+    top = wt + gh;
+    P.push(part(BOX(0.3, 1.6, 0.3, W / 4, top - gh * 0.45, -L / 6), DARK, M));                         // stove pipe
+  }
+  const long = b.w >= b.l;
+  solidBox(b.x, b.z, b.yaw, long ? W : L, long ? L : W, lo, top - lo, kind === 'hut' ? 'hut' : kind === 'village' ? 'village building' : kind);
+  bucket(STAND_INS, b.x, b.z, ...P);
+}
+
 // ---------- Rocks: displaced icosahedra, snow on up-facing faces ----------
 export const ROCK_VARIANTS = 6, ROCK_MAX = 2500;
-function rockGeo(k) {
+export function rockGeo(k) {
   const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position, v = new THREE.Vector3();
   const sx = 0.8 + hash2(k, 1) * 0.6, sy = 0.6 + hash2(k, 2) * 0.6, sz = 0.7 + hash2(k, 3) * 0.6;
   // displace shared corners alike so faces stay closed

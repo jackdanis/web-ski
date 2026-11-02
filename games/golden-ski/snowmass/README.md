@@ -21,10 +21,13 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/state.js` | Game state that more than one file changes |
 | `src/world.js` | Ground sampling: heights, cover, runs, the 2 m run grid, solids, bridges, kickers |
 | `src/scene.js` | Renderer, camera, Snowlight, textures, sky, terrain mesh, work queue, far peaks |
-| `src/buildings.js` | Kit models, detail rings, rocks, lift terminals, the Elk Camp restaurant |
+| `src/buildings.js` | Kit models, detail rings, rocks, lift terminals, the Elk Camp restaurant, the boilerplate kit (condo, chalet, village block, hut) |
 | `src/trees.js` | Trees, clumps and props, paged in around the camera |
 | `src/lifts.js` | Lift lines, towers, cable, chairs, cabins; kicker meshes |
 | `src/slopes.js` | Signs, ropes, fence, roads, the 2 m run meshes and streaming, start points |
+| `src/props.js` | Mountain operations props: snow guns, snowcats, patrol huts, map boards and rope mazes at lift bottoms, ski racks |
+| `src/glades.js` | Trees through the glade runs, with tree wells |
+| `src/landforms.js` | Rock bands, cornices, wind lips and rock outcrops on the expert terrain |
 | `src/ride.js` | The chairlift ride cutscene |
 | `src/atmosphere.js` | Lamps, shadows, storm snow, time of day, pixel look |
 | `src/goldie.js` | Goldie's sprite, skis, shadow and spray |

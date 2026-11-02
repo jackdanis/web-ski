@@ -107,8 +107,25 @@ export const [goldiePoleT, goldiePoleN] = await Promise.all([loadTex('sprites/go
 goldiePoleT.flipY = goldiePoleN.flipY = false;
 export const GOLDIE_POLE = await (await fetch(new URL('../assets/sprites/goldie_pole.json', import.meta.url))).json();
 export const SKIES = { noon: skyT, golden: skyRest[0], night: skyRest[1], storm: skyRest[2] };
+export const SKY_TOPS = Object.fromEntries(await Promise.all(['noon', 'golden', 'night'].map(async (k) => {
+  const t = await loadTex(`sky/top_${k}`, { pixel: false });
+  t.colorSpace = THREE.SRGBColorSpace;
+  return [k, t];
+})));
+// the colour of each strip's top row, where the cap meets it
+export const SKY_EDGE = Object.fromEntries(Object.entries(SKIES).map(([k, t]) => {
+  const im = t.image, cv = document.createElement('canvas');
+  cv.width = im.width; cv.height = 2;
+  const g = cv.getContext('2d');
+  g.drawImage(im, 0, 0, im.width, 2, 0, 0, im.width, 2);
+  const d = g.getImageData(0, 0, im.width, 1).data;
+  let r = 0, gg = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; }
+  const n = d.length / 4;
+  return [k, new THREE.Color().setRGB(r / n / 255, gg / n / 255, b / n / 255, THREE.SRGBColorSpace)];
+}));
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
-export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign', 'gate_red', 'gate_blue'];
+export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign', 'gate_red', 'gate_blue', 'outcrop'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });
 export const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n']).map((n) => loadImg(`sprites/${n}`)));
 // storm: the snow-plastered spruce replaces the spruce
@@ -128,6 +145,24 @@ export const sky = (() => {
   m.renderOrder = -2;
   m.frustumCulled = false;
   m.userData.h = HS;
+  // the top of the skybox (2026-11-02): a disc over the strip with the sky-top image for the time of day, fading at its
+  // rim into the colour of the strip's top row so the two meet without a seam. Storm has no image: the rim colour only.
+  const cap = new THREE.Mesh(new THREE.CircleGeometry(R, 48).rotateX(Math.PI / 2).translate(0, HS / 2, 0), new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: SKY_TOPS.noon }, uEdge: { value: new THREE.Color() }, uHas: { value: 1 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D uMap; uniform vec3 uEdge; uniform float uHas; varying vec2 vUv;
+      void main() {
+        float r = length(vUv - 0.5) * 2.0;
+        vec3 c = uHas > 0.5 ? texture2D(uMap, vUv).rgb : uEdge;
+        gl_FragColor = vec4(mix(c, uEdge, smoothstep(0.55, 1.0, r)), 1.0);
+        #include <colorspace_fragment>
+      }`,
+    side: THREE.DoubleSide, depthWrite: false, depthTest: false, fog: false,
+  }));
+  cap.renderOrder = -2;
+  cap.frustumCulled = false;
+  m.add(cap);
+  m.userData.cap = cap;
   scene.add(m);
   // below the strip, the haze color
   scene.background = new THREE.Color().setRGB(FOG.x, FOG.y, FOG.z, THREE.SRGBColorSpace);

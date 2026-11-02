@@ -80,8 +80,8 @@ export const atlas = (() => {
 })();
 const CLUMP_IDS = { conifer: [], aspen: [], snowghost: [] };
 atlas.rects.forEach((r, n) => { if (r.clump) CLUMP_IDS[r.clump].push(n); });
-export const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5, gate_red: 6, gate_blue: 7 };
-export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0, 0, 0];      // trunk radius as a share of height
+export const KIND = { spruce: 0, fir: 1, aspen: 2, snowghost: 3, pole: 4, sign: 5, gate_red: 6, gate_blue: 7, outcrop: 8 };
+export const TREE_R = [0.11, 0.11, 0.07, 0.3, 0, 0, 0, 0, 0];      // trunk radius as a share of height
 export const pages = new Map();
 export function makePage(pi, pj) {
   const key = pi * 1000 + pj;
