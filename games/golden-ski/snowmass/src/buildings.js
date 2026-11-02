@@ -340,6 +340,138 @@ export function addMapStand(b) {
   solidBox(x, z, yaw, w >= l ? bw + 1 : 0.8, w >= l ? 0.8 : bw + 1, bot, by + bh + 1, 'trail map');
 }
 
+// Lizard Lodge (batch 5 pin 2, ref in references/buildings/scooper-base/lizard-lodge.png): the kids' cabin at the
+// bottom of Scooper. Tan board-and-batten walls over a band of stacked logs, red-brown trim and roof, and on the run
+// side a gabled porch on two peeled log posts with the blue LIZARD LODGE sign and a green door.
+const LZ_TAN = [1.22, 1.3, 1.5], LZ_TRIM = [0.5, 0.24, 0.18], LZ_ROOF = [1.7, 0.85, 0.65], LZ_DOOR = [0.16, 0.3, 0.24];
+function lizardSign() {
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 32;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#3d6fb6'; g.fillRect(0, 0, 256, 32);
+  g.fillStyle = '#e07a4f'; g.font = 'bold 22px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('LIZARD  LODGE', 128, 17);
+  g.fillStyle = '#b6e36a'; g.beginPath(); g.ellipse(128, 9, 14, 3, 0, 0, Math.PI * 2); g.fill();   // the lizard
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+export function addLizardLodge(b) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot, H = dy + 3.4;
+  const P = [
+    part(BOX(W, H - dy - 1.2, L, 0, dy + 1.2), LZ_TAN, M, TILES.siding),
+    part(BOX(W, dy + 1.2, L), LOG, M, TILES.cedar),                                           // log footing to the snow
+  ];
+  for (let k = 0; k < 4; k++) P.push(part(new THREE.CylinderGeometry(0.16, 0.16, W + 0.3, 8).applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI / 2))
+    .translate(0, dy + 0.18 + k * 0.32, L / 2 + 0.05), LOG, M, TILES.cedar));                    // stacked logs on the run side
+  // main roof: ridge along the long side, red-brown, trim boards under the eaves, snow on top
+  P.push(part(gable(L + 1.4, W + 1.0, 3.0).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(0, H, 0), LZ_ROOF, M, TILES.metalRoof));
+  P.push(part(gable(L + 0.6, W + 0.2, 2.7).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(0, H + 0.2, 0), SNOWCAP, M));
+  P.push(part(BOX(W + 1.0, 0.3, 0.12, 0, H - 0.3, L / 2 + 0.7), LZ_TRIM, M), part(BOX(W + 1.0, 0.3, 0.12, 0, H - 0.3, -L / 2 - 0.7), LZ_TRIM, M));
+  // the porch: a front gable 5 m wide and 2.6 m deep on two log posts, the sign across its front, the door behind
+  const pw = 5, pd = 2.6, pz = L / 2 + pd / 2, ph = H - 0.2;
+  for (const s of [-1, 1]) P.push(part(new THREE.CylinderGeometry(0.2, 0.24, ph - dy, 8).translate(s * (pw / 2 - 0.3), dy + (ph - dy) / 2, L / 2 + pd - 0.3), LOG, M, TILES.cedar));
+  P.push(part(gable(pw + 0.8, pd + 0.6, 2.2).translate(0, ph, pz), LZ_ROOF, M, TILES.metalRoof));
+  P.push(part(gable(pw + 0.2, pd + 0.2, 2.0).translate(0, ph + 0.15, pz), SNOWCAP, M));
+  P.push(part(gable(pw - 0.2, 0.1, 1.9).translate(0, ph, L / 2 + pd + 0.2), LZ_TAN, M, TILES.siding));   // porch gable end
+  P.push(part(BOX(pw, 0.15, pd, 0, dy - 0.02, pz), WALL, M, TILES.deck));                                        // porch floor
+  P.push(part(BOX(1.0, 2.1, 0.08, 0, dy, L / 2 + 0.04), LZ_DOOR, M), part(BOX(0.5, 0.7, 0.1, 0, dy + 1.2, L / 2 + 0.07), WIN, M, TILES.window));
+  for (const s of [-1, 1]) P.push(part(BOX(1.4, 1.1, 0.08, s * (W / 2 - 2.2), dy + 1.5, L / 2 + 0.04), WIN, M, TILES.window));
+  bucket(STAND_INS, x, z, ...P);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(pw + 0.2, 0.62).translate(0, ph - 0.45, L / 2 + pd + 0.02).applyMatrix4(M),
+    new THREE.MeshBasicMaterial({ map: lizardSign() }));
+  addRinged(sign, 0, 400);
+  solidBox(x, z, yaw, w, l, bot, H + 3, 'Lizard Lodge');
+}
+
+// Race announcer stand (batch 5 pin 3, ref in references/buildings/scooper-base/announcer-stand.png): a small plain
+// brown box under a shed roof with beam ends at the eave; the side facing up the mountain, toward the flagged course,
+// is solid below and one continuous window across the top half. uphill: unit (x, z) up the slope.
+const AN_BROWN = [1.0, 0.82, 0.72], AN_ROOF = [1.35, 0.75, 0.6];
+export function addAnnouncer(b, uphill) {
+  const { x, z, w, l, bot, ground } = b, dy = ground - bot, S = Math.max(w, l), D = Math.min(w, l);
+  const yaw = Math.atan2(uphill[0], uphill[1]), M = placeM(x, bot, z, yaw);            // local +z faces up the mountain
+  const hi = dy + 5.2, lo = dy + 4.0;
+  const P = [
+    part(shed(D, S, lo, hi).applyMatrix4(new THREE.Matrix4().makeRotationY(-Math.PI / 2)), AN_BROWN, M, TILES.siding),   // high side up the mountain
+  ];
+  // roof slab falling away from the window, overhanging it 1 m, with three beam ends under the eave
+  const run = Math.hypot(D, hi - lo), ang = Math.atan2(hi - lo, D);
+  const slab = (t, col, lift) => part(BOX(S + 0.8, t, run + 1.6, 0, -t / 2, 0.4).applyMatrix4(new THREE.Matrix4().makeRotationX(-ang)).translate(0, (lo + hi) / 2 + lift, 0), col, M);
+  P.push(slab(0.3, AN_ROOF, 0.15), slab(0.12, SNOWCAP, 0.4));
+  for (const s of [-1, 0, 1]) P.push(part(BOX(0.3, 0.3, 1.0, s * (S / 2 - 0.6), hi - 0.45, D / 2 + 0.5), AN_BROWN, M, TILES.cedar));
+  // the window: the full width, from half height to just under the eave, with thin mullions
+  const wy = dy + 2.6, wh = hi - 0.5 - wy, zf = D / 2 + 0.05;
+  P.push(part(BOX(S - 0.4, wh, 0.08, 0, wy, zf), WIN, M, TILES.window));
+  for (let k = 1; k < 4; k++) P.push(part(BOX(0.12, wh, 0.12, -(S - 0.4) / 2 + k * (S - 0.4) / 4, wy, zf + 0.04), AN_BROWN, M));
+  P.push(part(BOX(S - 0.2, 0.18, 0.4, 0, wy - 0.18, zf + 0.12), AN_BROWN, M));                     // sill
+  P.push(part(BOX(1.0, 2.1, 0.08, 0, dy, -D / 2 - 0.04), DARK, M));                                  // door at the back
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, S, D, bot, hi + 0.5, 'announcer stand');
+}
+
+// Two Creeks base camp (batch 5 pin 13, refs in references/buildings/two-creeks/): two stand-ins drawn as one long
+// low building. Tan lap siding over a stone wainscot, tall windows in blue-grey frames, a deep porch along the run side
+// on brown timber posts with round rafter tails at the eave, one big low hip roof with a windowed clerestory on the
+// ridge and two small gables over the doors, and a heavy timber entrance gable standing free at the east end.
+const TC_TAN = [1.35, 1.5, 1.7], TC_BLUE = [0.42, 0.5, 0.6], TC_TIMBER = [0.72, 0.68, 0.7], TC_ROOF = [0.55, 0.55, 0.58];
+export function addTwoCreeks(b) {
+  const { x, z, yaw, w, l, bot, ground } = b, { W, L, m } = frameOf(b), M = m(bot), dy = ground - bot, H = dy + 4.4;
+  const PD = 3.6, bz = -PD / 2, BL = L - PD;                     // the body sits back; the porch fills the front PD m
+  const P = [
+    part(BOX(W, H, BL, 0, 0, bz), TC_TAN, M, TILES.siding),
+    part(BOX(W + 0.1, dy + 0.9, BL + 0.1, 0, 0, bz), [1, 1, 1], M, TILES.stone),
+    part(BOX(W, 0.25, PD, 0, dy - 0.1, L / 2 - PD / 2), WALL, M, TILES.deck),                                      // porch deck
+  ];
+  // front windows in pairs, blue-grey frames; doors under the two small gables
+  const zf = bz + BL / 2 + 0.05, doors = [-W / 4, W / 4];
+  for (let cx = -W / 2 + 3; cx <= W / 2 - 3; cx += 3.2) {
+    if (doors.some((d) => Math.abs(cx - d) < 2)) continue;
+    P.push(part(BOX(2.3, 2.9, 0.1, cx, dy + 1.0, zf), TC_BLUE, M), part(BOX(1.9, 2.5, 0.12, cx, dy + 1.2, zf + 0.02), WIN, M, TILES.window));
+  }
+  for (const d of doors) P.push(part(BOX(2.4, 2.6, 0.1, d, dy, zf), DARK, M));
+  // porch posts and the beam they carry; the main roof covers the porch
+  for (let k = 0; k <= Math.round(W / 4.5); k++) {
+    const px = -W / 2 + 0.4 + k * (W - 0.8) / Math.round(W / 4.5);
+    P.push(part(BOX(0.5, H - dy, 0.5, px, dy, L / 2 - 0.4), TC_TIMBER, M, TILES.cedar), part(BOX(0.7, 0.5, 0.7, px, dy, L / 2 - 0.4), [1, 1, 1], M, TILES.stone));
+  }
+  P.push(part(BOX(W + 0.4, 0.6, 0.5, 0, H - 0.6, L / 2 - 0.4), TC_TIMBER, M, TILES.cedar));
+  const RH = 4.2, ov = 1.6;
+  P.push(part(hip(W + 2 * ov, L + 2 * ov, RH).translate(0, H, 0), TC_ROOF, M, TILES.metalRoof));
+  P.push(part(hip(W + 2 * ov - 0.8, L + 2 * ov - 0.8, RH - 0.2).translate(0, H + 0.25, 0), SNOWCAP, M));
+  for (let rx = -W / 2 - ov + 0.6; rx <= W / 2 + ov - 0.6; rx += 1.4) {                                           // rafter tails
+    P.push(part(new THREE.CylinderGeometry(0.17, 0.17, 1.0, 6).applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2)).translate(rx, H - 0.15, L / 2 + ov - 0.2), TC_TIMBER, M, TILES.cedar));
+  }
+  // clerestory on the ridge: a band of windows under its own low hip
+  const cw = W * 0.5, cl = 5, cy = H + RH * 0.55;
+  P.push(part(BOX(cw, 2.4, cl, 0, cy - 0.3), TC_TAN, M, TILES.siding));
+  for (const s of [-1, 1]) P.push(part(BOX(cw - 1, 1.5, 0.1, 0, cy + 0.3, s * (cl / 2 + 0.05)), WIN, M, TILES.window));
+  P.push(part(hip(cw + 1.6, cl + 1.6, 1.4).translate(0, cy + 2.1, 0), TC_ROOF, M, TILES.metalRoof), part(hip(cw + 1.0, cl + 1.0, 1.3).translate(0, cy + 2.3, 0), SNOWCAP, M));
+  // small gables over the doors, standing out of the front roof slope
+  for (const d of doors) {
+    P.push(part(gable(6, 4, 2.6).translate(d, H, L / 2 + ov - 2), TC_ROOF, M, TILES.metalRoof), part(gable(5.4, 3.8, 2.3).translate(d, H + 0.2, L / 2 + ov - 2), SNOWCAP, M));
+    P.push(part(gable(5.2, 0.1, 2.2).translate(d, H, L / 2 + ov), TC_TAN, M, TILES.siding));
+  }
+  // the timber entrance gable, free standing past the east end
+  const ex = W / 2 + 5, ew = 7, ed = 6, eh = dy + 4.2;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    P.push(part(BOX(0.6, eh - dy, 0.6, ex + sx * (ew / 2 - 0.4), dy, L / 2 - ed / 2 + sz * (ed / 2 - 0.4)), TC_TIMBER, M, TILES.cedar));
+    P.push(part(BOX(0.8, 0.6, 0.8, ex + sx * (ew / 2 - 0.4), dy - 0.3, L / 2 - ed / 2 + sz * (ed / 2 - 0.4)), [1, 1, 1], M, TILES.stone));
+  }
+  P.push(part(gable(ew + 1.4, ed + 1.0, 4.6).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(ex, eh, L / 2 - ed / 2), TC_ROOF, M, TILES.metalRoof));
+  P.push(part(gable(ew + 0.8, ed + 0.6, 4.3).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(ex, eh + 0.2, L / 2 - ed / 2), SNOWCAP, M));
+  for (const sz of [-1, 1]) {
+    const zz = L / 2 - ed / 2 + sz * (ed / 2 - 0.4);
+    P.push(part(BOX(ew, 0.5, 0.5, ex, eh - 0.5, zz), TC_TIMBER, M, TILES.cedar));                                  // tie beams
+    for (const s of [-1, 1]) {                                                                                     // rafters
+      const g = BOX(0.4, 4.6, 0.4).translate(0, -2.3, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(s * 2.3)).translate(ex, eh + 4.0, zz);
+      P.push(part(g, TC_TIMBER, M, TILES.cedar));
+    }
+  }
+  bucket(STAND_INS, x, z, ...P);
+  solidBox(x, z, yaw, w, l, bot, H + RH, 'Two Creeks base camp');
+}
+
 // The Base (pin 7, ref in references/buildings/base-7/): a large building on a distinctive grey rock base, with the
 // brick architecture of Jack's reference above it: three floors of tall arched windows and a stone cornice.
 // Enterable later; only the outside for now.

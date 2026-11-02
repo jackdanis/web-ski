@@ -6,7 +6,7 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 
@@ -14,8 +14,11 @@ import { LIFTS } from './lifts.js';
 export const RUNS = MAP.runs || [];
 // Named buildings from Jack's laser notes batch 2 (2026-10-27), by stand-in block centre; SKIP blocks go
 const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, -1013.2, 'up4'], [-342.3, -2936.9, 'map'],
-  [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan']];   // batch 3
-const SKIP = [[-338.6, -2933.0],                      // a shed footprint inside the trail-map stand
+  [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan'],   // batch 3
+  [424.2, -4442.9, 'lizard'], [447.5, -4368.0, 'announcer'],
+  // Two Creeks base camp: drawn on the B block as one rectangle over both B and C (C is skipped)
+  [4161.0, -5709.5, 'twocreeks', { x: 4186.5, z: -5702.1, yawD: -16.6, w: 78, l: 26, y0: 2470.6, y1: 2475.1 }]];                                                   // batch 5
+const SKIP = [[-338.6, -2933.0], [4203.8, -5696.7],   // the second Two Creeks block, inside the base camp                      // a shed footprint inside the trail-map stand
   [1300.1, -4972.3]];                                  // a box overlapping the Westin, which hid it
 // Areas whose stand-ins go [x0, x1, z0, z1]: the houses behind Two Creeks (batch 5, pin 14)
 const GONE = [[4080, 4200, -6180, -5900]];
@@ -283,9 +286,10 @@ if (RUN_DATA) {
     const special = SPECIAL.find(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1);   // named buildings always stand
     if (!special && (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z)))) continue;
     if (special) {
-      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
-      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
-      const b = { x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 };
+      const o = { x, z, yawD, w, l, y0, y1, ...special[3] };                       // a named building may set its own frame
+      const yaw = o.yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(o.x, o.z);
+      const lz = Math.sin(yaw) * (rx - o.x) + Math.cos(yaw) * (rz - o.z), lx = Math.cos(yaw) * (rx - o.x) - Math.sin(yaw) * (rz - o.z);
+      const b = { x: o.x, z: o.z, yaw, w: o.w, l: o.l, bot: o.y0 - 1, ground: o.y1, front: Math.sign(o.w >= o.l ? lz : lx) || 1 };
       if (special[2] === 'base') addBase(b);
       else if (special[2] === 'sams') addSamsKnob(b);
       else if (special[2] === 'map') addMapStand(b);
@@ -293,9 +297,11 @@ if (RUN_DATA) {
       else if (special[2] === 'westin') addWestin(b);
       else if (special[2] === 'wing') addWestinWing(b);
       else if (special[2] === 'tan') addTanHotel(b);
+      else if (special[2] === 'lizard') addLizardLodge(b);
+      else if (special[2] === 'twocreeks') addTwoCreeks(b);
       else {
         const g = sampleBase(x, z, { h: 0, gx: 0, gz: 0 }), n = Math.hypot(g.gx, g.gz) || 1;
-        addUp4Pizza(b, [g.gx / n, g.gz / n]);
+        (special[2] === 'announcer' ? addAnnouncer : addUp4Pizza)(b, [g.gx / n, g.gz / n]);
       }
       continue;
     }
