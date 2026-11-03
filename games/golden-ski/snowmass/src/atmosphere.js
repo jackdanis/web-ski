@@ -8,6 +8,7 @@ import { atlas, pages, treeMat } from './trees.js';
 import { kickMatMat, kickSnowMat } from './lifts.js';
 import { mogulMat } from './snow.js';
 import { placeCarriers } from './ride.js';
+import { WIND, updateWind } from './wind.js';
 
 export let timeOfDay = 'noon';
 
@@ -113,9 +114,9 @@ function updateFlakes(dt) {
   const wrap = (v, o) => ((((v - o + H2) % FLAKE_BOX) + FLAKE_BOX) % FLAKE_BOX) - H2 + o;
   for (let i = 0; i < FLAKES; i++) {
     const j = i * 3;
-    flakePos[j] = wrap(flakePos[j] + (1.6 + Math.sin(flakeT * 0.7 + i) * 0.8) * dt, c.x);
+    flakePos[j] = wrap(flakePos[j] + (WIND.x * WIND.speed * 0.4 + Math.sin(flakeT * 0.7 + i) * 0.8) * dt, c.x);
     flakePos[j + 1] = wrap(flakePos[j + 1] - (2.2 + (i % 7) * 0.15) * dt, c.y);
-    flakePos[j + 2] = wrap(flakePos[j + 2] + 0.6 * dt, c.z);
+    flakePos[j + 2] = wrap(flakePos[j + 2] + WIND.z * WIND.speed * 0.4 * dt, c.z);
   }
   flakes.geometry.attributes.position.needsUpdate = true;
 }
@@ -200,6 +201,7 @@ export function updateWorld(dt) {
   SKY.uTime.value += dt;
   if (clock.on) { clock.t = (clock.t + dt / DAY_LEN) % 1; clock.days += dt / DAY_LEN; applyClock(clock.t); }
   SKY.uCloudy.value = cloudsAt(clock.days);
+  updateWind(dt, SKY.uCloudy.value, !clock.on);
   placeCarriers(performance.now() / 1000);
   paintShadows(false);
   updateLamps();

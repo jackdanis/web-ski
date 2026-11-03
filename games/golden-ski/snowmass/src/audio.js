@@ -5,6 +5,7 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { surfaceAt } from './world.js';
 import { POLE_PHASES, sk } from './play.js';
+import { WIND } from './wind.js';
 
 const V_TOP = 30;                     // m/s (67 mph): the hiss and wind are at full here
 const PLANT = POLE_PHASES[0];         // where in a double-pole push the poles hit the snow
@@ -155,10 +156,10 @@ export function updateAudio() {
   set(hiss.filter.frequency, (powder ? 700 : 1000) + 900 * v + 500 * sk.edge);
   // Skid: a rougher, lower scrape while the skis slide sideways or brake.
   set(scrape.gain.gain, onSnow ? clamp(sk.skid, 0, 1) * Math.min(1, speed / 4) * 0.45 * SNOW_VOL : 0);
-  // Wind: grows with speed squared, a slow gust on top, and stays on through the air.
-  const gust = 0.75 + 0.25 * Math.sin(ctx.currentTime * 0.7) * Math.sin(ctx.currentTime * 1.9);
-  set(wind.gain.gain, skiing ? 0.65 * v * v * gust : 0, 0.15);
-  set(wind.filter.frequency, 250 + 900 * v);
+  // Wind: grows with speed squared, and the mountain's own wind (wind.js) gusts on top of it, heard even standing still.
+  const gust = 0.7 + 0.45 * WIND.gust, air = clamp(WIND.speed / 12, 0, 1);
+  set(wind.gain.gain, skiing ? 0.65 * v * v * gust + 0.18 * air * air : 0, 0.15);
+  set(wind.filter.frequency, 250 + 900 * v + 500 * WIND.gust);
 
   if (skiing) {
     const p = sk.poleP;
