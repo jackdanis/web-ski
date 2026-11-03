@@ -130,10 +130,10 @@ export const stormImgs = await Promise.all(['sprites/storm_spruce', 'sprites/sto
 // behind everything: a horizon-to-zenith gradient cut into flat bands with an ordered dither (the retro look), a glow
 // and a hard disc for the sun, a moon and stars at night. Clouds are two painted layers, as Xenoblade does it (Jack's
 // refs, references/sky-xenoblade/): a bank of puffy cumulus round the horizon that slowly turns, and broken clouds
-// overhead that drift with the wind. Their textures hold only shade (r) and cover (a), cut here into three flat tones
-// tinted by the time of day (atmosphere.js). Made with FLUX, keyed off their blue sky. uCloudy (the weather's slow
+// overhead that drift with the wind. Their textures hold only shade (r) and cover (a), shaded here between three
+// tones tinted by the time of day (atmosphere.js). Made with FLUX, keyed off their blue sky. uCloudy (the weather's slow
 // breathing, atmosphere.js) and the night thin both layers: some days are cloudy, some open, and nights show the stars.
-const [cloudBankT, cloudOverT] = await Promise.all([loadTex('textures/cloud_bank'), loadTex('textures/cloud_over')]);
+const [cloudBankT, cloudOverT] = await Promise.all([loadTex('textures/cloud_bank', { pixel: false, mips: true }), loadTex('textures/cloud_over', { pixel: false, mips: true })]);
 for (const t of [cloudBankT, cloudOverT]) { t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping; t.needsUpdate = true; }
 cloudBankT.wrapT = THREE.ClampToEdgeWrapping;
 const v3 = () => new THREE.Vector3();
@@ -186,19 +186,28 @@ export const sky = (() => {
         if (md > 0.9994) col = mix(col, vec3(0.92, 0.93, 0.98), uMoonA);
         // overcast (storm): the whole sky goes to the clouds' mid tone
         col = mix(col, uCloudMid, smoothstep(0.7, 1.0, uCover));
-        // a cloud texel drawn in three flat tones, cut at half cover with a thin dithered edge, so it stays hard pixels
-        #define CLOUD(t) if (t.a > 0.35 + dith * 0.3) col = t.r > 0.62 ? uCloudLit : t.r > 0.3 ? uCloudMid : uCloudDark;
+        // a cloud texel: its shade runs smoothly from the shadow tone through mid to the lit tone, and its cover blends
+        // it softly over the sky, so the clouds keep their painted detail (Jack 2026-11-03: less lattice, more real)
+        #define CLOUD(t) { vec3 cc = t.r < 0.5 ? mix(uCloudDark, uCloudMid, t.r * 2.0) : mix(uCloudMid, uCloudLit, t.r * 2.0 - 1.0); col = mix(col, cc, smoothstep(0.08, 0.7, t.a)); }
         // overhead: a flat layer high above, seen in perspective, drifting with the wind
         if (e > 0.03) {
           vec4 t = texture2D(uOver, d.xz / (e + 0.15) * 0.6 + uWind * uTime);
           t.a *= smoothstep(0.03, 0.2, e) * clamp(uCover * 2.0, 0.0, 1.0) * uCloudy * (1.0 - 0.9 * uStars);
           CLOUD(t)
         }
-        // the bank: 4 mirrored copies round the horizon, from just below it to about 11 degrees up, slowly turning
+        // the bank: 4 mirrored copies round the horizon, its base hidden behind the far peaks, to about 11 degrees up
         float az = atan(d.z, d.x) / 6.2831853 + 0.5 + uTime * 0.0004;
-        float bv = (asin(clamp(e, -1.0, 1.0)) + 0.012) / 0.2;
+        float bv = (asin(clamp(e, -1.0, 1.0)) + 0.035) / 0.22;
         if (bv > 0.0 && bv < 1.0) {
           vec4 t = texture2D(uBank, vec2(az * 4.0, bv));
+          // the bank comes in separate groups with open sky between, never a closed ring: a slow wave round the
+          // horizon (turning with the bank) thins it out, and cloudier days close the gaps
+          float a6 = az * 6.2831853;
+          float group = 0.5 + 0.3 * sin(a6 * 3.0 + 0.7) + 0.2 * sin(a6 * 7.0 + 2.1);
+          // the group's edge is broken up by the overhead clouds' own shapes, so it ends in puffs, not a straight cut
+          float lumps = texture2D(uOver, vec2(az * 5.0, bv * 0.6 + 0.3)).a;
+          float c = 0.66 - 0.32 * min(uCloudy, 1.0), m = smoothstep(c - 0.12, c + 0.12, group * 0.75 + lumps * 0.45 - 0.2 * bv);
+          t.a = smoothstep(1.0 - m, 1.25 - m, t.a) * t.a;
           t.a *= clamp(uCloudy * 1.3, 0.0, 1.0) * (1.0 - 0.85 * uStars);     // thin bank: its soft edges go first
           CLOUD(t)
         }
