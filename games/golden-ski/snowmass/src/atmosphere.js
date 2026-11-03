@@ -124,8 +124,11 @@ function updateFlakes(dt) {
 export let pixelLook = false;           // 320x180 look is a Tab toggle
 // The day runs on a clock (DAY_LEN s a day): each frame the look is the blend of the two times of day either side of
 // it (DAY_KEYS). Picking a time in the Tab menu jumps the clock there; Storm stops it until another time is picked.
-export const clock = { t: DAY_AT.noon, on: true };
-const GLOW = { night: 1, golden: 0.45 };            // shop windows lit from inside
+export const clock = { t: DAY_AT.noon, on: true, days: DAY_AT.noon };   // days: time run so far, in days
+// Cloudiness breathes with two slow waves that don't line up with the day, so each day differs: some cloudy, some
+// open sky, and it can clear up or cloud over for a while within a day. 0 = clear, 1 = the full painted layers.
+export const cloudsAt = (d) => Math.min(1.25, Math.max(0.05, 0.62 + 0.38 * Math.sin(6.2831853 * d / 1.7) + 0.22 * Math.sin(6.2831853 * d / 0.45 + 1.0)));
+const GLOW = { night: 1, dusk: 0.8, golden: 0.45 };            // shop windows lit from inside
 const tmpCol = new THREE.Color();
 const mixRGB = (a, b, f, out) => {                  // two sRGB 0..255 colours blended, as a linear colour
   tmpCol.setRGB((a[0] + (b[0] - a[0]) * f) / 255, (a[1] + (b[1] - a[1]) * f) / 255, (a[2] + (b[2] - a[2]) * f) / 255, THREE.SRGBColorSpace);
@@ -194,7 +197,8 @@ export function setPixelLook(on) {
 }
 export function updateWorld(dt) {
   SKY.uTime.value += dt;
-  if (clock.on) { clock.t = (clock.t + dt / DAY_LEN) % 1; applyClock(clock.t); }
+  if (clock.on) { clock.t = (clock.t + dt / DAY_LEN) % 1; clock.days += dt / DAY_LEN; applyClock(clock.t); }
+  SKY.uCloudy.value = cloudsAt(clock.days);
   placeCarriers(performance.now() / 1000);
   paintShadows(false);
   updateLamps();

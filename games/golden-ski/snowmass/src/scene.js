@@ -26,20 +26,23 @@ export const BOUNCE = SUN_COLOR.clone().multiplyScalar(Math.max(0, SUN_DIR.y)).a
 // fog is [near, far] in meters
 export const TIMES = {
   noon:   { name: 'Noon', sun: [-0.8, 0.75, 0.25], sunC: [1.0, 0.98, 0.92], sky: [0.42, 0.55, 0.85], snow: [0.95, 0.97, 1.0], fogC: [217, 228, 238], fog: [1500, 70000], lamp: [0, 0, 0],
-    zen: [38, 92, 188], hor: [178, 208, 236], glowC: [236, 240, 240], cLit: [255, 255, 255], cMid: [222, 230, 242], cDark: [160, 176, 204], stars: 0, cover: 0.42, sunA: 1, moonA: 0 },
+    zen: [22, 72, 190], hor: [150, 192, 238], glowC: [222, 236, 248], cLit: [255, 255, 255], cMid: [222, 232, 246], cDark: [150, 172, 210], stars: 0, cover: 0.5, sunA: 1, moonA: 0 },
   golden: { name: 'Golden hour', sun: [0.85, 0.3, -0.45], sunC: [1.25, 0.72, 0.38], sky: [0.36, 0.34, 0.6], snow: [1.0, 0.9, 0.84], fogC: [228, 179, 163], fog: [1300, 60000], lamp: [0, 0, 0],
-    zen: [72, 70, 138], hor: [238, 168, 140], glowC: [255, 214, 150], cLit: [255, 196, 140], cMid: [214, 140, 140], cDark: [116, 92, 140], stars: 0, cover: 0.46, sunA: 1, moonA: 0 },
+    zen: [150, 96, 92], hor: [255, 196, 96], glowC: [255, 236, 130], cLit: [255, 190, 118], cMid: [206, 124, 108], cDark: [112, 78, 100], stars: 0, cover: 0.5, sunA: 1, moonA: 0 },
+  dusk:   { name: 'Dusk', menu: false, sun: [0.7, 0.12, -0.6], sunC: [0.75, 0.45, 0.5], sky: [0.24, 0.22, 0.45], snow: [0.95, 0.9, 0.95], fogC: [120, 84, 112], fog: [1000, 45000], lamp: [0.9, 0.6, 0.3],
+    zen: [34, 34, 84], hor: [206, 112, 120], glowC: [240, 140, 110], cLit: [236, 132, 120], cMid: [140, 86, 118], cDark: [66, 52, 88], stars: 0.35, cover: 0.45, sunA: 0.6, moonA: 0.4 },
   night:  { name: 'Night', sun: [-0.5, 0.6, 0.6], sunC: [0.3, 0.36, 0.55], sky: [0.1, 0.13, 0.26], snow: [0.9, 0.93, 1.0], fogC: [28, 34, 47], fog: [600, 20000], lamp: [1.7, 1.15, 0.6],
-    zen: [6, 9, 26], hor: [28, 36, 58], glowC: [28, 36, 58], cLit: [70, 80, 108], cMid: [44, 52, 76], cDark: [24, 29, 46], stars: 1, cover: 0.36, sunA: 0, moonA: 1 },
+    zen: [6, 9, 26], hor: [28, 36, 58], glowC: [28, 36, 58], cLit: [70, 80, 108], cMid: [44, 52, 76], cDark: [24, 29, 46], stars: 1, cover: 0.25, sunA: 0, moonA: 1 },
   dawn:   { name: 'Dawn', sun: [-0.85, 0.22, 0.48], sunC: [1.1, 0.8, 0.7], sky: [0.4, 0.42, 0.68], snow: [0.98, 0.93, 0.95], fogC: [214, 186, 196], fog: [1200, 60000], lamp: [0, 0, 0],
     zen: [64, 84, 156], hor: [240, 190, 180], glowC: [255, 222, 196], cLit: [255, 214, 204], cMid: [206, 170, 190], cDark: [124, 116, 160], stars: 0.15, cover: 0.38, sunA: 1, moonA: 0 },
   storm:  { name: 'Storm', sun: [-0.1, 1.0, 0.25], sunC: [0.32, 0.33, 0.36], sky: [0.66, 0.69, 0.75], snow: [0.93, 0.95, 0.98], fogC: [176, 184, 194], fog: [40, 900], lamp: [0, 0, 0],
     zen: [150, 156, 166], hor: [182, 188, 198], glowC: [190, 194, 202], cLit: [206, 210, 218], cMid: [176, 182, 192], cDark: [140, 146, 158], stars: 0, cover: 1, sunA: 0, moonA: 0 },
 };
-// The day clock: a whole day in DAY_LEN seconds, each time of day held, then blended into the next.
+// The day clock: a whole day in DAY_LEN seconds, each time of day held, then blended into the next. Dusk sits between
+// golden and night so the blend goes through pink and violet instead of brown; it is not in the Tab menu.
 // [fraction of the day, time of day]; between two entries the look blends from one to the other.
 export const DAY_LEN = 1200;
-export const DAY_KEYS = [[0.0, 'dawn'], [0.12, 'noon'], [0.38, 'noon'], [0.5, 'golden'], [0.64, 'night'], [0.9, 'night'], [1.0, 'dawn']];
+export const DAY_KEYS = [[0.0, 'dawn'], [0.12, 'noon'], [0.38, 'noon'], [0.5, 'golden'], [0.58, 'dusk'], [0.65, 'night'], [0.9, 'night'], [1.0, 'dawn']];
 export const DAY_AT = { dawn: 0.0, noon: 0.15, golden: 0.5, night: 0.7 };     // where the Tab menu jumps the clock to
 // Shadows are painted top down on a canvas SH_SIZE meters across that follows the camera.
 export const SH_PX = 1024, SH_SIZE = 768;
@@ -123,23 +126,29 @@ export const treeImgs = await Promise.all(TREE_KINDS.flatMap((k) => [k, k + '_n'
 // storm: the snow-plastered spruce replaces the spruce
 export const stormImgs = await Promise.all(['sprites/storm_spruce', 'sprites/storm_spruce_n'].map(loadImg));
 
-// The sky (2026-11-03): painted in the shader, no images, so it can blend through the whole day. One sphere rides with
-// the camera behind everything: a horizon-to-zenith gradient cut into flat bands with an ordered dither (the retro
-// look), a glow and a hard disc for the sun, a moon and stars at night, and a cloud layer that drifts with the wind,
-// shaded in three flat tones: lit toward the sun, mid, and shadow. Colours come from the time of day (atmosphere.js).
+// The sky (2026-11-03): painted in the shader so it can blend through the whole day. One sphere rides with the camera
+// behind everything: a horizon-to-zenith gradient cut into flat bands with an ordered dither (the retro look), a glow
+// and a hard disc for the sun, a moon and stars at night. Clouds are two painted layers, as Xenoblade does it (Jack's
+// refs, references/sky-xenoblade/): a bank of puffy cumulus round the horizon that slowly turns, and broken clouds
+// overhead that drift with the wind. Their textures hold only shade (r) and cover (a), cut here into three flat tones
+// tinted by the time of day (atmosphere.js). Made with FLUX, keyed off their blue sky. uCloudy (the weather's slow
+// breathing, atmosphere.js) and the night thin both layers: some days are cloudy, some open, and nights show the stars.
+const [cloudBankT, cloudOverT] = await Promise.all([loadTex('textures/cloud_bank'), loadTex('textures/cloud_over')]);
+for (const t of [cloudBankT, cloudOverT]) { t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping; t.needsUpdate = true; }
+cloudBankT.wrapT = THREE.ClampToEdgeWrapping;
 const v3 = () => new THREE.Vector3();
 export const SKY = {
   uZen: { value: v3() }, uHor: { value: v3() }, uGlowC: { value: v3() }, uCloudLit: { value: v3() }, uCloudMid: { value: v3() },
   uCloudDark: { value: v3() }, uFogC: { value: v3() }, uSunD: { value: v3().set(0, 1, 0) }, uMoonD: { value: v3().set(0, 1, 0) },
-  uSunA: { value: 1 }, uMoonA: { value: 0 }, uStars: { value: 0 }, uCover: { value: 0.45 }, uTime: { value: 0 },
-  uWind: { value: new THREE.Vector2(0.012, 0.004) },
+  uSunA: { value: 1 }, uMoonA: { value: 0 }, uStars: { value: 0 }, uCover: { value: 0.45 }, uCloudy: { value: 1 }, uTime: { value: 0 },
+  uWind: { value: new THREE.Vector2(0.006, 0.002) }, uBank: { value: cloudBankT }, uOver: { value: cloudOverT },
 };
 export const sky = (() => {
   const mat = new THREE.ShaderMaterial({
     uniforms: SKY,
     vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: `uniform vec3 uZen, uHor, uGlowC, uCloudLit, uCloudMid, uCloudDark, uFogC, uSunD, uMoonD;
-      uniform float uSunA, uMoonA, uStars, uCover, uTime; uniform vec2 uWind; varying vec3 vDir;
+      uniform float uSunA, uMoonA, uStars, uCover, uCloudy, uTime; uniform vec2 uWind; uniform sampler2D uBank, uOver; varying vec3 vDir;
       float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float noise(vec2 p) {
@@ -175,20 +184,23 @@ export const sky = (() => {
         if (sd > 0.9992) col = mix(col, vec3(1.0, 0.98, 0.9), uSunA);
         float md = dot(d, uMoonD);
         if (md > 0.9994) col = mix(col, vec3(0.92, 0.93, 0.98), uMoonA);
-        // clouds: a flat layer high above, seen in perspective, drifting with the wind
-        if (e > 0.02) {
-          vec2 p = d.xz / (e + 0.12) * 1.6 + uWind * uTime;
-          float n = fbm(p);
-          float cov = 1.0 - uCover;
-          float dens = smoothstep(cov, cov + 0.12, n) * smoothstep(0.02, 0.16, e);
-          if (dens > dith * 0.999) {
-            // toward the sun the cloud thins, so that side is lit; away it is thicker, so shaded
-            vec2 toSun = normalize(uSunD.xz + vec2(1e-4)) * 0.18;
-            float n2 = fbm(p + toSun);
-            float lit = n2 < n - 0.015 ? 1.0 : n2 < n + 0.03 ? 0.5 : 0.0;
-            vec3 cc = lit > 0.75 ? uCloudLit : lit > 0.25 ? uCloudMid : uCloudDark;
-            col = mix(col, cc, 0.92);
-          }
+        // overcast (storm): the whole sky goes to the clouds' mid tone
+        col = mix(col, uCloudMid, smoothstep(0.7, 1.0, uCover));
+        // a cloud texel drawn in three flat tones, cut at half cover with a thin dithered edge, so it stays hard pixels
+        #define CLOUD(t) if (t.a > 0.35 + dith * 0.3) col = t.r > 0.62 ? uCloudLit : t.r > 0.3 ? uCloudMid : uCloudDark;
+        // overhead: a flat layer high above, seen in perspective, drifting with the wind
+        if (e > 0.03) {
+          vec4 t = texture2D(uOver, d.xz / (e + 0.15) * 0.6 + uWind * uTime);
+          t.a *= smoothstep(0.03, 0.2, e) * clamp(uCover * 2.0, 0.0, 1.0) * uCloudy * (1.0 - 0.9 * uStars);
+          CLOUD(t)
+        }
+        // the bank: 4 mirrored copies round the horizon, from just below it to about 11 degrees up, slowly turning
+        float az = atan(d.z, d.x) / 6.2831853 + 0.5 + uTime * 0.0004;
+        float bv = (asin(clamp(e, -1.0, 1.0)) + 0.012) / 0.2;
+        if (bv > 0.0 && bv < 1.0) {
+          vec4 t = texture2D(uBank, vec2(az * 4.0, bv));
+          t.a *= clamp(uCloudy * 1.3, 0.0, 1.0) * (1.0 - 0.85 * uStars);     // thin bank: its soft edges go first
+          CLOUD(t)
         }
         // below the horizon the haze
         col = mix(col, uFogC, smoothstep(0.01, -0.03, e));

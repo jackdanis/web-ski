@@ -128,7 +128,7 @@ const DEBUG_ITEMS = [
   { name: 'Perf stats (triangles, draws, frame ms)', get: () => perf.on, set: (on) => { perf.on = on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },
   { name: 'Detailed runs (2 m)', get: () => state.patchOn, set: (on) => setPatch(on) },
-  ...Object.keys(TIMES).map((k) => ({ name: TIMES[k].name, radio: true, get: () => timeOfDay === k, set: (on) => { if (on) applyTime(k); } })),
+  ...Object.keys(TIMES).filter((k) => TIMES[k].menu !== false).map((k) => ({ name: TIMES[k].name, radio: true, get: () => timeOfDay === k, set: (on) => { if (on) applyTime(k); } })),
   ...STARTS.map((st) => ({ name: st.label, radio: true, get: () => META.start.x === st.x && META.start.z === st.z,
     set: (on) => { if (on) { Object.assign(META.start, st); if (free.on) setFreecam(false); toSummit(); } } })),
 ];
