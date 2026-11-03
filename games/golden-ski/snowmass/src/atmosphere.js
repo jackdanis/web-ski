@@ -2,7 +2,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { state } from './state.js';
 import { CELL, PAGE, X0, Z0 } from './world.js';
-import { BOUNCE, FOG, LIGHT, SH_PX, SH_SIZE, SKIES, SKY_COLOR, SKY_EDGE, SKY_TOPS, SNOW_ALBEDO, SUN_COLOR, SUN_DIR, TIMES, camera, canvas, renderer, scene, sky } from './scene.js';
+import { BOUNCE, DAY_AT, DAY_KEYS, DAY_LEN, FOG, LIGHT, SH_PX, SH_SIZE, SKY, SKY_COLOR, SNOW_ALBEDO, SUN_COLOR, SUN_DIR, TIMES, camera, canvas, renderer, scene } from './scene.js';
 import { casters, lampList, modelMat } from './buildings.js';
 import { atlas, pages, treeMat } from './trees.js';
 import { kickMatMat, kickSnowMat } from './lifts.js';
@@ -122,26 +122,59 @@ function updateFlakes(dt) {
 
 // ---------- Time of day and the pixel look ----------
 export let pixelLook = false;           // 320x180 look is a Tab toggle
-export function applyTime(key) {
-  timeOfDay = key;
-  const T = TIMES[key];
-  SUN_DIR.set(...T.sun).normalize();
-  SUN_COLOR.set(...T.sunC); SKY_COLOR.set(...T.sky); SNOW_ALBEDO.set(...T.snow);
-  FOG.set(T.fogC[0] / 255, T.fogC[1] / 255, T.fogC[2] / 255);
-  LIGHT.uFogNear.value = T.fog[0]; LIGHT.uFogFar.value = T.fog[1];
+// The day runs on a clock (DAY_LEN s a day): each frame the look is the blend of the two times of day either side of
+// it (DAY_KEYS). Picking a time in the Tab menu jumps the clock there; Storm stops it until another time is picked.
+export const clock = { t: DAY_AT.noon, on: true };
+const GLOW = { night: 1, golden: 0.45 };            // shop windows lit from inside
+const tmpCol = new THREE.Color();
+const mixRGB = (a, b, f, out) => {                  // two sRGB 0..255 colours blended, as a linear colour
+  tmpCol.setRGB((a[0] + (b[0] - a[0]) * f) / 255, (a[1] + (b[1] - a[1]) * f) / 255, (a[2] + (b[2] - a[2]) * f) / 255, THREE.SRGBColorSpace);
+  return out.set(tmpCol.r, tmpCol.g, tmpCol.b);
+};
+const mixV = (a, b, f, out) => out.set(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
+const num = (a, b, f) => a + (b - a) * f;
+const shSun = new THREE.Vector3();
+let lampsOn = null;
+function blendLook(A, B, f) {
+  mixV(A.sun, B.sun, f, SUN_DIR).normalize();
+  mixV(A.sunC, B.sunC, f, SUN_COLOR); mixV(A.sky, B.sky, f, SKY_COLOR); mixV(A.snow, B.snow, f, SNOW_ALBEDO);
+  mixV(A.fogC, B.fogC, f, FOG).multiplyScalar(1 / 255);
+  LIGHT.uFogNear.value = num(A.fog[0], B.fog[0], f); LIGHT.uFogFar.value = num(A.fog[1], B.fog[1], f);
   BOUNCE.copy(SUN_COLOR).multiplyScalar(Math.max(0, SUN_DIR.y)).addScaledVector(SKY_COLOR, 0.6).multiply(SNOW_ALBEDO);
-  LIGHT.uLampC.value.set(...T.lamp);
-  const skyU = sky.material.uniforms;
-  skyU.uStrip.value = SKIES[key];
-  skyU.uHas.value = SKY_TOPS[key] ? 1 : 0; if (SKY_TOPS[key]) skyU.uTop.value = SKY_TOPS[key];
-  skyU.uEdge.value.copy(SKY_EDGE[key]);
+  mixV(A.lamp, B.lamp, f, LIGHT.uLampC.value);
+  mixRGB(A.zen, B.zen, f, SKY.uZen.value); mixRGB(A.hor, B.hor, f, SKY.uHor.value); mixRGB(A.glowC, B.glowC, f, SKY.uGlowC.value);
+  mixRGB(A.cLit, B.cLit, f, SKY.uCloudLit.value); mixRGB(A.cMid, B.cMid, f, SKY.uCloudMid.value); mixRGB(A.cDark, B.cDark, f, SKY.uCloudDark.value);
+  mixRGB(A.fogC, B.fogC, f, SKY.uFogC.value);
+  SKY.uSunD.value.copy(SUN_DIR); SKY.uMoonD.value.set(...TIMES.night.sun).normalize();
+  SKY.uSunA.value = num(A.sunA, B.sunA, f); SKY.uMoonA.value = num(A.moonA, B.moonA, f);
+  SKY.uStars.value = num(A.stars, B.stars, f); SKY.uCover.value = num(A.cover, B.cover, f);
   scene.background.setRGB(FOG.x, FOG.y, FOG.z, THREE.SRGBColorSpace);
-  treeMat.uniforms.uA.value = key === 'storm' ? atlas.stormMap : atlas.map;
-  treeMat.uniforms.uN.value = key === 'storm' ? atlas.stormNormal : atlas.normal;
-  bulbMat.color.set(key === 'night' ? 0xffe9a8 : 0x2a2a2a);
-  modelMat.uniforms.uGlow.value = key === 'night' ? 1 : key === 'golden' ? 0.45 : 0;     // shop windows
-  flakes.visible = key === 'storm';
-  setLamps(key === 'night');
+  const glow = num(GLOW[A.key] || 0, GLOW[B.key] || 0, f);
+  modelMat.uniforms.uGlow.value = glow;
+  bulbMat.color.setRGB(0.16 + 0.84 * glow, 0.16 + 0.75 * glow, 0.16 + 0.5 * glow, THREE.SRGBColorSpace);
+  const on = LIGHT.uLampC.value.x > 0.02;
+  if (on !== lampsOn) { lampsOn = on; setLamps(on); }
+  // the painted shadows follow the sun: repainted once it has moved a degree
+  if (shSun.dot(SUN_DIR) < 0.99985) { shSun.copy(SUN_DIR); paintShadows(true); }
+}
+for (const k of Object.keys(TIMES)) TIMES[k].key = k;
+// the look at clock time t (0..1)
+function applyClock(t) {
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && t >= DAY_KEYS[i + 1][0]) i++;
+  const [t0, a] = DAY_KEYS[i], [t1, b] = DAY_KEYS[i + 1];
+  const u = Math.min(1, Math.max(0, (t - t0) / Math.max(1e-6, t1 - t0))), f = u * u * (3 - 2 * u);
+  blendLook(TIMES[a], TIMES[b], f);
+  timeOfDay = f < 0.5 ? a : b;
+}
+export function applyTime(key) {
+  const storm = key === 'storm';
+  treeMat.uniforms.uA.value = storm ? atlas.stormMap : atlas.map;
+  treeMat.uniforms.uN.value = storm ? atlas.stormNormal : atlas.normal;
+  flakes.visible = storm;
+  clock.on = !storm;
+  if (storm) { blendLook(TIMES.storm, TIMES.storm, 0); timeOfDay = 'storm'; }
+  else { clock.t = DAY_AT[key]; applyClock(clock.t); }
   paintShadows(true);
 }
 // every Snowlight material, in the scene or not yet (run and kicker meshes), recompiled with or without LAMPS
@@ -160,6 +193,8 @@ export function setPixelLook(on) {
   resize();
 }
 export function updateWorld(dt) {
+  SKY.uTime.value += dt;
+  if (clock.on) { clock.t = (clock.t + dt / DAY_LEN) % 1; applyClock(clock.t); }
   placeCarriers(performance.now() / 1000);
   paintShadows(false);
   updateLamps();

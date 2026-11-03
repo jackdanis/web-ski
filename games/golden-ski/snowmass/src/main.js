@@ -266,7 +266,9 @@ function drawSkier(p, riding, dY) {
     skierMesh.position.copy(p).addScaledVector(cardR, -w / 2).addScaledVector(cardU, -hgt / 2);
   } else {
     // a frame drawn from higher up is squashed by cos(tilt): stretch it to the real camera height so her size holds
-    const k = Math.cos(clamp(elev, 0, 60) / DEG) / Math.cos(tilt / DEG);
+    // on moguls her knees fold over each bump: the card sinks onto her feet (stand-in until the crouch frames exist)
+    const fold = moving ? 1 - 0.3 * Math.max(0, sk.crouch) : 1;
+    const k = Math.cos(clamp(elev, 0, 60) / DEG) / Math.cos(tilt / DEG) * fold;
     hgt *= k;
     // the card faces the camera and turns in the screen so its up follows her body's up
     cardU.copy(bodyU).addScaledVector(cardZ, -bodyU.dot(cardZ));

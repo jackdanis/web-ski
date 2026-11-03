@@ -20,7 +20,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/config.js` | Tuning numbers for the skiing, small helpers |
 | `src/state.js` | Game state that more than one file changes |
 | `src/world.js` | Ground sampling: heights, cover, runs, the 2 m run grid, solids, bridges, kickers |
-| `src/scene.js` | Renderer, camera, Snowlight, textures, sky, terrain mesh, work queue, far peaks |
+| `src/scene.js` | Renderer, camera, Snowlight, textures, painted sky + clouds, terrain mesh, work queue, far peaks |
 | `src/buildings.js` | Kit models, detail rings, rocks, lift terminals, the Elk Camp restaurant, the boilerplate kit (condo, chalet, village block, hut) |
 | `src/trees.js` | Trees, clumps and props, paged in around the camera |
 | `src/lifts.js` | Lift lines, towers, cable, chairs, cabins; kicker meshes |
@@ -30,7 +30,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/landforms.js` | Rock bands, cornices, wind lips and rock outcrops on the expert terrain |
 | `src/collview.js` | World collision view (Tab: Show world collision): turquoise ground grid at the ride height, purple walls |
 | `src/ride.js` | The chairlift ride cutscene |
-| `src/atmosphere.js` | Lamps, shadows, storm snow, time of day, pixel look |
+| `src/atmosphere.js` | Lamps, shadows, storm snow, the day clock (time of day blends), pixel look |
 | `src/goldie.js` | Goldie's sprite, skis, shadow and spray |
 | `src/tracks.js` | Her ski tracks: grooves painted around her, shaded by Snowlight |
 | `src/snow.js` | Each run's snow: real moguls on Long Shot and Timberline, chopped snow on The Edge, Slot and Campground |
@@ -41,7 +41,6 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `assets/sprites/` | Goldie's sheet, trees, poles, signs (each with a `_n` normal map) |
 | `assets/textures/` | Snow textures and the station atlas |
 | `assets/music/` | Jack's songs |
-| `assets/sky/` | One sky strip per time of day |
 | `assets/models/` | The Elk Camp restaurant model and texture |
 | `data/mountain.js` | Terrain, forest, lifts and run lines (10 m) |
 | `data/runs.js`, `data/runs/` | Run index, edge trees, signs, stand-in blocks; 2 m run tiles fetched by distance |

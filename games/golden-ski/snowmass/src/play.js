@@ -9,6 +9,7 @@ import { STARTS, runStream, setPatch } from './slopes.js';
 import { RIDES, RING_R, carrierAt, ride } from './ride.js';
 import { applyTime, pixelLook, setPixelLook, timeOfDay } from './atmosphere.js';
 import { FRAMES } from './goldie.js';
+import { mogulH } from './snow.js';
 
 // ---------- Input ----------
 // Keys: Left/Right or A/D steer, Up/W poles, Down/S brakes, Shift tucks, Space jumps (hold to load an ollie).
@@ -237,10 +238,16 @@ export const sk = {
   poleP: -1, poleQ: false,            // where she is in a double-pole push (0..1, -1 not poling), and the next push queued
   flip: 0, flipRate: 0, flipIn: 0,    // rad turned forward in the air (front flip +), its rate, and the stick on it
   edgeA: 0, latA: 0, roll: 0, kappa: 0, lean: 0,
+  knee: 0, crouch: 0, bodyY: 0,       // moguls: m the legs have stretched to keep the skis down, m her legs are bent
+                                      // (+) or stretched (-), and her body's smoothed bump height
 };
+// knee absorb: m the legs can stretch below standing and bend above it, how fast they settle back (s), and the share
+// of her speed lost per radian the snow under her turns over a bump
+const KNEE = { REACH: 0.35, BEND: 0.45, T: 0.3, SOAK: 0.15 };
 export let backT = 0, trips = 0;
 export const tmpN = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
 export const UP = new THREE.Vector3(0, 1, 0);
+const nPrev = new THREE.Vector3();
 export const FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 
 export function placeSkier(x, z, heading, speed) {
@@ -255,7 +262,7 @@ export function placeSkier(x, z, heading, speed) {
   sk.crashed = false; sk.crashT = 0; sk.landT = 0; sk.skid = 0; sk.stopT = 0;
   sk.edge = 0; sk.spin = 0; sk.yawRate = 0; sk.charge = 0; sk.poleP = -1; sk.poleQ = false;
   sk.flip = 0; sk.flipRate = 0;
-  sk.edgeA = 0; sk.latA = 0; sk.roll = 0; sk.kappa = 0; sk.lean = 0;
+  sk.edgeA = 0; sk.latA = 0; sk.roll = 0; sk.kappa = 0; sk.lean = 0; sk.knee = 0; sk.crouch = 0; sk.bodyY = 0;
   state.cameraSnap = true;
 }
 export function toSummit(at = META.start) {
@@ -444,7 +451,20 @@ function groundStep(dt) {
 
   sk.pos.addScaledVector(sk.vel, dt);
   const s1 = sample(sk.pos.x, sk.pos.z);
-  const gap = sk.pos.y - s1.h;
+  let gap = sk.pos.y - s1.h;
+  // Knee absorb on moguls: the legs stretch into the trough past a crest, so the skis stay on the snow until the drop
+  // is more than the legs can reach (then she still gets air), and each bump's turn of the snow under her costs speed,
+  // as the legs soak it up. Elsewhere crests launch as before. sk.crouch is how far her body sits below its smoothed path.
+  nPrev.copy(n);
+  const bumps = !popped && (mogulH(sk.pos.x, sk.pos.z) > 0 || mogulH(sk.prev.x, sk.prev.z) > 0);
+  sk.knee *= Math.exp(-dt / KNEE.T);
+  if (bumps) {
+    const over = gap - (0.5 * nAcc * dt * dt + TAKEOFF_MARGIN);   // drop past what gravity alone keeps up with
+    if (over > 0 && sk.knee - over >= -KNEE.REACH) { sk.knee -= over; gap = 0; }
+  }
+  const m = mogulH(sk.pos.x, sk.pos.z);
+  sk.bodyY += (m - sk.bodyY) * (1 - Math.exp(-dt / KNEE.T));    // her body rides a smoothed copy of the bumps
+  sk.crouch = clamp(m - sk.bodyY, -KNEE.REACH, KNEE.BEND);
   if (popped || gap > 0.5 * nAcc * dt * dt + TAKEOFF_MARGIN) {
     sk.grounded = false;
     sk.airTime = 0;
@@ -457,9 +477,11 @@ function groundStep(dt) {
   sk.pos.y = s1.h;
   const n1 = normalFrom(s1, tmpN);
   const sp = sk.vel.length();
+  const turned = bumps ? Math.acos(clamp(nPrev.dot(n1), -1, 1)) : 0;
   sk.vel.addScaledVector(n1, -sk.vel.dot(n1));
   const sp1 = sk.vel.length();
-  if (sp1 > 1e-6) sk.vel.multiplyScalar(sp / sp1);
+  const soak = 1 - KNEE.SOAK * turned;
+  if (sp1 > 1e-6) sk.vel.multiplyScalar(sp * soak / sp1);
 }
 
 function airStep(dt) {
