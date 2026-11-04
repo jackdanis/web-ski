@@ -3,14 +3,14 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
 import { state } from './state.js';
 import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, physics, wrapAngle } from './config.js';
 import { H, KICKERS, META, PCELL, POWDER, SOLIDS, aspen, cellAt, conifer, groundY, isRock, normalFrom, patchEdge, sample, sampleBase, samplePatch, surfaceAt } from './world.js';
-import { GOLDIE, GOLDIE_AIR, GOLDIE_POLE, SUN_DIR, camera, goldieAirN, goldieAirT, goldieN, goldiePoleN, goldiePoleT, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
+import { GOLDIE, GOLDIE_AIR, GOLDIE_MOVE, GOLDIE_POLE, SUN_DIR, camera, goldieAirN, goldieAirT, goldieMoveN, goldieMoveT, goldieN, goldiePoleN, goldiePoleT, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
 import { addBuilding, ringed, updateRings } from './buildings.js';
 import { clumpGeo, fillGeo, pages, treeGeo, updateTrees } from './trees.js';
 import { carriers, liftPaths, updateKickers } from './lifts.js';
 import { PATCH_STEP, RUNS, STARTS, meshY, runStream, setPatch, signSpots, updatePatch } from './slopes.js';
 import { LOAD, RIDES, carrierAt, ride, ringMat } from './ride.js';
 import { applyTime, resize, setPixelLook, sunAt, updateWorld } from './atmosphere.js';
-import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, POLE_FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
+import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, MOVE_FRAMES, POLE_FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
 import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, POLE_PHASES, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
@@ -64,13 +64,20 @@ function rideCamera(p) {
   camera.lookAt(rideLook.x, Math.min(rideLook.y - 1.9, camera.position.y - dist * 0.02), rideLook.z);
   if (Math.abs(camera.fov - 60) > 0.05) { camera.fov = 60; camera.updateProjectionMatrix(); }
 }
+// Transition frames: pop for the first moments off a lip (s of air), absorb once her knees fold this far (m) over a
+// mogul, unweight while her skis pass flat between turns, for up to this long (s) after an edge.
+const MOVE = { POP: 0.3, ABSORB: 0.12, UNWEIGHT: 0.35, edged: 0 };
 function pickFrame() {
   const speed = sk.vel.length();
   if (sk.crashed) return FRAMES.wipeout;
   // in the air: tucked while she flips, arms out otherwise
-  if (!sk.grounded && sk.airTime > 0.12) return sk.flipIn || Math.abs(wrapAngle(sk.flip)) > 0.25 || Math.abs(sk.flipRate) > 1 ? FRAMES.flip : FRAMES.air;
+  if (!sk.grounded && sk.airTime > 0.12) {
+    if (sk.flipIn || Math.abs(wrapAngle(sk.flip)) > 0.25 || Math.abs(sk.flipRate) > 1) return FRAMES.flip;
+    return sk.airTime < MOVE.POP ? FRAMES.pop : FRAMES.air;   // legs still driving off the lip, then arms out
+  }
   if (sk.landT > 0) return FRAMES.land;
   if (sk.brake && speed > 1) return FRAMES.brake;
+  if (sk.charge > 0) return FRAMES.absorb;                   // loading an ollie: knees down
   if (sk.tuck) return FRAMES.tuck;
   if (sk.poleP >= 0) {
     let i = 0, a = POLE_PHASES[0];
@@ -219,7 +226,9 @@ function drawSkier(p, riding, dY) {
   let L = clamp(e * 0.25, -0.17, 0.17);
   if (moving && (pose === FRAMES.stand || pose === FRAMES.carveL || pose === FRAMES.carveR)) {
     const deg = Math.abs(e) * DEG;
-    if (deg < CARVE_EDGES[0] / 2) pose = FRAMES.stand;
+    if (deg >= CARVE_EDGES[0]) MOVE.edged = MOVE.UNWEIGHT;
+    if (sk.crouch > MOVE.ABSORB) pose = FRAMES.absorb;        // knees folding over a bump
+    else if (deg < CARVE_EDGES[0] / 2) pose = MOVE.edged > 0 ? FRAMES.unweight : FRAMES.stand;   // tall between edges
     else {
       const lvl = CARVE_EDGES.reduce((a, b) => (Math.abs(b - deg) < Math.abs(a - deg) ? b : a));
       pose = `carve${lvl}_${e > 0 ? 'r' : 'l'}`;
@@ -247,10 +256,11 @@ function drawSkier(p, riding, dY) {
   let tilt = elev < 6 ? 0 : elev < 28.5 ? 12 : 45, yaw = SHEET_YAWS[yi];
   if (mirror) pose = pose.replace(/_([lr])$/, (_, s) => (s === 'l' ? '_r' : '_l'));
   if (crashed) { tilt = 12; yaw = 0; }
-  const poling = pose.startsWith('pole_'), sheet = poling ? GOLDIE_POLE : GOLDIE, [SW, SH] = sheet.size;
+  const poling = pose.startsWith('pole_'), between = MOVE_FRAMES.includes(pose);
+  const sheet = poling ? GOLDIE_POLE : between ? GOLDIE_MOVE : GOLDIE, [SW, SH] = sheet.size;
   const [fx, fy, fw, fh, ax, ay] = sheet.frames[pose][tilt][yaw];
   const U = skierMat.uniforms;
-  U.map.value = poling ? goldiePoleT : goldieT; U.normalMap.value = poling ? goldiePoleN : goldieN;
+  U.map.value = poling ? goldiePoleT : between ? goldieMoveT : goldieT; U.normalMap.value = poling ? goldiePoleN : between ? goldieMoveN : goldieN;
   U.rect.value.set(fx / SW, fy / SH, fw / SW, fh / SH);
   U.mirror.value = mirror ? 1 : 0;
   const w = fw / SHEET_PX;
@@ -266,9 +276,7 @@ function drawSkier(p, riding, dY) {
     skierMesh.position.copy(p).addScaledVector(cardR, -w / 2).addScaledVector(cardU, -hgt / 2);
   } else {
     // a frame drawn from higher up is squashed by cos(tilt): stretch it to the real camera height so her size holds
-    // on moguls her knees fold over each bump: the card sinks onto her feet (stand-in until the crouch frames exist)
-    const fold = moving ? 1 - 0.3 * Math.max(0, sk.crouch) : 1;
-    const k = Math.cos(clamp(elev, 0, 60) / DEG) / Math.cos(tilt / DEG) * fold;
+    const k = Math.cos(clamp(elev, 0, 60) / DEG) / Math.cos(tilt / DEG);
     hgt *= k;
     // the card faces the camera and turns in the screen so its up follows her body's up
     cardU.copy(bodyU).addScaledVector(cardZ, -bodyU.dot(cardZ));
@@ -311,6 +319,7 @@ function render(alpha, dt) {
   sky.position.copy(camera.position);
 
   const dY = riding ? 0 : drawnSnowDY(p.x, p.z);
+  MOVE.edged = Math.max(0, MOVE.edged - dt);
   drawSkier(p, riding, dY);
   updateShapes(p);
 

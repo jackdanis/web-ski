@@ -28,6 +28,8 @@ if os.environ.get('PAL'):  # reuse another sheet's palette: the colours deep ins
     ref = np.asarray(Image.open(os.environ['PAL']).convert('RGBA')); m = ref[..., 3] > 0
     for _ in range(2): m[1:-1, 1:-1] = m[1:-1, 1:-1] & m[:-2, 1:-1] & m[2:, 1:-1] & m[1:-1, :-2] & m[1:-1, 2:]
     u, c = np.unique(ref[m][:, :3], axis=0, return_counts=True); pal = u[c > 0.05 * c.max()].astype(float)
+    if os.environ.get('PALADD'):  # extra colours on top of the reused palette, 'r,g,b;r,g,b'
+        pal = np.vstack([pal, np.array([[float(v) for v in c.split(',')] for c in os.environ['PALADD'].split(';')])])
 else: pal = np.array(Image.fromarray((pad.reshape(side, side, 3) * 255).astype(np.uint8)).quantize(colors=NCOL, method=Image.MEDIANCUT, dither=Image.NONE).getpalette()[:NCOL * 3]).reshape(-1, 3).astype(float)
 def finish(rgb, m, n):
     lab = -np.ones(m.shape, int); lab[m] = ((punch(rgb[m])[:, None, :] * 255 - pal[None]) ** 2).sum(2).argmin(1)

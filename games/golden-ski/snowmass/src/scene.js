@@ -119,6 +119,10 @@ export const GOLDIE_AIR = await (await fetch(new URL('../assets/sprites/goldie_a
 export const [goldiePoleT, goldiePoleN] = await Promise.all([loadTex('sprites/goldie_pole'), loadTex('sprites/goldie_pole_n')]);
 goldiePoleT.flipY = goldiePoleN.flipY = false;
 export const GOLDIE_POLE = await (await fetch(new URL('../assets/sprites/goldie_pole.json', import.meta.url))).json();
+// her transition frames (absorb, pop, unweight): same layout again
+export const [goldieMoveT, goldieMoveN] = await Promise.all([loadTex('sprites/goldie_move'), loadTex('sprites/goldie_move_n')]);
+goldieMoveT.flipY = goldieMoveN.flipY = false;
+export const GOLDIE_MOVE = await (await fetch(new URL('../assets/sprites/goldie_move.json', import.meta.url))).json();
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
 export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign', 'gate_red', 'gate_blue', 'outcrop'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });

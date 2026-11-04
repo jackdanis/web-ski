@@ -11,7 +11,10 @@ import './atmosphere.js'; // load order: runs after atmosphere.js
 // Lit per pixel from the normal map by sun, sky and snow bounce, snapped to four bands.
 // Double-poling uses its own sheet (goldie_pole.json, same layout): pole_reach, pole_plant, pole_crunch, pole_push.
 export const POLE_FRAMES = ['pole_reach', 'pole_plant', 'pole_crunch', 'pole_push'];
-export const FRAMES = { stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
+// The in-between frames (goldie_move.json, same layout): absorb (knees folded over a mogul or loading an ollie),
+// pop (legs driving off the lip) and unweight (tall and light between edges).
+export const MOVE_FRAMES = ['absorb', 'pop', 'unweight'];
+export const FRAMES = { absorb: 'absorb', pop: 'pop', unweight: 'unweight', stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
 // Flips use their own sheet (goldie_air.json): the tucked body from every camera direction round her, elevation -90
 // (from below) to 90 (from above) in 22.5 degree steps, each frame's anchor at the point she turns about. Her skis'
 // middle sits FLIP_SKIS from that point (m: up, forward in her body frame).
