@@ -1,6 +1,7 @@
 // Sound effects, all synthesized with Web Audio (no recorded files): ski hiss on the snow, wind that rises with speed,
 // pole plants and the landing thump. Music: Jack's own tracks, played one after another with a crossfade, through a
 // small-speaker filter (the We Ski sound). Phones only allow sound after a touch, so it starts on the first tap or key.
+// Music is off by default; the Tab menu's Music row turns it on.
 import { state } from './state.js';
 import { clamp } from './config.js';
 import { surfaceAt } from './world.js';
@@ -19,7 +20,7 @@ const SONGS = ['jack-jazz.mp3'].map((f) => `assets/music/${f}`);
 let ctx = null, master, noise;
 let hiss, scrape, wind;
 let was = { grounded: true, crashed: false, poleP: -1, air: 0 };
-const music = { decks: [], cur: 0, song: 0, fails: 0 };
+const music = { decks: [], cur: 0, song: 0, fails: 0, on: false };
 
 function noiseBuffer() {
   const b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -71,10 +72,18 @@ function startMusic() {
     el.addEventListener('playing', () => { music.fails = 0; });
     music.decks.push({ el, gain });
   }
-  // Phones only let an audio element play if it was first started from a touch: wake the spare deck now too.
-  const spare = music.decks[1].el;
-  spare.src = SONGS[0]; spare.play().then(() => spare.pause(), () => {});
-  playSong(0, 1.5);
+  // Phones only let an audio element play if it was first started from a touch: wake both decks now, silent.
+  for (const { el } of music.decks) { el.src = SONGS[0]; el.play().then(() => el.pause(), () => {}); }
+}
+// Music is off until the Tab menu turns it on; turning it off fades it out and pauses it.
+function setMusic(on) {
+  music.on = on;
+  if (on) { playSong(music.song, 1.5); return; }
+  for (const d of music.decks) {
+    d.gain.gain.cancelScheduledValues(ctx.currentTime);
+    d.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
+    setTimeout(() => { if (!music.on) d.el.pause(); }, 500);
+  }
 }
 function playSong(i, fade) {
   const d = music.decks[music.cur];
@@ -100,7 +109,7 @@ document.addEventListener('visibilitychange', () => {
   if (!ctx) return;
   if (document.hidden) ctx.suspend(); else ctx.resume();
   const el = music.decks[music.cur]?.el;
-  if (el) { if (document.hidden) el.pause(); else el.play().catch(() => {}); }
+  if (el && music.on) { if (document.hidden) el.pause(); else el.play().catch(() => {}); }
 });
 
 const set = (param, v, tc = 0.06) => param.setTargetAtTime(v, ctx.currentTime, tc);
@@ -142,8 +151,9 @@ function thump(k, sloppy) {
 export function updateAudio() {
   if (!ctx) return;
   set(master.gain, state.sound ? VOLUME : 0, 0.03);
+  if (state.music !== music.on) setMusic(state.music);
   const el = music.decks[music.cur].el;
-  if (el.duration && el.duration - el.currentTime < XFADE) nextSong();
+  if (music.on && el.duration && el.duration - el.currentTime < XFADE) nextSong();
   const skiing = state.phase === 'skiing';
   const speed = skiing ? sk.vel.length() : 0;
   const v = clamp(speed / V_TOP, 0, 1.3);

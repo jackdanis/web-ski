@@ -124,6 +124,7 @@ const DEBUG_ITEMS = [
   { name: 'Show collision shapes', get: () => physics.shapes, set: (on) => { physics.shapes = on; } },
   { name: 'Show world collision', get: () => physics.world, set: (on) => { physics.world = on; } },
   { name: 'Sound', get: () => state.sound, set: (on) => { state.sound = on; } },
+  { name: 'Music', get: () => state.music, set: (on) => { state.music = on; } },
   { name: 'Speed readout', get: () => !speedEl.hidden, set: (on) => { speedEl.hidden = !on; } },
   { name: 'Perf stats (triangles, draws, frame ms)', get: () => perf.on, set: (on) => { perf.on = on; } },
   { name: 'Pixel look (320x180)', get: () => pixelLook, set: (on) => setPixelLook(on) },

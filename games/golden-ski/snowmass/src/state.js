@@ -11,4 +11,5 @@ export const state = {
   shDirty: false,               // ...and a page built inside it marks it for a repaint
   testHold: null,               // test hooks: input held for scripted steps
   sound: true,                  // Tab: Sound
+  music: false,                 // Tab: Music (off by default, Jack 2026-11-04)
 };
