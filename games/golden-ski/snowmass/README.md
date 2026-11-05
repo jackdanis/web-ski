@@ -25,7 +25,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/trees.js` | Trees, clumps and props, paged in around the camera |
 | `src/lifts.js` | Lift lines, towers, cable, chairs, cabins; kicker meshes |
 | `src/slopes.js` | Signs, ropes, fence, roads, the 2 m run meshes and streaming, start points |
-| `src/props.js` | Mountain operations props: snow guns, snowcats, patrol huts, map boards and rope mazes at lift bottoms, ski racks |
+| `src/props.js` | Mountain operations props: snowcats, patrol huts, map boards and rope mazes at lift bottoms, ski racks |
 | `src/glades.js` | Trees through the glade runs, with tree wells |
 | `src/landforms.js` | Rock bands, cornices, wind lips and rock outcrops on the expert terrain |
 | `src/collview.js` | World collision view (Tab: Show world collision): turquoise ground grid at the ride height, purple walls |

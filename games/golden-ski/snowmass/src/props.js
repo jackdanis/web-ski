@@ -1,9 +1,8 @@
-// Mountain operations props (2026-11-02): snowmaking fan guns along the lower groomers, snowcats parked by the Max Park
-// maintenance buildings, ski patrol huts at the high lift tops, trail-map boards and rope mazes at the main lift
-// bottoms, and ski racks outside the lodges. Built in code like the kit buildings, batched with them.
+// Mountain operations props (2026-11-02): snowcats parked by the Max Park maintenance buildings, ski patrol huts at
+// the high lift tops, trail-map boards and rope mazes at the main lift bottoms, and ski racks outside the lodges.
+// (Snowmaking guns removed 2026-11-05: not featured.) Built in code like the kit buildings, batched with them.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-import { MAP } from '../data/mountain.js';
-import { SOLIDS, addObstacle, groundY, nearSolid, sampleBase } from './world.js';
+import { SOLIDS, groundY, nearSolid, sampleBase } from './world.js';
 import { DARK, SNOWCAP, STEEL, TILES, addMapStand, bucket, part, placeM, propBatch } from './buildings.js';
 import { liftPaths } from './lifts.js';
 
@@ -16,35 +15,9 @@ function fall(x, z) {
   return [-bB.gx / g, -bB.gz / g];
 }
 const solid = (x, z, yaw, w, l, y0, h, what) => SOLIDS.push({ x, z, y: y0 + h / 2, hx: w / 2, hy: h / 2, hz: l / 2, c: Math.cos(yaw), s: Math.sin(yaw), what });
-// a point d m down a run's line and the run's direction there
-function onRun(run, d) {
-  const p = run.points;
-  let left = d;
-  for (let i = 0; i < p.length - 1; i++) {
-    const dx = p[i + 1][0] - p[i][0], dz = p[i + 1][1] - p[i][1], L = Math.hypot(dx, dz) || 1;
-    if (left <= L) return { x: p[i][0] + dx * left / L, z: p[i][1] + dz * left / L, ux: dx / L, uz: dz / L };
-    left -= L;
-  }
-  return null;
-}
-const runLen = (run) => run.points.reduce((s, q, i) => (i ? s + Math.hypot(q[0] - run.points[i - 1][0], q[1] - run.points[i - 1][1]) : 0), 0);
-
 // ---------- Models: local +z is the front ----------
-const YELLOW = [0.95, 0.72, 0.1], GUN = [0.62, 0.64, 0.68], RED = [0.78, 0.13, 0.1], WHITE = [0.95, 0.96, 1.0], BLACK = [0.08, 0.08, 0.09];
+const GREY = [0.62, 0.64, 0.68], RED = [0.78, 0.13, 0.1], WHITE = [0.95, 0.96, 1.0], BLACK = [0.08, 0.08, 0.09];
 const WIN = [1.1, 1.1, 1.15], ORANGE = [1.0, 0.45, 0.08], WOOD = [0.62, 0.47, 0.36];
-// snowmaking fan gun on a short yellow tower, barrel tipped up and aimed over the run (+z)
-function snowGun() {
-  const P = [
-    part(BOX(1.8, 0.3, 1.4), DARK),
-    part(BOX(0.35, 2.6, 0.35, 0, 0.3, 0), YELLOW),
-    part(BOX(1.0, 0.25, 0.6, 0, 2.7, 0), YELLOW),
-  ];
-  const tilt = new THREE.Matrix4().makeRotationX(Math.PI / 2 - 0.42).setPosition(0, 3.3, 0.2);
-  P.push(part(CYL(0.62, 0.55, 1.7, 12).applyMatrix4(tilt), GUN));
-  P.push(part(CYL(0.66, 0.66, 0.18, 12).translate(0, 0.86, 0).applyMatrix4(tilt), DARK));
-  P.push(part(BOX(0.7, 0.18, 0.7, 0, 0, 0).applyMatrix4(new THREE.Matrix4().makeTranslation(0, 0.9, -0.05)).applyMatrix4(tilt), SNOWCAP));
-  return P;
-}
 // a snowcat: red body and cab on black tracks, a grey blade in front, the tiller behind, an orange light on the roof
 function snowcat() {
   const P = [];
@@ -59,9 +32,9 @@ function snowcat() {
   P.push(part(BOX(2.1, 0.8, 0.1, 0, 2.1, 1.52), WIN, null, TILES.window));
   P.push(part(BOX(2.4, 0.12, 2.1, 0, 3.1, 0.5), SNOWCAP));
   P.push(part(BOX(1.2, 0.18, 0.3, 0, 3.22, 0.5), ORANGE));
-  P.push(part(BOX(4.6, 1.1, 0.25, 0, 0.1, 3.4).applyMatrix4(new THREE.Matrix4().makeRotationX(-0.15)), GUN));     // blade
+  P.push(part(BOX(4.6, 1.1, 0.25, 0, 0.1, 3.4).applyMatrix4(new THREE.Matrix4().makeRotationX(-0.15)), GREY));     // blade
   for (const s of [-1, 1]) P.push(part(BOX(0.18, 0.18, 1.2, s * 1.0, 0.6, 2.8), STEEL));                       // blade arms
-  P.push(part(CYL(0.45, 0.45, 4.2, 10).rotateZ(Math.PI / 2).translate(0, 0.45, -3.4), GUN));                      // tiller
+  P.push(part(CYL(0.45, 0.45, 4.2, 10).rotateZ(Math.PI / 2).translate(0, 0.45, -3.4), GREY));                      // tiller
   P.push(part(BOX(4.2, 0.12, 1.4, 0, 0.0, -4.0), DARK));                                                          // comb
   return P;
 }
@@ -131,21 +104,6 @@ function place(parts, x, z, yaw, dy = 0, y = null) {
 }
 const LIFT = (n) => liftPaths.find((l) => l.name === n);
 export function addMountainProps() {
-  const runs = MAP.runs;
-  // fan guns: every 90 m down the lower groomers, alternating sides, aimed in over the run
-  for (const name of ['Fanny Hill', 'Assay Hill', 'Scooper (Lower)', 'Dawdler', 'Lower Banzai', 'Velvet Falls (Lower)', 'Bearclaw', 'Campground (Lower)']) {
-    const run = runs.find((r) => r.name === name);
-    if (!run) continue;
-    const L = runLen(run);
-    for (let d = 40, k = 0; d < L - 20; d += 90, k++) {
-      const p = onRun(run, d), s = k % 2 ? 1 : -1, off = run.width / 2 + 3;
-      const x = p.x - p.uz * off * s, z = p.z + p.ux * off * s;
-      if (nearSolid(x, z, 3)) continue;
-      const yaw = Math.atan2(p.uz * s, -p.ux * s);                        // +z toward the run's line
-      place(snowGun(), x, z, yaw, -0.15);
-      addObstacle({ x, z, y: groundY(x, z), r: 0.5, height: 3.6, what: 'snow gun' });
-    }
-  }
   // snowcats: three in a row beside the Max Park maintenance buildings, blades facing down the slope
   {
     const [fx, fz] = fall(-372, -2868), ax = -fz, az = fx, yaw = Math.atan2(fx, fz);

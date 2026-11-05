@@ -1,7 +1,7 @@
 // Wind (2026-11-03): a steady breeze with gusts that blows snow about. One wind for the whole mountain: its heading
 // wanders slowly, its strength follows the weather (cloudier days blow harder, storms hardest), and gusts come and go
 // every few seconds. Snow streams off crests that face into it (ridges, cornices, wind lips, roof edges show the
-// same shape), and low drift snakes across the slopes near the camera. The wind sound follows the gusts (audio.js).
+// same shape), and low drift snakes across the slopes near the camera; both only in ZONE below. The wind sound follows the gusts (audio.js).
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { sample } from './world.js';
 import { BOUNCE, SKY_COLOR, camera, renderer, scene } from './scene.js';
@@ -10,6 +10,10 @@ export const WIND = { x: 1, z: 0, speed: 4, gust: 0, crests: 0, alive: 0 };   //
 let t = 0;
 const gs = { h: 0, gx: 0, gz: 0 };
 const groundY = (x, z) => sample(x, z, gs).h;
+// Where the blowing snow shows (Jack 2026-11-05): only the open top of Big Burn / Sheer Bliss at the foot of the
+// Cirque, round the two lift tops and the Cirque T-Bar bottom; nowhere else on the mountain for now.
+const ZONE = { x: -120, z: -1010, r: 300, edge: 60 };
+const inZone = (x, z) => Math.min(1, Math.max(0, (ZONE.r - Math.hypot(x - ZONE.x, z - ZONE.z)) / ZONE.edge));
 // smooth 0..1 noise from a few sines that never line up
 const wave = (s, a, b, c) => 0.5 + 0.22 * Math.sin(s * a) + 0.17 * Math.sin(s * b + 1.3) + 0.11 * Math.sin(s * c + 4.1);
 
@@ -70,7 +74,7 @@ function scanCrests() {
     const x = cx + a + ((b * 7) % 5), z = cz + b + ((a * 3) % 5);
     const h = groundY(x, z), up = groundY(x - wx * 15, z - wz * 15), lee = groundY(x + wx * 15, z + wz * 15);
     const rise = h - up, drop = h - lee;
-    if (rise > -1.5 && drop > 2 && 2 * h - up - lee > 1.2) crests.push({ x, z, h, k: Math.min(1, (drop - 2) / 5) });
+    if (rise > -1.5 && drop > 2 && 2 * h - up - lee > 1.2 && inZone(x, z) > Math.random()) crests.push({ x, z, h, k: Math.min(1, (drop - 2) / 5) });
   }
   WIND.crests = crests.length;
 }
@@ -84,7 +88,8 @@ export function updateWind(dt, cloudy, storm) {
   WIND.speed = base * (0.55 + 0.9 * WIND.gust);
   mat.uniforms.uPx.value = renderer.domElement.height * 0.5 * camera.projectionMatrix.elements[5];   // pixels per metre at 1 m
 
-  if ((scanT -= dt) <= 0) { scanT = 1; scanCrests(); }
+  const near = Math.hypot(camera.position.x - ZONE.x, camera.position.z - ZONE.z) < ZONE.r + 220;
+  if ((scanT -= dt) <= 0) { scanT = 1; if (near) scanCrests(); else { crests.length = 0; WIND.crests = 0; } }
   const g = Math.max(0, WIND.gust - 0.25) / 0.75, w = WIND.speed, wx = WIND.x, wz = WIND.z;
   // plumes: off a few crests each frame, more in a gust
   if (crests.length) {
@@ -97,10 +102,11 @@ export function updateWind(dt, cloudy, storm) {
     }
   }
   // ground drift: thin snakes of snow skimming the slope round the camera, in strings along the wind
-  const dw = (0.1 + g) * 22 * dt * (storm ? 1.6 : 1);
+  const dw = near ? (0.1 + g) * 22 * dt * (storm ? 1.6 : 1) : 0;
   for (let n = 0; n < dw; n++) {
     const a = Math.random() * 6.283, r = 8 + Math.random() * 70;
     const x0 = camera.position.x + Math.cos(a) * r, z0 = camera.position.z + Math.sin(a) * r;
+    if (inZone(x0, z0) <= Math.random()) continue;
     const y0 = groundY(x0, z0) + 0.05;
     for (let k = 0; k < 10; k++) {
       const x = x0 - wx * k * 0.35 + (Math.random() - 0.5) * 0.2, z = z0 - wz * k * 0.35 + (Math.random() - 0.5) * 0.2;
