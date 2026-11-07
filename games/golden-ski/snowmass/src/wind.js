@@ -30,17 +30,15 @@ const mat = new THREE.ShaderMaterial({
   uniforms: { uLight: { value: BOUNCE }, uSky: { value: SKY_COLOR }, uPx: { value: 1 } },
   vertexShader: `attribute float aSize, aAlpha; varying float vA; uniform float uPx;
     void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
-      gl_PointSize = clamp(aSize * uPx / -mv.z, 1.0, 64.0); vA = aAlpha; }`,
-  // a round puff, its alpha cut by a 4x4 ordered dither so it stays hard pixels, like the rest of the retro look
-  // two tones so it reads over bright snow: a white core and a cool grey-blue rim
+      gl_PointSize = clamp(floor(aSize * uPx / -mv.z + 0.5), 1.0, 2.0); vA = aAlpha; }`,
+  // Jack 2026-11-07: super subtle, most of it one white pixel (a near few are 2). Alpha cut by a 4x4 ordered dither
+  // so it stays hard pixels, like the rest of the retro look.
   fragmentShader: `uniform vec3 uLight, uSky; varying float vA;
     void main() {
-      vec2 c = gl_PointCoord - 0.5; float r = dot(c, c) * 4.0;
       vec2 q = mod(floor(gl_FragCoord.xy), 4.0);
       float d = mod(q.x * 4.0 + q.y * 9.0 + floor(q.x / 2.0) * 3.0, 16.0) / 16.0 + 0.03;
-      if (vA * (1.0 - r) < d) discard;
-      vec3 core = min(uLight * 1.25 + 0.08, vec3(1.0)), rim = mix(uLight, uSky, 0.55) * 0.82;
-      gl_FragColor = vec4(r < 0.35 ? core : rim, 1.0);
+      if (vA < d) discard;
+      gl_FragColor = vec4(min(uLight * 1.25 + 0.08, vec3(1.0)), 1.0);
       #include <colorspace_fragment>
     }`,
   depthWrite: false,
@@ -96,7 +94,7 @@ export function updateWind(dt, cloudy, storm) {
     const want = g * g * 700 * dt * (storm ? 2 : 1);
     for (let n = 0; n < want || (Math.random() < want - n); n++) {
       const c = crests[(Math.random() * crests.length) | 0];
-      const j = (Math.random() - 0.5) * 10, s = 1.0 + Math.random() * 1.2;
+      const j = (Math.random() - 0.5) * 10, s = 0.05 + Math.random() * 0.03;
       spawn(1, c.x - wz * j, c.h + 0.2, c.z + wx * j, wx * w * (0.7 + 0.5 * Math.random()), 0.6 + 1.4 * Math.random() * (0.5 + c.k),
         wz * w * (0.7 + 0.5 * Math.random()), 2 + 2.5 * Math.random(), s, 0);
     }
@@ -110,7 +108,7 @@ export function updateWind(dt, cloudy, storm) {
     const y0 = groundY(x0, z0) + 0.05;
     for (let k = 0; k < 10; k++) {
       const x = x0 - wx * k * 0.35 + (Math.random() - 0.5) * 0.2, z = z0 - wz * k * 0.35 + (Math.random() - 0.5) * 0.2;
-      spawn(2, x, y0, z, wx * w * 0.9, 0, wz * w * 0.9, 2.5 + Math.random() * 2, 0.9 + Math.random() * 0.5, 0.08 + Math.random() * 0.4);
+      spawn(2, x, y0, z, wx * w * 0.9, 0, wz * w * 0.9, 2.5 + Math.random() * 2, 0.04 + Math.random() * 0.02, 0.08 + Math.random() * 0.4);
     }
   }
   for (let i = 0; i < N; i++) {
@@ -128,8 +126,7 @@ export function updateWind(dt, cloudy, storm) {
       pos[j + 1] += (gy - pos[j + 1]) * 0.6;
     }
     const fade = Math.min(f / 0.15, 1, (1 - f) / 0.35);
-    alpha[i] = (kind[i] === 1 ? 0.8 : 0.6) * fade * (kind[i] === 1 ? 1 - 0.4 * f : 1);
-    if (kind[i] === 1) size[i] *= 1 + dt * 0.5;
+    alpha[i] = (kind[i] === 1 ? 0.6 : 0.45) * fade * (kind[i] === 1 ? 1 - 0.4 * f : 1);
   }
   WIND.alive = kind.reduce((a, k) => a + (k ? 1 : 0), 0);
   geo.attributes.position.needsUpdate = true; geo.attributes.aAlpha.needsUpdate = true; geo.attributes.aSize.needsUpdate = true;
