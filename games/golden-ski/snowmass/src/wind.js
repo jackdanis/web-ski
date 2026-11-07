@@ -27,20 +27,22 @@ geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
 geo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
 const mat = new THREE.ShaderMaterial({
-  uniforms: { uLight: { value: BOUNCE }, uSky: { value: SKY_COLOR }, uPx: { value: 1 } },
-  vertexShader: `attribute float aSize, aAlpha; varying float vA; uniform float uPx;
-    void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
-      gl_PointSize = clamp(floor(aSize * uPx / -mv.z + 0.5), 1.0, 2.0); vA = aAlpha; }`,
-  // Jack 2026-11-07: super subtle, most of it one white pixel (a near few are 2). Alpha cut by a 4x4 ordered dither
-  // so it stays hard pixels, like the rest of the retro look.
-  fragmentShader: `uniform vec3 uLight, uSky; varying float vA;
+  uniforms: { uLight: { value: BOUNCE }, uSky: { value: SKY_COLOR }, uGrid: { value: 1 }, uSeen: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) } },
+  // 16-bit (Jack 2026-11-07): one "pixel" is a cell of a SNES-height screen (224 rows), uGrid device pixels square;
+  // each flake is exactly one cell, snapped to that grid
+  vertexShader: `attribute float aAlpha; varying float vA; uniform float uGrid; uniform vec2 uRes;
+    void main() { vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      vec2 g = uRes / uGrid, s = floor((p.xy / p.w * 0.5 + 0.5) * g) + 0.5;
+      p.xy = ((s / g) * 2.0 - 1.0) * p.w; gl_Position = p;
+      gl_PointSize = uGrid; vA = aAlpha; }`,
+  // Jack 2026-11-07: small and almost see-through, one flat white cell blended at low alpha; seen on desktop-size
+  // screens only (uSeen, from the window size), gone on phones.
+  fragmentShader: `uniform vec3 uLight; uniform float uSeen; varying float vA;
     void main() {
-      vec2 q = mod(floor(gl_FragCoord.xy), 4.0);
-      float d = mod(q.x * 4.0 + q.y * 9.0 + floor(q.x / 2.0) * 3.0, 16.0) / 16.0 + 0.03;
-      if (vA < d) discard;
-      gl_FragColor = vec4(min(uLight * 1.25 + 0.08, vec3(1.0)), 1.0);
+      gl_FragColor = vec4(min(uLight * 1.25 + 0.08, vec3(1.0)), vA * uSeen);
       #include <colorspace_fragment>
     }`,
+  transparent: true,
   depthWrite: false,
 });
 const points = new THREE.Points(geo, mat);
@@ -84,23 +86,28 @@ export function updateWind(dt, cloudy, storm) {
   WIND.gust = Math.pow(wave(t, 0.41, 0.97, 2.3), 2.2) * 1.6;
   const base = storm ? 11 : 2.5 + 3.5 * Math.min(1, cloudy);
   WIND.speed = base * (0.55 + 0.9 * WIND.gust);
-  mat.uniforms.uPx.value = renderer.domElement.height * 0.5 * camera.projectionMatrix.elements[5];   // pixels per metre at 1 m
+  const bh = renderer.domElement.height;
+  mat.uniforms.uGrid.value = Math.max(1, Math.round(bh / 224));
+  // screens under ~600 CSS px on their short side (phones) see none; fades in to full by 800 (desktop)
+  const seen = Math.min(1, Math.max(0, (Math.min(window.innerWidth, window.innerHeight) - 600) / 200));
+  mat.uniforms.uSeen.value = seen;
+  mat.uniforms.uRes.value.set(renderer.domElement.width, bh);
 
   const near = Math.hypot(camera.position.x - ZONE.x, camera.position.z - ZONE.z) < ZONE.r + 220;
   if ((scanT -= dt) <= 0) { scanT = 1; if (near) scanCrests(); else { crests.length = 0; WIND.crests = 0; } }
   const g = Math.max(0, WIND.gust - 0.25) / 0.75, w = WIND.speed, wx = WIND.x, wz = WIND.z;
   // plumes: off a few crests each frame, more in a gust
-  if (crests.length) {
+  if (crests.length && seen > 0) {
     const want = g * g * 700 * dt * (storm ? 2 : 1);
     for (let n = 0; n < want || (Math.random() < want - n); n++) {
       const c = crests[(Math.random() * crests.length) | 0];
-      const j = (Math.random() - 0.5) * 10, s = 0.05 + Math.random() * 0.03;
+      const j = (Math.random() - 0.5) * 10, s = 0.08 + Math.random() * 0.06;
       spawn(1, c.x - wz * j, c.h + 0.2, c.z + wx * j, wx * w * (0.7 + 0.5 * Math.random()), 0.6 + 1.4 * Math.random() * (0.5 + c.k),
         wz * w * (0.7 + 0.5 * Math.random()), 2 + 2.5 * Math.random(), s, 0);
     }
   }
   // ground drift: thin snakes of snow skimming the slope round the camera, in strings along the wind
-  const dw = near ? (0.1 + g) * 22 * dt * (storm ? 1.6 : 1) : 0;
+  const dw = near && seen > 0 ? (0.1 + g) * 22 * dt * (storm ? 1.6 : 1) : 0;
   for (let n = 0; n < dw; n++) {
     const a = Math.random() * 6.283, r = 8 + Math.random() * 70;
     const x0 = camera.position.x + Math.cos(a) * r, z0 = camera.position.z + Math.sin(a) * r;
@@ -108,7 +115,7 @@ export function updateWind(dt, cloudy, storm) {
     const y0 = groundY(x0, z0) + 0.05;
     for (let k = 0; k < 10; k++) {
       const x = x0 - wx * k * 0.35 + (Math.random() - 0.5) * 0.2, z = z0 - wz * k * 0.35 + (Math.random() - 0.5) * 0.2;
-      spawn(2, x, y0, z, wx * w * 0.9, 0, wz * w * 0.9, 2.5 + Math.random() * 2, 0.04 + Math.random() * 0.02, 0.08 + Math.random() * 0.4);
+      spawn(2, x, y0, z, wx * w * 0.9, 0, wz * w * 0.9, 2.5 + Math.random() * 2, 0.06 + Math.random() * 0.04, 0.08 + Math.random() * 0.4);
     }
   }
   for (let i = 0; i < N; i++) {
@@ -126,8 +133,8 @@ export function updateWind(dt, cloudy, storm) {
       pos[j + 1] += (gy - pos[j + 1]) * 0.6;
     }
     const fade = Math.min(f / 0.15, 1, (1 - f) / 0.35);
-    alpha[i] = (kind[i] === 1 ? 0.6 : 0.45) * fade * (kind[i] === 1 ? 1 - 0.4 * f : 1);
+    alpha[i] = (kind[i] === 1 ? 0.3 : 0.22) * fade * (kind[i] === 1 ? 1 - 0.4 * f : 1);
   }
   WIND.alive = kind.reduce((a, k) => a + (k ? 1 : 0), 0);
-  geo.attributes.position.needsUpdate = true; geo.attributes.aAlpha.needsUpdate = true; geo.attributes.aSize.needsUpdate = true;
+  geo.attributes.position.needsUpdate = true; geo.attributes.aAlpha.needsUpdate = true;
 }
