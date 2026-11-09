@@ -31,7 +31,7 @@ No build step: `index.html` loads `src/main.js` as a module and three.js comes f
 | `src/collview.js` | World collision view (Tab: Show world collision): turquoise ground grid at the ride height, purple walls |
 | `src/ride.js` | The chairlift ride cutscene |
 | `src/atmosphere.js` | Lamps, shadows, storm snow, the day clock (time of day blends), pixel look |
-| `src/wind.js` | Wind and gusts, snow blowing off crests, drift along the slopes |
+| `src/wind.js` | Wind and gusts (heading, strength, gusts) for the wind sound and storm flakes |
 | `src/goldie.js` | Goldie's sprite, skis, shadow and spray |
 | `src/tracks.js` | Her ski tracks: grooves painted around her, shaded by Snowlight |
 | `src/snow.js` | Each run's snow: real moguls on Long Shot and Timberline, chopped snow on The Edge, Slot and Campground |
