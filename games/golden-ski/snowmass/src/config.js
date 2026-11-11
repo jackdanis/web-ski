@@ -56,7 +56,7 @@ export const CV = {
   SKID_TURN: 2.6,               // rad/s extra pivot in a skidded turn
   SKID_BRAKE: 2.5,              // m/s^2 extra braking in a skidded turn
   TUCK_TURN: 0.5,               // tucked, the tightest turn is twice as wide
-  DRAG: 0.0045, TUCK_DRAG: 0.0024, // sea-level drag...
+  DRAG: MO.DRAG, TUCK_DRAG: MO.TUCK_DRAG, // sea-level drag (same as MO)...
   AIR_SCALE: 8500,              // ...times exp(-altitude / AIR_SCALE)
   GLIDE: 3,                     // m/s: friction runs from 1.2x the snow's figure at rest
                                 // toward 0.6x at speed

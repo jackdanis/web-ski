@@ -9,7 +9,7 @@ import { camera, canvas, scene } from './scene.js';
 import { KIND } from './trees.js';
 import { RUNS } from './slopes.js';
 import { liftPaths } from './lifts.js';
-import { debugEl, free } from './play.js';
+import { debugEl, free, lockPointer } from './play.js';
 
 const MAX_T = 4000;                    // m: the laser's reach
 const STORE = 'golden-ski-notes';
@@ -196,9 +196,6 @@ function drawList() {
 }
 
 let draft = null;
-function lockPointer() {
-  try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* drag to look */ }
-}
 function dropPin() {
   if (draft || !free.on || !debugEl.hidden) return;
   castLaser();

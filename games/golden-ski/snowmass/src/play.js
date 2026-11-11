@@ -179,7 +179,7 @@ function debugKey(e) {
 }
 // Phones: a three-finger tap toggles the menu.
 canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 3) openMenu(debugEl.hidden); }, { passive: true });
-function lockPointer() {
+export function lockPointer() {
   // Without pointer lock, drag with the button held to look.
   try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* drag to look */ }
 }
