@@ -2,7 +2,7 @@
 // the middle, and a tree well round each new tree: a dip in the snow (physics) drawn as two rings of shaded snow.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from '../data/mountain.js';
-import { cellKey, hash2 } from './config.js';
+import { cellKey, ease, hash2 } from './config.js';
 import { GROUND_ADD, addObstacle, groundY, nearSolid, treeCells } from './world.js';
 import { addByPage, bucket, modelMat, part } from './buildings.js';
 import { KIND, TRUNK_R, addProp } from './trees.js';
@@ -16,7 +16,6 @@ const ringMat = modelMat.clone();
 Object.assign(ringMat, { uniforms: modelMat.uniforms, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
 const RINGS = new Map();
 const wells = new Map();                                     // 8 m cells -> trees with wells
-const ease = (t) => t * t * (3 - 2 * t);
 const treeNear = (x, z, r) => {
   for (let i = Math.floor((x - r) / 8); i <= Math.floor((x + r) / 8); i++) for (let j = Math.floor((z - r) / 8); j <= Math.floor((z + r) / 8); j++)
     for (const t of treeCells.get(cellKey(i, j)) || []) if (Math.hypot(t.x - x, t.z - z) < r) return true;

@@ -241,7 +241,10 @@ export const terrainMat = new THREE.ShaderMaterial({
     uPMask: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uPMin: { value: new THREE.Vector2() }, uPSize: { value: new THREE.Vector2(1, 1) },
     uPOn: { value: 0 }, uPFar: { value: 0 },
     // each run's snow (snow.js) on the 10 m grid: red bumps, green chopped
-    uSnowT: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uSnowG: { value: new THREE.Vector4(X0 - CELL / 2, Z0 - CELL / 2, NX * CELL, NZ * CELL) } }, LIGHT),
+    uSnowT: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uSnowG: { value: new THREE.Vector4(X0 - CELL / 2, Z0 - CELL / 2, NX * CELL, NZ * CELL) },
+    // roads painted into the ground (slopes.js): a mask over the box x0, z0, width, depth, so a road lies on whichever
+    // ground mesh is showing and can never float above it or sink under it
+    uRoad: { value: new THREE.DataTexture(new Uint8Array(4), 1, 1) }, uRoadB: { value: new THREE.Vector4(0, 0, 1, 1) } }, LIGHT),
   vertexShader: /* glsl */ `
     attribute vec4 aCov;
     attribute vec3 aN;
@@ -269,6 +272,7 @@ export const terrainMat = new THREE.ShaderMaterial({
     uniform vec3 uRock, uForest, uAspen;
     uniform sampler2D uPMask; uniform vec2 uPMin, uPSize; uniform float uPOn, uPFar;
     uniform sampler2D uSnowT; uniform vec4 uSnowG;
+    uniform sampler2D uRoad; uniform vec4 uRoadB;
     float vnoise(vec2 p) {
       vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
       return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
@@ -351,6 +355,17 @@ export const terrainMat = new THREE.ShaderMaterial({
       // windrow just off the groomed edge, then a thin shadow line
       if (edge > 0.0 && edge < 1.6) { alb = mix(alb, vec3(1.0), 0.35); n = normalize(n + vec3(0.0, 0.25, 0.0)); }
       else if (edge >= 1.6 && edge < 2.4) alb *= 0.82;
+      // roads: plowed concrete, a little snow blown onto the edges
+      vec2 ru = (vP.xz - uRoadB.xy) / uRoadB.zw;
+      if (ru.x > 0.0 && ru.y > 0.0 && ru.x < 1.0 && ru.y < 1.0) {
+        float rm = texture2D(uRoad, ru).r;
+        if (rm > 0.0) {
+          float r = smoothstep(0.05, 0.9, rm - (vnoise(vP.xz * 0.6) - 0.5) * 0.2);
+          vec3 conc = vec3(0.56, 0.55, 0.53) * (0.9 + 0.2 * vnoise(vP.xz * 1.7));
+          alb = mix(alb, conc, r);
+          n = normalize(mix(n, fn, r));
+        }
+      }
       // ski tracks: lit from the groove's slope, the floor a shade bluer
       float th = trackH(vP.xz);
       if (th != 0.0 && vD < 70.0) {

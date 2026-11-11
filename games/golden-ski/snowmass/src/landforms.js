@@ -11,13 +11,13 @@
 // so the run line itself stays open and the drops sit beside it.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from '../data/mountain.js';
+import { ease } from './config.js';
 import { KICKERS, addObstacle, sampleBase, samplePatch } from './world.js';
 import { state } from './state.js';
 import { camera, scene } from './scene.js';
 import { RING_FAR, merge, modelMat, part, rockGeo } from './buildings.js';
 import { KIND, addProp } from './trees.js';
 
-const ease = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
 const bB = { h: 0, gx: 0, gz: 0 };
 const base = (x, z) => sampleBase(x, z, bB).h;
 function fall(x, z) {
@@ -182,4 +182,3 @@ export function updateLandforms() {
     b.mesh.visible = true;
   }
 }
-export const LANDFORMS = FEATURES;

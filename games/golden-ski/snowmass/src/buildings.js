@@ -1,7 +1,7 @@
 // Low-poly kit models, detail rings, rocks, chairlift and gondola terminals, the Elk Camp restaurant.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { UP_Y, clamp, hash2 } from './config.js';
-import { CELL, LIFT_CUT, NX, NZ, PAGE, SOLIDS, STATIONS, X0, Z0, addObstacle, deckDist, groundY, sampleBase, stB, stationH } from './world.js';
+import { CELL, LIFT_CUT, NX, NZ, PAGE, SOLIDS, STATIONS, X0, Z0, addObstacle, deckDist, groundY, sampleBase, solidsAt, stB, stationH } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, loadTex, scene, stationN, stationT } from './scene.js';
 
 // ---------- Kit models: low poly, flat shaded, vertex colored, lit by Snowlight ----------
@@ -203,7 +203,10 @@ export function addBuilding({ x, z, yaw = 0, w, l, bot, top, color = CONC, roof 
   };
   return addRinged(make, 0, RING_NEAR, foot);
 }
-export const flushBuildings = () => addByPage(STAND_INS, modelMat);
+export function flushBuildings() {
+  for (const [k, geos] of STAND_INS) STAND_INS.set(k, geos.filter(shows));
+  addByPage(STAND_INS, modelMat);
+}
 // Industrial building (Jack's reference: a small electrical building): dark brown lap siding, a flat roof behind a
 // grey band, framed double doors on the side that faces the run (front = +1 for local +z, -1 for -z). One storey
 // on small footprints, taller on big ones; batched with the stand-ins.
@@ -232,7 +235,40 @@ export function addIndustrial({ x, z, yaw = 0, w, l, bot, ground, front = 1 }) {
 // Each takes the block (centre, yaw, width w along local x, length l along local z, ground low and high) and
 // front: +1 or -1, the local axis side that faces the run (local z if w >= l, else local x).
 const WIN = [1.1, 1.1, 1.15];
-const BOX = (w, h, l, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, l).translate(x, y + h / 2, z);
+export const BOX = (w, h, l, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, l).translate(x, y + h / 2, z);
+// One window rule for every building: a window (a thin pane, local x or z its thin side) is drawn only if one of
+// its two sides is open air: not under the snow outside and not inside a building. So no window sits below the
+// ground on a slope, in a stone base dug into the hill, or between two parts of one building. Checked when the
+// buildings are flushed, once every building's solid box exists.
+const PROBE = 0.45;
+function win(g, M) {
+  g.computeBoundingBox();
+  const b = g.boundingBox, c = b.getCenter(new THREE.Vector3()), thinX = b.max.x - b.min.x < b.max.z - b.min.z;
+  const probes = [-1, 1].map((s) => {
+    const p = c.clone(); if (thinX) p.x += s * PROBE; else p.z += s * PROBE;
+    const sill = p.clone(); sill.y = b.min.y;
+    return [p.applyMatrix4(M), sill.applyMatrix4(M).y];
+  });
+  const out = part(g, WIN, M, TILES.window);
+  out.userData.probes = probes;
+  return out;
+}
+const blocked = ([p, sill]) => groundY(p.x, p.z) > sill - 0.15 || solidsAt(p.x, p.z).some((s) => {
+  if (s.what === 'rope' || s.what === 'fence') return false;
+  const dx = p.x - s.x, dz = p.z - s.z;
+  return Math.abs(s.c * dx - s.s * dz) < s.hx && Math.abs(s.s * dx + s.c * dz) < s.hz && Math.abs(p.y - s.y) < s.hy;
+});
+// a row of n panes pw wide and h tall from y, spread over span (centred at c) along one face of the box w x l at
+// (cx, cz): 'f' its +z face, 'b' -z, 'r' +x, 'l' -x; d: how far out of the wall
+function paneRow(P, M, { cx = 0, cz = 0, w, l }, face, y, h, pw, n, span, c = 0, d = 0.05) {
+  const fz = face === 'f' || face === 'b', sg = face === 'f' || face === 'r' ? 1 : -1;
+  for (let k = 0; k < n; k++) {
+    const u = c - span / 2 + (k + 0.5) * span / n;
+    P.push(win(fz ? BOX(pw, h, 0.12, cx + u, y, cz + sg * (l / 2 + d)) : BOX(0.12, h, pw, cx + sg * (w / 2 + d), y, cz + u), M));
+  }
+}
+const FACES = ['f', 'b', 'l', 'r'];
+const shows = (g) => !g.userData.probes || !g.userData.probes.every(blocked);
 // shed roof block: width w across local x (low side at -x), length l along z, walls hLow and hHigh
 function shed(w, l, hLow, hHigh) {
   const a = [-w / 2, 0], b = [w / 2, 0], c = [w / 2, hHigh], d = [-w / 2, hLow], pos = [];
@@ -271,7 +307,7 @@ export function addSamsKnob(b) {
   ];
   // the back: glass from the ground floor to the eaves, a cedar frame grid 3 m across and 2.6 m up
   const zb = -L / 2 - 0.05, gh = H - dy - 0.6, gy = dy + 0.3;
-  P.push(part(BOX(W - 1.2, gh, 0.08, 0, gy, zb), WIN, M, TILES.window));
+  P.push(win(BOX(W - 1.2, gh, 0.08, 0, gy, zb), M));
   const cols = Math.round((W - 1.2) / 3);
   for (let k = 0; k <= cols; k++) P.push(part(BOX(0.3, gh + 0.3, 0.3, -(W - 1.2) / 2 + k * (W - 1.2) / cols, gy - 0.15, zb - 0.1), SK_TIMBER, M, TILES.cedar));
   for (let y = gy; y <= gy + gh + 0.01; y += gh / Math.round(gh / 2.6)) P.push(part(BOX(W - 0.9, 0.3, 0.32, 0, y - 0.15, zb - 0.1), SK_TIMBER, M, TILES.cedar));
@@ -281,13 +317,13 @@ export function addSamsKnob(b) {
   P.push(part(gable(ew + 1.4, ed + 1.0, 5.0).translate(0, eh, ez), SK_ROOF, M, TILES.metalRoof));
   P.push(part(gable(ew + 0.6, ed + 0.4, 4.6).translate(0, eh + 0.15, ez), SNOWCAP, M));
   const tri = gable(ew - 1.2, 0.08, 4.3).translate(0, eh, ez + ed / 2 - 0.3);
-  P.push(part(tri, WIN, M, TILES.window));
+  P.push(win(tri, M));
   P.push(part(BOX(ew - 0.6, 0.5, 0.5, 0, eh - 0.5, ez + ed / 2 - 0.4), SK_TIMBER, M, TILES.cedar));                 // tie beam
   for (const s of [-1, 1]) {                                                                                       // braces
     const g = BOX(0.35, 3.6, 0.35).translate(0, -1.8, 0).applyMatrix4(new THREE.Matrix4().makeRotationZ(s * 0.95)).translate(s * (ew / 2 - 0.6), eh - 0.4, ez + ed / 2 - 0.4);
     P.push(part(g, SK_TIMBER, M, TILES.cedar));
   }
-  P.push(part(BOX(ew - 2.0, eh - dy - 1.0, 0.08, 0, dy, L / 2 + 0.06), WIN, M, TILES.window));
+  P.push(win(BOX(ew - 2.0, eh - dy - 1.0, 0.08, 0, dy, L / 2 + 0.06), M));
   bucket(STAND_INS, x, z, ...P);
   solidBox(x, z, yaw, w, l, bot, H + 2, "Sam's Knob");
 }
@@ -310,7 +346,7 @@ export function addUp4Pizza(b, uphill) {
   // run side: two rows of windows, an awning over each row
   const zf = L / 2 + 0.05, n = Math.max(2, Math.floor((W - 2) / 2.6)), ww = (W - 2) / n;
   for (const [y0, h] of [[dy + 1.6, 2.3], [dy + 4.6, 2.0]]) {
-    for (let k = 0; k < n; k++) P.push(part(BOX(ww - 0.35, h, 0.08, -(W - 2) / 2 + (k + 0.5) * ww, y0, zf), WIN, M, TILES.window));
+    for (let k = 0; k < n; k++) P.push(win(BOX(ww - 0.35, h, 0.08, -(W - 2) / 2 + (k + 0.5) * ww, y0, zf), M));
     P.push(part(BOX(W - 1.4, 0.12, 1.4, 0, y0 + h + 0.25, zf + 0.6).applyMatrix4(new THREE.Matrix4().makeRotationX(0)), UP_GREY, M, TILES.metalRoof));
   }
   P.push(part(BOX(1.3, 2.3, 0.1, W / 2 - 1.2, dy, zf + 0.02), DARK, M));                                           // door
@@ -383,8 +419,8 @@ export function addLizardLodge(b) {
   P.push(part(gable(pw + 0.2, pd + 0.2, 2.0).translate(0, ph + 0.15, pz), SNOWCAP, M));
   P.push(part(gable(pw - 0.2, 0.1, 1.9).translate(0, ph, L / 2 + pd + 0.2), LZ_TAN, M, TILES.siding));   // porch gable end
   P.push(part(BOX(pw, 0.15, pd, 0, dy - 0.02, pz), WALL, M, TILES.deck));                                        // porch floor
-  P.push(part(BOX(1.0, 2.1, 0.08, 0, dy, L / 2 + 0.04), LZ_DOOR, M), part(BOX(0.5, 0.7, 0.1, 0, dy + 1.2, L / 2 + 0.07), WIN, M, TILES.window));
-  for (const s of [-1, 1]) P.push(part(BOX(1.4, 1.1, 0.08, s * (W / 2 - 2.2), dy + 1.5, L / 2 + 0.04), WIN, M, TILES.window));
+  P.push(part(BOX(1.0, 2.1, 0.08, 0, dy, L / 2 + 0.04), LZ_DOOR, M), win(BOX(0.5, 0.7, 0.1, 0, dy + 1.2, L / 2 + 0.07), M));
+  for (const s of [-1, 1]) P.push(win(BOX(1.4, 1.1, 0.08, s * (W / 2 - 2.2), dy + 1.5, L / 2 + 0.04), M));
   bucket(STAND_INS, x, z, ...P);
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(pw + 0.2, 0.62).translate(0, ph - 0.45, L / 2 + pd + 0.02).applyMatrix4(M),
     new THREE.MeshBasicMaterial({ map: lizardSign() }));
@@ -410,7 +446,7 @@ export function addAnnouncer(b, uphill) {
   for (const s of [-1, 0, 1]) P.push(part(BOX(0.3, 0.3, 1.0, s * (S / 2 - 0.6), hi - 0.45, D / 2 + 0.5), AN_BROWN, M, TILES.cedar));
   // the window: the full width, from half height to just under the eave, with thin mullions
   const wy = dy + 2.6, wh = hi - 0.5 - wy, zf = D / 2 + 0.05;
-  P.push(part(BOX(S - 0.4, wh, 0.08, 0, wy, zf), WIN, M, TILES.window));
+  P.push(win(BOX(S - 0.4, wh, 0.08, 0, wy, zf), M));
   for (let k = 1; k < 4; k++) P.push(part(BOX(0.12, wh, 0.12, -(S - 0.4) / 2 + k * (S - 0.4) / 4, wy, zf + 0.04), AN_BROWN, M));
   P.push(part(BOX(S - 0.2, 0.18, 0.4, 0, wy - 0.18, zf + 0.12), AN_BROWN, M));                     // sill
   P.push(part(BOX(1.0, 2.1, 0.08, 0, dy, -D / 2 - 0.04), DARK, M));                                  // door at the back
@@ -437,7 +473,7 @@ export function addTwoCreeks(b, checkin = false) {
   const zf = bz + BL / 2 + 0.05, doors = checkin ? [0] : [-W / 4, W / 4];
   for (let cx = -W / 2 + 3; cx <= W / 2 - 3; cx += 3.2) {
     if (doors.some((d) => Math.abs(cx - d) < 2)) continue;
-    P.push(part(BOX(2.3, 2.9, 0.1, cx, dy + 1.0, zf), TC_BLUE, M), part(BOX(1.9, 2.5, 0.12, cx, dy + 1.2, zf + 0.02), WIN, M, TILES.window));
+    P.push(part(BOX(2.3, 2.9, 0.1, cx, dy + 1.0, zf), TC_BLUE, M), win(BOX(1.9, 2.5, 0.12, cx, dy + 1.2, zf + 0.02), M));
   }
   for (const d of doors) P.push(part(BOX(2.4, 2.6, 0.1, d, dy, zf), DARK, M));
   // porch posts and the beam they carry; the main roof covers the porch
@@ -455,7 +491,7 @@ export function addTwoCreeks(b, checkin = false) {
   // clerestory on the ridge: a band of windows under its own low hip
   const cw = W * (checkin ? 0.7 : 0.5), cl = checkin ? 4 : 5, cy = H + RH * 0.55;
   P.push(part(BOX(cw, 2.4, cl, 0, cy - 0.3), TC_TAN, M, TILES.siding));
-  for (const s of [-1, 1]) P.push(part(BOX(cw - 1, 1.5, 0.1, 0, cy + 0.3, s * (cl / 2 + 0.05)), WIN, M, TILES.window));
+  for (const s of [-1, 1]) P.push(win(BOX(cw - 1, 1.5, 0.1, 0, cy + 0.3, s * (cl / 2 + 0.05)), M));
   P.push(part(hip(cw + 1.6, cl + 1.6, 1.4).translate(0, cy + 2.1, 0), TC_ROOF, M, TILES.metalRoof), part(hip(cw + 1.0, cl + 1.0, 1.3).translate(0, cy + 2.3, 0), SNOWCAP, M));
   // small gables over the doors, standing out of the front roof slope
   for (const d of checkin ? [] : doors) {
@@ -504,7 +540,7 @@ export function addBase(b) {
       for (let k = 0; k < n; k++) {
         const c = -len / 2 + (k + 0.5) * step;
         const at = (gw, gh, gy, d) => axisX ? BOX(gw, gh, 0.1, c, gy, sgn * (L / 2 + d)) : BOX(0.1, gh, gw, sgn * (W / 2 + d), gy, c);
-        P.push(part(at(1.3, 2.4, y, 0.04), WIN, M, TILES.window));
+        P.push(win(at(1.3, 2.4, y, 0.04), M));
         P.push(part(at(1.7, 0.45, y + 2.4, 0.08), TRIM, M));
         P.push(part(at(1.6, 0.18, y - 0.18, 0.1), TRIM, M));
       }
@@ -529,13 +565,14 @@ function mass(P, b, frame, spec, st) {
   P.push(part(BOX(bw, top - hi, bl, cx, hi, cz), st.wall, M));
   P.push(part(BOX(bw + 0.6, 0.7, bl + 0.6, cx, top - 0.1, cz), st.cap, M));
   P.push(part(BOX(bw - 0.4, 0.14, bl - 0.4, cx, top + 0.6, cz), SNOWCAP, M));
-  // window bands on all four faces, balconies (slab and rail) on the run side and the two ends
-  const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]];
+  // a window every 3.2 m on all four faces, balconies (slab and rail) on the run side and the two ends
+  const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]], mb = { cx, cz, w: bw, l: bl };
   for (let f = 0; f < floors; f++) {
     const y = hi + f * st.FH;
     for (const [len, alongX, sg] of faces) {
       const box = (gw, gh, gy, d, dep = 0.1) => alongX ? BOX(gw, gh, dep, cx, gy, cz + sg * (bl / 2 + d)) : BOX(dep, gh, gw, cx + sg * (bw / 2 + d), gy, cz);
-      P.push(part(box(len - 1.6, st.band, y + (st.FH - st.band) / 2 + 0.1, 0.03), WIN, M, TILES.window));
+      const n = Math.max(1, Math.floor((len - 1.6) / 3.2));
+      paneRow(P, M, mb, alongX ? (sg > 0 ? 'f' : 'b') : (sg > 0 ? 'r' : 'l'), y + (st.FH - st.band) / 2 + 0.1, st.band, 1.4, n, len - 1.6, 0, 0.03);
       if (st.balcony && f > 0 && !(alongX && sg < 0)) {
         P.push(part(box(len - 1.0, 0.22, y, 0.7, 1.4), st.cap, M));
         P.push(part(box(len - 1.0, 1.0, y + 0.22, 1.35, 0.08), st.balcony, M));
@@ -568,12 +605,9 @@ function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what, wall = LO
   const faces = [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]];
   for (let y = lo + 1 + 0.9; y < top - 2; y += LODGE.FH) for (const [len, alongX, sg] of faces) {
     const box = (gw, gh2, gy, d, dep = 0.1) => alongX ? BOX(gw, gh2, dep, cx, gy, cz + sg * (bl / 2 + d)) : BOX(dep, gh2, gw, cx + sg * (bw / 2 + d), gy, cz);
-    const n = Math.max(1, Math.floor((len - 2) / 4.2)), step = (len - 2) / n;            // pairs of tall windows, 4.2 m apart
-    for (let k = 0; k < n; k++) {
-      const c = -(len - 2) / 2 + (k + 0.5) * step, o = alongX ? [c, 0] : [0, c];
-      const wb = (alongX ? BOX(2.6, 1.9, 0.1, cx + c, y, cz + sg * (bl / 2 + 0.3)) : BOX(0.1, 1.9, 2.6, cx + sg * (bw / 2 + 0.3), y, cz + c));
-      P.push(part(wb, WIN, M, TILES.window));
-    }
+    // pairs of tall windows 4.2 m apart; in the stone base, half as many (the stone reads as a base, not a wall of glass)
+    const face = alongX ? (sg > 0 ? 'f' : 'b') : (sg > 0 ? 'r' : 'l'), n = Math.max(1, Math.floor((len - 2) / 4.2));
+    paneRow(P, M, { cx, cz, w: bw, l: bl }, face, y, 1.9, 2.6, y < stoneTop - 1 ? Math.max(1, Math.floor(n / 2)) : n, len - 2, 0, 0.3);
     if (y > stoneTop && alongX && sg > 0 && wall === LODGE.wall) {      // balconies on the run side: slab and dark rail
       P.push(part(box(len - 2, 0.25, y - 0.9, 0.8, 1.6), LODGE.wall, M));
       P.push(part(box(len - 2, 1.05, y - 0.65, 1.55, 0.08), LODGE.rail, M));
@@ -587,7 +621,7 @@ function lodgePiece(P, b, F, { x0, x1, z0, z1 }, top, ridge, gh, what, wall = LO
   for (const s of [-1, 1]) {
     const endAt = (ridge === 'x' ? bw : bl) / 2 + 0.06;
     const tri = gable(rw - 5, 0.1, gh - 1.6).translate(0, 0.4, s * endAt).applyMatrix4(rot).translate(cx, top, cz);
-    P.push(part(tri, WIN, M, TILES.window));
+    P.push(win(tri, M));
     const beam = BOX(rw - 3.5, 0.45, 0.45, 0, -0.1, s * (endAt + 0.2)).applyMatrix4(rot).translate(cx, top, cz);
     P.push(part(beam, LODGE.timber, M, TILES.cedar));
   }
@@ -621,7 +655,7 @@ export function addWestin(b) {
   P.push(part(BOX(tx1 - tx0, ty - tg + 1, 8, (tx0 + tx1) / 2, tg - 1, tz), LODGE.stone, M, TILES.stone));
   for (let k = 0; k <= 8; k++) {
     const x = tx0 + 0.4 + k * (tx1 - tx0 - 0.8) / 8;
-    P.push(part(BOX(2.6, 2.6, 0.12, x + (tx1 - tx0) / 16, ty - 3.4, tz + 4.06), WIN, M, TILES.window));     // ground-floor windows
+    P.push(win(BOX(2.6, 2.6, 0.12, x + (tx1 - tx0) / 16, ty - 3.4, tz + 4.06), M));     // ground-floor windows
     P.push(part(BOX(0.4, 3.0, 0.4, x, ty, tz + 3.6), LODGE.timber, M, TILES.cedar));
   }
   P.push(part(BOX(tx1 - tx0 + 1, 0.5, 8.6, (tx0 + tx1) / 2, ty + 3.0, tz), LODGE.timber, M, TILES.cedar));
@@ -680,14 +714,7 @@ export function addRichCabin(b, variant) {
   const lo = Math.min(...gs) - 1, hi = Math.max(...gs) + 0.3, f1 = hi + RICH.FH;
   const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2);
   // windows on a face: n tall panes across len, centred at c along the face
-  const panes = (w, h, y, face, len, n, c = 0) => {
-    for (let k = 0; k < n; k++) {
-      const u = c - len / 2 + (k + 0.5) * len / n;
-      const g = face === 'f' ? BOX(w, h, 0.12, u, y, L / 2 + 0.05) : face === 'b' ? BOX(w, h, 0.12, u, y, -L / 2 - 0.05)
-        : BOX(0.12, h, w, (face === 'r' ? 1 : -1) * (W / 2 + 0.05), y, u);
-      P.push(part(g, WIN, M, TILES.window));
-    }
-  };
+  const panes = (w, h, y, face, len, n, c = 0) => paneRow(P, M, { w: W, l: L }, face, y, h, w, n, len, c);
   const roofOf = (geo, col, y, snowGeo) => {
     P.push(part(geo.translate(0, y, 0), col, M, TILES.metalRoof));
     P.push(part(snowGeo.translate(0, y + 0.22, 0), SNOWCAP, M));
@@ -703,10 +730,14 @@ export function addRichCabin(b, variant) {
     P.push(part(BOX(W + 0.5, f2 - f1, L + 0.5, 0, f1, 0), RICH.cedar, M, TILES.cedar));
     P.push(part(BOX(W + 0.7, 0.25, L + 0.7, 0, f1 - 0.1, 0), RICH.timber, M, TILES.cedar));          // floor beam
     const nd = Math.max(1, Math.min(3, Math.floor(W / 5)));                                         // garage doors
-    for (let k = 0; k < nd; k++) P.push(part(BOX(Math.min(4.6, W / nd - 1.2), 2.4, 0.14, -W / 2 + (k + 0.5) * W / nd, hi, L / 2 + 0.04), RICH.cedar, M, TILES.cedar));
+    for (let k = 0; k < nd; k++) {                                                                  // each at the snow outside it
+      const u = -W / 2 + (k + 0.5) * W / nd, q = at(u, L / 2 + 1);
+      P.push(part(BOX(Math.min(4.6, W / nd - 1.2), 2.4, 0.14, u, Math.min(hi, groundY(q.x, q.z) + 0.05), L / 2 + 0.04), RICH.cedar, M, TILES.cedar));
+    }
     panes(1.5, 2.2, f1 + 0.5, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
     panes(1.5, 2.2, f1 + 0.5, 'l', L - 3, Math.max(1, Math.floor(L / 5)));
     panes(1.5, 2.2, f1 + 0.5, 'r', L - 3, Math.max(1, Math.floor(L / 5)));
+    panes(1.3, 1.8, f1 + 0.7, 'b', W - 3, Math.max(1, Math.floor(W / 5)));                        // a few at the back
     // gable along z: its end faces the run; copper panel in the gable, truss beams in front of it
     roofOf(gable(W + 2.4, L + 2.2, gh), RICH.shingle, f2, gable(W + 1.8, L + 1.6, gh));
     P.push(part(gable(W + 1.6, 0.12, gh - 0.2).translate(0, f2, L / 2 + 1.18), RICH.copper, M));          // over the roof's end
@@ -728,7 +759,7 @@ export function addRichCabin(b, variant) {
       P.push(part(gable(wing + 1.6, L / 2 + 2.5, gh * 0.85).translate(cx, f3, L / 4 + 0.6), RICH.rust, M, TILES.metalRoof));
       P.push(part(gable(wing + 1.0, L / 2 + 2.0, gh * 0.85).translate(cx, f3 + 0.22, L / 4 + 0.6), SNOWCAP, M));
       P.push(part(gable(wing + 1.2, 0.12, gh * 0.85 - 0.2).translate(cx, f3, L / 2 + 1.92), RICH.cedar, M, TILES.cedar));
-      for (const y of [f1 + 0.5, f2 + 0.5]) P.push(part(BOX(wing - 2.2, 2.2, 0.12, cx, y, L / 2 + 1.25), WIN, M, TILES.window));
+      for (const y of [f1 + 0.5, f2 + 0.5]) P.push(win(BOX(wing - 2.2, 2.2, 0.12, cx, y, L / 2 + 1.25), M));
       chimney(s * (W / 2 - 0.9), -L / 4, 1.8, f3 + gh + 1.5, RICH.stone, TILES.stone);
     }
     // covered balcony stack in the middle: slabs, dark rails, timber columns
@@ -743,7 +774,7 @@ export function addRichCabin(b, variant) {
     // wood over both ends of the roof, one window each
     for (const s of [-1, 1]) {
       P.push(part(gable(L + 2.0, 0.12, gh - 0.2).applyMatrix4(rotZ).translate(s * (W / 2 + 1.27), f3, 0), RICH.dark, M, TILES.siding));
-      P.push(part(BOX(0.12, 2.0, 2.4, s * (W / 2 + 1.36), f3 + 0.6, 0), WIN, M, TILES.window));
+      P.push(win(BOX(0.12, 2.0, 2.4, s * (W / 2 + 1.36), f3 + 0.6, 0), M));
     }
     roofTop = f3 + gh;
   } else {
@@ -758,9 +789,9 @@ export function addRichCabin(b, variant) {
       P.push(part(BOX(wing, f3 - f1, d, cx, f1, cz), RICH.dark, M, TILES.siding));
       P.push(part(gable(wing + 1.4, d + 3, gh * 0.9).translate(cx, f3, L / 2 + d / 2 - 0.5), RICH.rust, M, TILES.metalRoof));
       P.push(part(gable(wing + 0.8, d + 2.6, gh * 0.9).translate(cx, f3 + 0.22, L / 2 + d / 2 - 0.5), SNOWCAP, M));
-      for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) P.push(part(BOX(wing - 3, 2.3, 0.12, cx, y, L / 2 + d + 0.05), WIN, M, TILES.window));
+      for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) P.push(win(BOX(wing - 3, 2.3, 0.12, cx, y, L / 2 + d + 0.05), M));
       P.push(part(gable(wing + 1.0, 0.12, gh * 0.9 - 0.2).translate(cx, f3, L / 2 + d + 1.05), RICH.dark, M, TILES.siding));
-      P.push(part(BOX(wing - 3.6, 1.6, 0.12, cx, f3 + 0.3, L / 2 + d + 1.12), WIN, M, TILES.window));   // the gable window
+      P.push(win(BOX(wing - 3.6, 1.6, 0.12, cx, f3 + 0.3, L / 2 + d + 1.12), M));   // the gable window
     }
     // two-floor porch between the wings: posts, a slab with a dark rail, a shed roof
     const pw = Math.max(3, W - 2 * wing - 1);
@@ -795,14 +826,8 @@ export function addVenga(b) {
     P.push(part(BOX(bw + 0.3, top - f1, bl + 0.3, cx, f1, cz), VENGA.cream, M));
     P.push(part(BOX(bw + 0.6, 0.4, bl + 0.6, cx, f1 - 0.2, cz), VENGA.dark, M));                  // floor band
     for (const [len, alongX, sg] of [[bw, true, 1], [bw, true, -1], [bl, false, 1], [bl, false, -1]]) {
-      const n = Math.max(1, Math.floor((len - 2) / 4)), step = (len - 2) / n;
-      for (let k = 0; k < n; k++) {
-        const c = -(len - 2) / 2 + (k + 0.5) * step;
-        for (const [y, h, d] of [[hi + 0.6, 2.9, 0.06], [f1 + 0.9, 1.9, 0.22]]) {
-          const g2 = alongX ? BOX(3.0, h, 0.1, cx + c, y, cz + sg * (bl / 2 + d)) : BOX(0.1, h, 3.0, cx + sg * (bw / 2 + d), y, cz + c);
-          P.push(part(g2, WIN, M, TILES.window));
-        }
-      }
+      const face = alongX ? (sg > 0 ? 'f' : 'b') : (sg > 0 ? 'r' : 'l'), n = Math.max(1, Math.floor((len - 2) / 4));
+      for (const [y, h, d] of [[hi + 0.6, 2.9, 0.06], [f1 + 0.9, 1.9, 0.22]]) paneRow(P, M, { cx, cz, w: bw, l: bl }, face, y, h, 3.0, n, len - 2, 0, d);
     }
     P.push(part(BOX(bw + 1.6, 0.5, bl + 1.6, cx, top - 0.2, cz), VENGA.dark, M, TILES.cedar));     // timber eaves
     P.push(part(gable(bl + 2.4, bw + 2.4, 3.2).applyMatrix4(new THREE.Matrix4().makeRotationY(Math.PI / 2)).translate(cx, top + 0.3, cz), LODGE.roof, M, TILES.metalRoof));
@@ -846,7 +871,7 @@ const KIT = {
   hut: [{ wall: [1.0, 0.82, 0.68], roof: [0.5, 0.3, 0.24] }, { wall: [0.85, 0.7, 0.58], roof: [0.34, 0.34, 0.36] }],
 };
 const KIT_RAIL = [0.16, 0.14, 0.13], KIT_SLAB = [0.9, 0.72, 0.55];
-const MALL_WALK = 2.6, MALL_WOOD = [0.55, 0.4, 0.28], MALL_FASCIA = [0.32, 0.24, 0.18], MALL_BAND = [0.42, 0.47, 0.56], MALL_EDGE = [0.5, 0.52, 0.56];
+const MALL_WALK = 2.6, MALL_WOOD = [0.55, 0.4, 0.28], MALL_FASCIA = [0.32, 0.24, 0.18], MALL_EDGE = [0.5, 0.52, 0.56];
 const MALL_SHOP = [1.55, 1.15, 0.6], MALL_SIGN = [[0.3, 0.2, 0.14], [0.55, 0.16, 0.12], [0.16, 0.26, 0.4], [0.2, 0.32, 0.22]];
 export function addKitBuilding(b, kind) {
   const F = frameOf(b), { W, L } = F, P = [];
@@ -858,13 +883,14 @@ export function addKitBuilding(b, kind) {
   const lo = Math.min(...gs) - 1, hi = Math.max(...gs) + 0.3, pal = KIT[kind][Math.abs(Math.round(b.x * 3 + b.z * 7)) % KIT[kind].length];
   const rotZ = new THREE.Matrix4().makeRotationY(Math.PI / 2), FH = 3.0;
   // a row of n windows across len on the front (+z) or back face, or along a side
-  const row = (y, h, face, len, n, pw = 1.4) => {
-    for (let k = 0; k < n; k++) {
-      const u = -len / 2 + (k + 0.5) * len / n;
-      const g = face === 'f' ? BOX(pw, h, 0.12, u, y, L / 2 + 0.05) : face === 'b' ? BOX(pw, h, 0.12, u, y, -L / 2 - 0.05)
-        : BOX(0.12, h, pw, (face === 'r' ? 1 : -1) * (W / 2 + 0.05), y, u);
-      P.push(part(g, WIN, M, TILES.window));
-    }
+  const row = (y, h, face, len, n, pw = 1.4) => paneRow(P, M, { w: W, l: L }, face, y, h, pw, n, len);
+  // a hotel floor (Snowmass Mall photos): single windows about 3.5 m apart on the back and ends, and on the run side
+  // tall balcony doors, one per room, behind the balconies
+  const hotelFloor = (fy, box, front) => {
+    const n = (len) => Math.max(1, Math.floor((len - 2) / 3.5));
+    if (front) paneRow(P, M, box, 'f', fy + 0.25, 2.2, 1.6, n(box.w), box.w - 2);
+    paneRow(P, M, box, 'b', fy + 0.9, 1.5, 1.3, n(box.w), box.w - 2);
+    for (const s of ['l', 'r']) paneRow(P, M, box, s, fy + 0.9, 1.5, 1.3, n(box.l), box.l - 2);
   };
   const snowRoof = (geo, snowGeo, col, y) => {
     P.push(part(geo.translate(0, y, 0), col, M, TILES.metalRoof));
@@ -893,7 +919,7 @@ export function addKitBuilding(b, kind) {
     // gable along z: its end, with a balcony and a tall window, faces the run
     snowRoof(gable(W + 2.2, L + 2.0, gh), gable(W + 1.6, L + 1.4, gh), pal.roof, f2);
     P.push(part(gable(W, 0.12, gh - 0.1).translate(0, f2, L / 2 + 0.02), pal.wall, M, TILES.siding));
-    P.push(part(BOX(Math.min(2.4, W * 0.3), Math.min(3.0, gh - 0.6), 0.12, 0, f2 + 0.1, L / 2 + 0.08), WIN, M, TILES.window));
+    P.push(win(BOX(Math.min(2.4, W * 0.3), Math.min(3.0, gh - 0.6), 0.12, 0, f2 + 0.1, L / 2 + 0.08), M));
     row(hi + 0.7, 2.0, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
     row(f1 + 0.5, 2.1, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
     for (const s of ['l', 'r']) row(f1 + 0.6, 1.6, s, L - 3, Math.max(1, Math.floor(L / 5)), 1.2);
@@ -917,10 +943,8 @@ export function addKitBuilding(b, kind) {
       P.push(hotel ? part(BOX(W, hi - yb, L, 0, yb, 0), pal.white, M) : part(BOX(W, hi - yb, L, 0, yb, 0), pal.wood, M, TILES.siding));
       for (let f = 0; f < nb; f++) {
         const fy = yb + f * FH;
-        if (hotel) {
-          P.push(part(BOX(W - 1.2, 1.5, 0.1, 0, fy + 0.8, -L / 2 - 0.06), MALL_BAND, M));
-          for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, L - 2, s * (W / 2 + 0.06), fy + 0.8, 0), MALL_BAND, M));
-        } else {
+        if (hotel) hotelFloor(fy, { w: W, l: L }, false);
+        else {
           row(fy + 0.6, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
           for (const s of ['l', 'r']) row(fy + 0.6, 1.6, s, L - 3, Math.max(1, Math.floor(L / 4)), 1.1);
         }
@@ -929,10 +953,8 @@ export function addKitBuilding(b, kind) {
     // shop storey: stone on the walkway side only, the building's own wall (and a row of windows) round the rest
     P.push(hotel ? part(BOX(W, f1 - hi, L, 0, hi, 0), pal.white, M) : part(BOX(W, f1 - hi, L, 0, hi, 0), pal.wood, M, TILES.siding));
     P.push(part(BOX(W + 0.1, f1 - hi, 0.3, 0, hi, L / 2 - 0.1), RICH.stone, M, TILES.stone));
-    if (nb && hotel) {
-      P.push(part(BOX(W - 1.2, 1.5, 0.1, 0, hi + 1.0, -L / 2 - 0.06), MALL_BAND, M));
-      for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, L - 2, s * (W / 2 + 0.06), hi + 1.0, 0), MALL_BAND, M));
-    } else if (nb) row(hi + 0.8, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
+    if (nb && hotel) hotelFloor(hi + 0.2, { w: W, l: L }, false);
+    else if (nb) row(hi + 0.8, 1.7, 'b', W - 2, Math.max(2, Math.floor(W / 3.2)), 1.1);
     const shops = Math.max(1, Math.min(6, Math.floor(W / 6)));
     for (let k = 0; k < shops; k++) {
       const cx = -W / 2 + (k + 0.5) * W / shops, sw = W / shops - 1.4;
@@ -948,7 +970,13 @@ export function addKitBuilding(b, kind) {
     P.push(part(BOX(W - 0.2, 0.1, MALL_WALK - 0.2, 0, f1, L / 2 + MALL_WALK / 2), SNOWCAP, M));
     P.push(part(BOX(W, 1.0, 0.08, 0, f1, dz - 0.05), KIT_RAIL, M));                                                         // rail
     if (hotel) {
-      // tiers: floors share out over 2-3 steps, each set back 8 m from the walkway and 3 m from the sides
+      // tiers: floors share out over 2-3 steps, each set back 8 m from the walkway and 3 m from the sides. Each tier is
+      // its own solid, so the stepped roofs are ground and the upper floors' run-side windows face open air.
+      const long = b.w >= b.l, tierSolid = (cz, w, d, y0, h) => {
+        const c = new THREE.Vector3(0, 0, cz).applyMatrix4(M);
+        solidBox(c.x, c.z, b.yaw, long ? w : d, long ? d : w, y0, h, 'village building');
+      };
+      tierSolid(0, W, L, lo, f1 - lo);
       const tiers = Math.min(3, Math.max(2, Math.floor(floors / 2))), per = Math.ceil(floors / tiers);
       let y = f1, w = W, back = 0;
       for (let t = 0, left = floors; t < tiers && left > 0 && w > 8 && L - back > 8; t++) {
@@ -956,12 +984,11 @@ export function addKitBuilding(b, kind) {
         P.push(part(BOX(w, n * FH, d, 0, y, cz), pal.white, M));
         for (let f = 0; f < n; f++) {
           const fy = y + f * FH;
-          P.push(part(BOX(w - 1.2, 1.5, 0.1, 0, fy + 0.8, cz + d / 2 + 0.06), MALL_BAND, M));            // window band
-          P.push(part(BOX(w - 1.2, 1.5, 0.1, 0, fy + 0.8, cz - d / 2 - 0.06), MALL_BAND, M));
-          for (const s of [-1, 1]) P.push(part(BOX(0.1, 1.5, d - 2, s * (w / 2 + 0.06), fy + 0.8, cz), MALL_BAND, M));
+          hotelFloor(fy, { cz, w, l: d }, true);
           P.push(part(BOX(w - 0.8, 0.9, 0.08, 0, fy + 0.15, cz + d / 2 + 1.1), pal.trim, M));                           // balcony rail
           P.push(part(BOX(w - 0.8, 0.18, 1.2, 0, fy - 0.03, cz + d / 2 + 0.6), pal.white, M));                         // balcony slab
         }
+        tierSolid(cz, w, d, y - n * FH, n * FH + 0.6);
         y += n * FH; left -= n;
         P.push(part(BOX(w + 0.4, 0.6, d + 0.4, 0, y, cz), MALL_EDGE, M));                                              // grey roof edge
         P.push(part(BOX(w - 0.2, 0.14, d - 0.2, 0, y + 0.42, cz), SNOWCAP, M));                                        // snow on the roof
@@ -990,14 +1017,15 @@ export function addKitBuilding(b, kind) {
     P.push(part(BOX(W, wt - hi - 0.4, L, 0, hi + 0.4, 0), pal.wall, M, TILES.cedar));
     snowRoof(gable(L + 2.4, W + 2.0, gh).applyMatrix4(rotZ), gable(L + 1.8, W + 1.4, gh).applyMatrix4(rotZ), pal.roof, wt);
     for (const s of [-1, 1]) P.push(part(gable(L, 0.12, gh - 0.1).applyMatrix4(rotZ).translate(s * (W / 2 + 0.02), wt, 0), pal.wall, M, TILES.cedar));
-    P.push(part(BOX(1.1, 2.2, 0.12, -W / 4, hi + 0.4, L / 2 + 0.06), RICH.dark, M, TILES.cedar));           // door
+    const dq = at(-W / 4, L / 2 + 0.6), dg = Math.min(hi + 0.4, groundY(dq.x, dq.z) + 0.05);                 // door at the snow outside it
+    P.push(part(BOX(1.1, 2.2, 0.12, -W / 4, dg, L / 2 + 0.06), RICH.dark, M, TILES.cedar));
     row(hi + 1.2, 1.2, 'f', W / 2, Math.max(1, Math.floor(W / 6)), 1.4);
     if (floors > 1) row(hi + FH + 0.8, 1.6, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
     top = wt + gh;
     P.push(part(BOX(0.3, 1.6, 0.3, W / 4, top - gh * 0.45, -L / 6), DARK, M));                         // stove pipe
   }
-  const long = b.w >= b.l;
-  solidBox(b.x, b.z, b.yaw, long ? W : L, long ? L : W, lo, top - lo, kind === 'hut' ? 'hut' : kind === 'village' ? 'village building' : kind);
+  const long = b.w >= b.l, tiered = kind === 'village' && W * L >= 700;
+  if (!tiered) solidBox(b.x, b.z, b.yaw, long ? W : L, long ? L : W, lo, top - lo, kind === 'hut' ? 'hut' : kind === 'village' ? 'village building' : kind);
   bucket(STAND_INS, b.x, b.z, ...P);
 }
 

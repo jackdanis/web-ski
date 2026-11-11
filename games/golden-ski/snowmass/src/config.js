@@ -41,9 +41,6 @@ export const MO = {
   SPIN_DAMP: 0.4,               // spin lost per second with no steer
   FLIP_IN: 5,                   // rad/s^2: up/down in the air torques a flip (up = front flip), and it carries on
   FLIP_DAMP: 0.4,               // flip lost per second with nothing held
-  CRASH_MU: 0.6,                // a wipeout slides with friction plus a base drag
-  CRASH_BASE: 2,
-  CRASH_MAX: 5,                 // s before she self-arrests on any slope
 };
 export const ASSIST = { grip: 1.2, cap: 34, capDrag: 0.25, airG: 1.15, clean: 25 };
 // ---------- Carve physics ----------
@@ -93,6 +90,8 @@ export const LOD_DIST = [250, 700, 1800, 4000]; // m to a piece's edge where it 
 
 // ---------- Small helpers ----------
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+// smoothstep on 0..1, clamped
+export const ease = (t) => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
 export const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 export function hash2(i, j) {
   let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0;

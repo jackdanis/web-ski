@@ -2,7 +2,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { state } from './state.js';
 import { CLUMP, FILL_NEAR, TREE_FAR, TREE_NEAR, clamp, hash2 } from './config.js';
-import { CELL, EDGE_TREES, H, LIFT_CUT, NX, NZ, PAGE, RUNF, X0, Z0, addObstacle, aspen, conifer, groundY, isRock, patchEdge } from './world.js';
+import { CELL, EDGE_TREES, H, LIFT_CUT, NX, NZ, PAGE, RUNF, X0, Z0, addObstacle, aspen, conifer, groundY, inBuilding, isRock, patchEdge } from './world.js';
 import { LIGHT, LIGHT_GLSL, SH_SIZE, TREE_KINDS, camera, queueWork, scene, stormImgs, treeImgs, workKey } from './scene.js';
 import { ROCK_VARIANTS, fillRocks } from './buildings.js';
 
@@ -126,7 +126,7 @@ export function makePage(pi, pj) {
         const oz = q === 0 ? (r4 - 0.5) * 0.8 : (hash2(i + 3571, j + 1597) < 0.5 ? 0.3 : -0.3) + (r4 - 0.5) * 0.3;
         const x = X0 + (i + ox) * CELL, z = Z0 + (j + oz) * CELL;
         const height = kind === KIND.snowghost ? 2.2 + r3 * 1.6 : kind === KIND.aspen ? 10 + r4 * 5 : kind === KIND.spruce ? 15 + r3 * 9 : 12 + r4 * 8;
-        if (!clear(x, z, TREE_R[kind] * height)) continue;
+        if (!clear(x, z, TREE_R[kind] * height) || inBuilding(x, z, Math.max(3, TREE_R[kind] * height))) continue;
         const t = { x, z, y: groundY(x, z) - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TRUNK_R[kind] * height, kind };
         list.push(t);
         addObstacle(t);

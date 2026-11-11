@@ -3,7 +3,7 @@
 import { MAP } from '../data/mountain.js';
 import { RUN_DATA } from '../data/runs.js';
 import { state } from './state.js';
-import { EDGE_MARGIN, SNOW, cellKey, clamp } from './config.js';
+import { EDGE_MARGIN, SNOW, cellKey, clamp, ease } from './config.js';
 
 // ---------- Map data ----------
 export async function inflate(b64) {
@@ -114,6 +114,11 @@ export function stationH(st, x, z) {
 export const SOLIDS = [];
 export function nearSolid(x, z, pad) {
   return SOLIDS.some((b) => { if (b.what === 'rope' || b.what === 'fence') return false;   // ropes and fences don't keep buildings and signs away
+    const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
+}
+// inside a building or station box, padded (ropes, fences and bridge walls aside): keeps trees off walls
+export function inBuilding(x, z, pad) {
+  return solidsAt(x, z).some((b) => { if (b.what === 'rope' || b.what === 'fence' || b.what === 'bridge wall') return false;
     const dx = x - b.x, dz = z - b.z; return Math.abs(b.c * dx - b.s * dz) < b.hx + pad && Math.abs(b.s * dx + b.c * dz) < b.hz + pad; });
 }
 // SOLIDS bucketed in 32 m cells, each box in every cell its reach (plus 1 m for the body) touches, in SOLIDS order;
@@ -239,7 +244,6 @@ export const GROUND_ADD = [];                                         // more sh
   for (const at of MOGUL_AT) {
     const [fx, fz] = fall(at.at[0], at.at[1]), hw = at.wide / 2, end = at.len, w = 2 * Math.PI / MOGUL.wave;
     const x = at.at[0] - fx * end / 2, z = at.at[1] - fz * end / 2;
-    const ease = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
     // staggered rows: bumps where both waves crest together, troughs between; faded in over the edges
     const hAt = (u, v) => {
       if (u <= 0 || u >= end || Math.abs(v) >= hw) return 0;

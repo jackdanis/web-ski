@@ -4,6 +4,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { MAP } from '../data/mountain.js';
 import { RUN_DATA } from '../data/runs.js';
+import { ease } from './config.js';
 import { state } from './state.js';
 import { CELL, GROUND_ADD, NX, NZ, X0, Z0, patchEdge, sampleBase } from './world.js';
 import { camera, scene, terrainMat } from './scene.js';
@@ -138,7 +139,6 @@ function wideH(u, v) {
   }
   return h;
 }
-const ease = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
 function capsule(x, z, [ax, az, bx, bz]) {
   const dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
   return Math.hypot(x - ax - dx * t, z - az - dz * t);

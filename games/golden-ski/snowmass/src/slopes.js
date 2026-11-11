@@ -4,10 +4,10 @@ import { MAP } from '../data/mountain.js';
 import { RUN_DATA } from '../data/runs.js';
 import { state } from './state.js';
 import { clamp } from './config.js';
-import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
+import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inBuilding, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
 import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addKitBuilding, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
-import { KIND, TRUNK_R, addProp } from './trees.js';
+import { KIND, TREE_R, TRUNK_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 import { addMountainProps } from './props.js';
 import { addGlades } from './glades.js';
@@ -32,6 +32,16 @@ const RICH_AREA = [1190, 1720, -4860, -4180];
 const RICH_KINDS = ['garage', 'chalet', 'hip'];
 const VILLAGE = MAP.meta.village;                     // the boilerplate kit's village blocks stand within 450 m of it
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
+// named buildings by their SPECIAL tag (announcer and UP4Pizza also take the uphill direction, below)
+const NAMED = { base: addBase, sams: addSamsKnob, map: addMapStand, venga: addVenga, westin: addWestin, wing: addWestinWing, tan: addTanHotel,
+  lizard: addLizardLodge, twocreeks: (b) => addTwoCreeks(b), checkin: (b) => addTwoCreeks(b, true) };
+// a stand-in block as the buildings take it: centre, yaw, size, ground low and high, and front, the side of the block
+// that faces the nearest run (+1 or -1 on local z if w >= l, else on local x)
+function blockFrame(x, z, yawD, w, l, y0, y1) {
+  const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
+  const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
+  return { x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 };
+}
 function nearestRunPoint(x, z) {
   let best = Infinity, at = [x, z + 1];
   for (const r of RUNS) for (const [px, pz] of r.points) {
@@ -266,14 +276,6 @@ if (RUN_DATA) {
   // The packed fill (kind + 128) draws only within FILL_NEAR; every tree is solid.
   state.RUN_AREA = new Int8Array(areaB.buffer, areaB.byteOffset, areaB.length);
   const dv = new DataView(treeB.buffer, treeB.byteOffset, treeB.length);
-  for (let n = 0; n < B.ntrees; n++) {
-    const o = n * 8, x = dv.getInt16(o, true) / 2, z = dv.getInt16(o + 2, true) / 2, height = dv.getUint8(o + 4) / 10, kind = dv.getUint8(o + 5) & 127;
-    const ground = STATIONS.length && stationAt(x, z) ? groundY(x, z) : dv.getUint16(o + 6, true) / 10;
-    const t = { x, z, y: ground - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TRUNK_R[kind] * height, kind, fill: dv.getUint8(o + 5) >> 7 };
-    addProp(t);
-    addObstacle(t);
-  }
-  addGlades();                                     // after the real trees, so glade trees keep clear of them
   // Flagged course on Scooper (Lower) (batch 5, pin 4): red and blue gates alternating every 20 m down a line 50 m
   // beside the Scooper lift, 5 m either side of it. Markers only, no timing and no collision (gates bend).
   {
@@ -292,49 +294,35 @@ if (RUN_DATA) {
     if (!special && (nearSolid(x, z, Math.max(w, l) / 2) || (STATIONS.length && stationAt(x, z)))) continue;
     if (special) {
       const o = { x, z, yawD, w, l, y0, y1, ...special[3] };                       // a named building may set its own frame
-      const yaw = o.yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(o.x, o.z);
-      const lz = Math.sin(yaw) * (rx - o.x) + Math.cos(yaw) * (rz - o.z), lx = Math.cos(yaw) * (rx - o.x) - Math.sin(yaw) * (rz - o.z);
-      const b = { x: o.x, z: o.z, yaw, w: o.w, l: o.l, bot: o.y0 - 1, ground: o.y1, front: Math.sign(o.w >= o.l ? lz : lx) || 1 };
-      if (special[2] === 'base') addBase(b);
-      else if (special[2] === 'sams') addSamsKnob(b);
-      else if (special[2] === 'map') addMapStand(b);
-      else if (special[2] === 'venga') addVenga(b);
-      else if (special[2] === 'westin') addWestin(b);
-      else if (special[2] === 'wing') addWestinWing(b);
-      else if (special[2] === 'tan') addTanHotel(b);
-      else if (special[2] === 'lizard') addLizardLodge(b);
-      else if (special[2] === 'twocreeks') addTwoCreeks(b);
-      else if (special[2] === 'checkin') addTwoCreeks(b, true);
+      const b = blockFrame(o.x, o.z, o.yawD, o.w, o.l, o.y0, o.y1), add = NAMED[special[2]];
+      if (add) add(b);
       else {
         const g = sampleBase(x, z, { h: 0, gx: 0, gz: 0 }), n = Math.hypot(g.gx, g.gz) || 1;
         (special[2] === 'announcer' ? addAnnouncer : addUp4Pizza)(b, [g.gx / n, g.gz / n]);
       }
       continue;
     }
-    if (INDUSTRIAL.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) {
-      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
-      // local z in the world, as placeM turns it: the door side faces the run
-      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
-      addIndustrial({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 });
-      continue;
-    }
-    if (x > RICH_AREA[0] && x < RICH_AREA[1] && z > RICH_AREA[2] && z < RICH_AREA[3]) {
-      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z);
-      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
-      // small footprints get the garage house; the rest alternate by position so neighbours differ
-      const kind = w * l < 260 ? 'garage' : RICH_KINDS[1 + (Math.round(x * 7 + z * 3) & 1)];
-      addRichCabin({ x, z, yaw, w, l, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 }, kind);
-      continue;
-    }
-    // the boilerplate kit (2026-11-02): huts on the mountain, village blocks round the Mall, condos on big footprints,
-    // chalet houses on the rest
-    {
-      const yaw = yawD * Math.PI / 180, [rx, rz] = nearestRunPoint(x, z), a = w * l;
-      const lz = Math.sin(yaw) * (rx - x) + Math.cos(yaw) * (rz - z), lx = Math.cos(yaw) * (rx - x) - Math.sin(yaw) * (rz - z);
-      const kind = y1 > 2900 || a < 40 ? 'hut' : Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < 450 && a >= 300 ? 'village' : a >= 400 ? 'condo' : 'chalet';
-      addKitBuilding({ x, z, yaw, w, l, h, bot: y0 - 1, ground: y1, front: Math.sign(w >= l ? lz : lx) || 1 }, kind);
+    const b = blockFrame(x, z, yawD, w, l, y0, y1);
+    if (INDUSTRIAL.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) addIndustrial(b);
+    // small footprints in the rich-cabin section get the garage house; the rest alternate by position so neighbours differ
+    else if (x > RICH_AREA[0] && x < RICH_AREA[1] && z > RICH_AREA[2] && z < RICH_AREA[3]) addRichCabin(b, w * l < 260 ? 'garage' : RICH_KINDS[1 + (Math.round(x * 7 + z * 3) & 1)]);
+    else {
+      // the boilerplate kit (2026-11-02): huts on the mountain, village blocks round the Mall, condos on big footprints,
+      // chalet houses on the rest
+      const a = w * l, kind = y1 > 2900 || a < 40 ? 'hut' : Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < 450 && a >= 300 ? 'village' : a >= 400 ? 'condo' : 'chalet';
+      addKitBuilding({ ...b, h }, kind);
     }
   }
+  // the edge and island trees, then the glades, after the buildings so they keep clear of them
+  for (let n = 0; n < B.ntrees; n++) {
+    const o = n * 8, x = dv.getInt16(o, true) / 2, z = dv.getInt16(o + 2, true) / 2, height = dv.getUint8(o + 4) / 10, kind = dv.getUint8(o + 5) & 127;
+    const ground = STATIONS.length && stationAt(x, z) ? groundY(x, z) : dv.getUint16(o + 6, true) / 10;
+    if (inBuilding(x, z, Math.max(3, TREE_R[kind] * height))) continue;          // no trunks or crowns in walls
+    const t = { x, z, y: ground - (kind === KIND.snowghost ? 0.5 : 0.3), height, r: TRUNK_R[kind] * height, kind, fill: dv.getUint8(o + 5) >> 7 };
+    addProp(t);
+    addObstacle(t);
+  }
+  addGlades();                                     // after the real trees, so glade trees keep clear of them
   addMountainProps();
   flushBuildings();
 }
@@ -629,21 +617,37 @@ function railFence(posts, solid) {
     railFence(posts, true);
   }
 }
-// Wood Rd from the bridge to Base Village in concrete (runs.js roads), and the stone ski bridge over it
+// Wood Rd from the bridge to Base Village (runs.js roads), painted into the ground as a mask the terrain shaders read,
+// fading out over its last 30 m at both ends; and the stone ski bridge over it
 {
   const shared = { vertexColors: true, uniforms: modelMat.uniforms, vertexShader: modelMat.vertexShader, fragmentShader: modelMat.fragmentShader, side: THREE.DoubleSide };
-  const roadMat = new THREE.ShaderMaterial({ ...shared, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
   const bridgeMat = new THREE.ShaderMaterial(shared);
   const strip = (pos) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3)); return g; };
   const quad = (a, b, c, d) => [...a, ...b, ...c, ...a, ...c, ...d];
-  for (const [q, hw] of (RUN_DATA && RUN_DATA.roads) || []) {
-    const pos = [];
-    for (let k = 0; k + 5 < q.length; k += 3) {
-      const [ax, az, ay, bx, bz, by] = q.slice(k, k + 6), L = Math.hypot(bx - ax, bz - az), nx = -(bz - az) / L * hw, nz = (bx - ax) / L * hw;
-      pos.push(...quad([ax - nx, ay + 0.1, az - nz], [ax + nx, ay + 0.1, az + nz], [bx + nx, by + 0.1, bz + nz], [bx - nx, by + 0.1, bz - nz]));
+  const roads = (RUN_DATA && RUN_DATA.roads) || [];
+  if (roads.length) {
+    const RES = 0.5, FADE = 30;                                                   // m per mask pixel; m of fade at the ends
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const [q, hw] of roads) for (let k = 0; k < q.length; k += 3) {
+      x0 = Math.min(x0, q[k] - hw - 4); x1 = Math.max(x1, q[k] + hw + 4); z0 = Math.min(z0, q[k + 1] - hw - 4); z1 = Math.max(z1, q[k + 1] + hw + 4);
     }
-    const g = part(strip(pos), [1, 1, 1], null, TILES.concrete);
-    addRinged(new THREE.Mesh(g, roadMat));
+    const cv = document.createElement('canvas'), g = cv.getContext('2d');
+    cv.width = Math.ceil((x1 - x0) / RES); cv.height = Math.ceil((z1 - z0) / RES);
+    g.globalCompositeOperation = 'lighten'; g.lineCap = 'round';
+    for (const [q, hw] of roads) {
+      const n = q.length / 3, S = [0];
+      for (let k = 1; k < n; k++) S.push(S[k - 1] + Math.hypot(q[3 * k] - q[3 * k - 3], q[3 * k + 1] - q[3 * k - 2]));
+      g.lineWidth = 2 * hw / RES;
+      for (let k = 0; k < n - 1; k++) {
+        const a = Math.min(1, Math.min(S[k], S[n - 1] - S[k + 1]) / FADE), v = Math.round(255 * a);
+        g.strokeStyle = `rgb(${v},${v},${v})`;
+        g.beginPath(); g.moveTo((q[3 * k] - x0) / RES, (q[3 * k + 1] - z0) / RES); g.lineTo((q[3 * k + 3] - x0) / RES, (q[3 * k + 4] - z0) / RES); g.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.flipY = false; tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+    terrainMat.uniforms.uRoad.value = tex;
+    terrainMat.uniforms.uRoadB.value.set(x0, z0, cv.width * RES, cv.height * RES);
   }
   const PARAPET = 1.0, PW = 0.5, STONE = [1, 1, 1];
   for (const b of BRIDGES) {

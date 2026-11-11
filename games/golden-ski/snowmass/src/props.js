@@ -3,10 +3,9 @@
 // (Snowmaking guns removed 2026-11-05: not featured.) Built in code like the kit buildings, batched with them.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { SOLIDS, groundY, nearSolid, sampleBase } from './world.js';
-import { DARK, SNOWCAP, STEEL, TILES, addMapStand, bucket, part, placeM, propBatch } from './buildings.js';
+import { BOX, DARK, SNOWCAP, STEEL, TILES, addMapStand, bucket, part, placeM, propBatch } from './buildings.js';
 import { liftPaths } from './lifts.js';
 
-const BOX = (w, h, l, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, l).translate(x, y + h / 2, z);
 const CYL = (r0, r1, h, n = 10) => new THREE.CylinderGeometry(r0, r1, h, n);
 const bB = { h: 0, gx: 0, gz: 0 };
 function fall(x, z) {
