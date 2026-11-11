@@ -771,6 +771,7 @@ export function addRichCabin(b, variant) {
     for (const s of [-1, 0, 1]) P.push(part(BOX(0.45, f3 - hi, 0.45, s * (bw / 2 - 0.3), hi, L / 2 + 2.0), RICH.timber, M, TILES.cedar));
     for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) panes(1.6, 2.2, y, 'f', bw - 1, Math.max(2, Math.floor(bw / 2.5)));
     for (const y of [f1 + 0.5, f2 + 0.5]) { panes(1.6, 2.2, y, 'l', L - 3, 3); panes(1.6, 2.2, y, 'r', L - 3, 3); }
+    for (const y of [f1 + 0.6, f2 + 0.6]) panes(1.3, 1.8, y, 'b', W - 6, Math.max(2, Math.floor(W / 5)));         // the back
     // wood over both ends of the roof, one window each
     for (const s of [-1, 1]) {
       P.push(part(gable(L + 2.0, 0.12, gh - 0.2).applyMatrix4(rotZ).translate(s * (W / 2 + 1.27), f3, 0), RICH.dark, M, TILES.siding));
@@ -800,6 +801,7 @@ export function addRichCabin(b, variant) {
     for (const s of [-1, 1]) P.push(part(BOX(0.5, f3 - hi, 0.5, s * (pw / 2 - 0.3), hi, L / 2 + 2.4), RICH.timber, M, TILES.cedar));
     for (const y of [hi + 0.4, f1 + 0.5, f2 + 0.5]) panes(1.6, 2.2, y, 'f', pw - 1, Math.max(2, Math.floor(pw / 2.5)));
     for (const y of [f1 + 0.5, f2 + 0.5]) { panes(1.4, 2.0, y, 'l', L - 3, 2); panes(1.4, 2.0, y, 'r', L - 3, 2); }
+    for (const y of [f1 + 0.6, f2 + 0.6]) panes(1.3, 1.8, y, 'b', W - 4, Math.max(2, Math.floor(W / 5)));         // the back
     roofTop = f3 + gh;
     chimney(-W / 2 + 1.2, 0, 2.0, roofTop + 1.0, RICH.stone, TILES.stone);
   }
@@ -922,7 +924,7 @@ export function addKitBuilding(b, kind) {
     P.push(win(BOX(Math.min(2.4, W * 0.3), Math.min(3.0, gh - 0.6), 0.12, 0, f2 + 0.1, L / 2 + 0.08), M));
     row(hi + 0.7, 2.0, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
     row(f1 + 0.5, 2.1, 'f', W - 2, Math.max(2, Math.floor(W / 3.5)));
-    for (const s of ['l', 'r']) row(f1 + 0.6, 1.6, s, L - 3, Math.max(1, Math.floor(L / 5)), 1.2);
+    for (const s of ['l', 'r']) for (const y of [hi + 0.9, f1 + 0.6]) row(y, 1.6, s, L - 3, Math.max(1, Math.floor(L / 4)), 1.2);
     P.push(part(BOX(W - 0.6, 0.22, 1.6, 0, f1 - 0.1, L / 2 + 0.8), KIT_SLAB, M, TILES.cedar));
     P.push(part(BOX(W - 0.6, 1.0, 0.07, 0, f1 + 0.12, L / 2 + 1.58), KIT_RAIL, M));
     top = f2 + gh;
