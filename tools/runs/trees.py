@@ -59,15 +59,17 @@ def main(d):
             if not len(R): continue
             x = Cc - 3985.0 + 0.5; z = R - 8525.0 + 0.5
             out.append(np.stack([x, z, hh], 1))
-    # forest fills: a jittered 6 m grid of 9-16 m crowns, kept like mapped tops so they draw at any distance
-    for ring in load_fills(planted=True):
+    # forest fills: a jittered 6 m grid of 9-16 m crowns, kept like mapped tops so they draw at any distance. Fills that
+    # keep their runs (planted around existing trees) are packed last, so every tree already there stays.
+    late = []
+    for ring, keep_runs in load_fills(planted=True, tagged=True):
         import cv2
         gx = np.arange(np.floor(ring[:, 0].min() / 6), np.ceil(ring[:, 0].max() / 6) + 1).astype(np.int64)
         gz = np.arange(np.floor(ring[:, 1].min() / 6), np.ceil(ring[:, 1].max() / 6) + 1).astype(np.int64)
         GI, GJ = [a.ravel() for a in np.meshgrid(gx, gz)]
         fx = (GI + hash2(GI + 4242, GJ)) * 6.0; fz = (GJ + hash2(GI, GJ + 4242)) * 6.0
         inside = np.array([cv2.pointPolygonTest(ring.astype(np.float32), (float(a), float(b)), False) > 0 for a, b in zip(fx, fz)], bool)
-        out.append(np.stack([fx[inside], fz[inside], 9 + 7 * hash2(GI[inside] + 77, GJ[inside])], 1))
+        (late if keep_runs else out).append(np.stack([fx[inside], fz[inside], 9 + 7 * hash2(GI[inside] + 77, GJ[inside])], 1))
     T = np.concatenate(out)
     ntops = len(T)
     # candidate spots wherever the map has canopy: a jittered grid, each with the crown top's height around it
@@ -87,6 +89,8 @@ def main(d):
     xf, zf, r_, c_ = xf[ok], zf[ok], r_[ok], c_[ok]
     ok = ~run[r_, c_] & (dist[r_, c_] <= NEAR) & (c2[r_, c_] >= 3)
     T = np.concatenate([T, np.stack([xf[ok], zf[ok], top[r_[ok], c_[ok]].astype(np.float32)], 1)])
+    nfill = len(T)
+    if late: T = np.concatenate([T] + late)
     x, z, ch = T[:, 0], T[:, 1], T[:, 2]
     # forest map cell for aspen vs conifer, ground height for snow ghosts
     i = np.clip(np.round((x - meta['near']['x0']) / 10).astype(int), 0, meta['near']['nx'] - 1)
@@ -107,7 +111,8 @@ def main(d):
     rc_ = np.round(grid.rc(x, z)).astype(int)
     clear = dist[np.clip(rc_[0], 0, lab.shape[0] - 1), np.clip(rc_[1], 0, lab.shape[1] - 1)] - grid.PC / 2 >= rad + EDGE_GAP
     idx = np.arange(len(T))
-    order = np.concatenate([idx[:ntops][np.argsort(-h[:ntops])], idx[ntops:][np.argsort(hash2(xi[ntops:] + 77, zi[ntops:] + 99))]])
+    order = np.concatenate([idx[:ntops][np.argsort(-h[:ntops])], idx[ntops:nfill][np.argsort(hash2(xi[ntops:nfill] + 77, zi[ntops:nfill] + 99))],
+                            idx[nfill:][np.argsort(hash2(xi[nfill:] + 77, zi[nfill:] + 99))]])
     order = order[clear[order]]
     CELLM = 7.0
     cells = {}
@@ -126,9 +131,9 @@ def main(d):
         if good:
             cells.setdefault((ci, cj), []).append(n); keep.append(n)
     keep = np.array(sorted(keep))
-    ntop_kept = int((keep < ntops).sum())
+    ntop_kept = int(((keep < ntops) | (keep >= nfill)).sum())
     x, z, h, kind = x[keep], z[keep], h[keep], kind[keep]
-    T = np.stack([x, z, h, kind, keep >= ntops], 1).astype(np.float32)      # the last column: 1 for a fill tree
+    T = np.stack([x, z, h, kind, (keep >= ntops) & (keep < nfill)], 1).astype(np.float32)      # the last column: 1 for a fill tree
     np.save(f'{d}/trees.npy', T)
     print(f'{len(T)} edge trees within {NEAR:.0f} m of runs ({ntop_kept} of {ntops} mapped tops, {len(T) - ntop_kept} fill); kinds', np.bincount(kind.astype(int), minlength=4).tolist(),
           'height pct 10/50/90', np.percentile(h, [10, 50, 90]).round(1).tolist())

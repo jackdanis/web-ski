@@ -72,6 +72,9 @@ const FEATURES = [
   { kind: 'lip', run: ['West Face', 215, 0], len: 26, h: 1.0, shelf: 6, drop: 1.6 },
   { kind: 'lip', run: ['Garrett Gulch', 920, 0], len: 26, h: 1.0, shelf: 6, drop: 1.6 },
   { kind: 'lip', run: ['Cirque Cornice', 165, 0], len: 30, h: 1.1, shelf: 7, drop: 1.8 },
+  // practice rollers for first-timers (batch 6 pin 1): long low bumps across the slope just below the building under
+  // Village Express. near: the building's centre; from: m down the fall line to the first bump; gap: m between bumps
+  { kind: 'rollers', near: [1077.3, -4580.1], from: 16, n: 5, gap: 7, len: 40, h: 0.6 },
 ];
 const ENDS = 7;                                   // m the face eases down to nothing at each end
 const ROCK = [[0.34, 0.32, 0.31], [0.25, 0.24, 0.24], [0.42, 0.40, 0.38]];
@@ -81,6 +84,11 @@ const noise = (u, k) => Math.sin(u * 0.9 + k * 1.7) * 0.5 + Math.sin(u * 2.3 + k
 // each feature in its own frame: u along the lip, v up the slope from it (KICKERS' v turns left of u, so u runs with the
 // fall line on its right)
 for (const [i, b] of FEATURES.entries()) {
+  if (b.near) {
+    const [fx, fz] = fall(b.near[0], b.near[1]);
+    b.shelf = b.n * b.gap;
+    b.at = [b.near[0] + fx * (b.from + b.shelf), b.near[1] + fz * (b.from + b.shelf)];   // the lowest bump's foot
+  }
   if (b.run) {
     const [n, d, off] = b.run, [x, z] = onRun(n, d), [fx, fz] = fall(x, z);
     b.at = [x - fz * off, z + fx * off];                                 // + off: the skier's right, facing down
@@ -90,8 +98,10 @@ for (const [i, b] of FEATURES.entries()) {
   b.H = (u) => b.h * (0.85 + 0.15 * Math.sin(u * 0.35 + i * 2)) * ease(Math.min(u, b.len - u) / ENDS);
   const drop = b.drop || 0;
   const k = { x: b.at[0] - dx * b.len / 2, z: b.at[1] - dz * b.len / 2, fx: dx, fz: dz, hw: Math.max(b.shelf, drop), h: 0, L: 0, end: b.len,
-    prof: () => 0, size: b.kind === 'lip' ? 'wind lip' : b.kind, plain: true, cliff: b.kind !== 'lip', mode: -1, mesh: null, step: b.kind === 'band' && i < 3 ? 0.5 : 1 };
-  k.hAt = b.kind === 'lip'
+    prof: () => 0, size: b.kind === 'lip' ? 'wind lip' : b.kind, plain: true, cliff: b.kind === 'band' || b.kind === 'cornice', mode: -1, mesh: null, step: b.kind === 'band' && i < 3 ? 0.5 : 1 };
+  k.hAt = b.kind === 'rollers'
+    ? (u, v) => (v <= 0 || v >= b.shelf || u <= 0 || u >= b.len ? 0 : b.h * Math.sin(Math.PI * v / b.gap) ** 2 * ease(Math.min(u, b.len - u) / ENDS))
+    : b.kind === 'lip'
     ? (u, v) => (v <= -drop || v >= b.shelf || u <= 0 || u >= b.len ? 0 : b.H(u) * (v >= 0 ? ease(1 - v / b.shelf) : ease(1 + v / drop)))
     : (u, v) => (v < 0 || v > b.shelf || u <= 0 || u >= b.len ? 0 : b.H(u) * (1 - v / b.shelf));
   const r = Math.hypot(b.len, b.shelf + drop);
@@ -164,7 +174,7 @@ function faceMesh(b) {
   return mesh;
 }
 // each face is rebuilt when the 2 m tiles under it load or drop, and drawn within RING_FAR
-const FACES = FEATURES.filter((b) => b.kind !== 'lip');
+const FACES = FEATURES.filter((b) => b.kind === 'band' || b.kind === 'cornice');
 const pT = { h: 0, gx: 0, gz: 0 };
 export function updateLandforms() {
   const cx = camera.position.x, cz = camera.position.z;

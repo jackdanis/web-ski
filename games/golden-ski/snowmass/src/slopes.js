@@ -6,7 +6,7 @@ import { state } from './state.js';
 import { clamp } from './config.js';
 import { BERM_W, BLEND, BRIDGES, CELL, H, META, NX, NZ, PCELL, POWDER, RUNF, SOLIDS, STATIONS, X0, Z0, addObstacle, aspen, cellAt, conifer, gridH, groundY, inBuilding, inflate, isRock, nearSolid, offMap, patchEdge, sample, sampleBase, sampleGrid, stationAt } from './world.js';
 import { LIGHT, LIGHT_GLSL, camera, queueWork, renderer, scene, terrainMat, workKey } from './scene.js';
-import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addKitBuilding, addLizardLodge, addAnnouncer, addTwoCreeks, addMapStand, addSamsKnob, addRichCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
+import { SNOWCAP, TILES, addBase, addBuilding, addIndustrial, addKitBuilding, addLizardLodge, addAnnouncer, addVillageExpressHut, addTwoCreeks, addMapStand, addSamsKnob, addCabin, addTanHotel, addUp4Pizza, addVenga, addWestin, addWestinWing, addByPage, addRinged, bucket, casters, flushBuildings, merge, mergeAny, modelMat, part, placeM, placed } from './buildings.js';
 import { KIND, TREE_R, TRUNK_R, addProp } from './trees.js';
 import { LIFTS } from './lifts.js';
 import { addMountainProps } from './props.js';
@@ -18,6 +18,7 @@ export const RUNS = MAP.runs || [];
 const SPECIAL = [[2027.7, -5583.5, 'base'], [-390.8, -2971.7, 'sams'], [-158.7, -1013.2, 'up4'], [-342.3, -2936.9, 'map'],
   [1433.0, -5080.8, 'venga'], [1331.8, -4955.0, 'westin'], [1254.6, -4938.7, 'wing'], [1189.5, -4928.4, 'tan'],   // batch 3
   [424.2, -4442.9, 'lizard'], [447.5, -4368.0, 'announcer'],
+  [1077.3, -4580.1, 'vxhut'],                                                     // under Village Express (batch 6 pin 1)
   // Two Creeks base camp: drawn on the B block as one rectangle over both B and C (C is skipped)
   [4107.2, -5710.2, 'checkin'],                                                   // Two Creeks check-in (pin 12)
   [4161.0, -5709.5, 'twocreeks', { x: 4186.5, z: -5702.1, yawD: -16.6, w: 78, l: 26, y0: 2470.6, y1: 2475.1 }]];                                                   // batch 5
@@ -26,15 +27,15 @@ const SKIP = [[-338.6, -2933.0], [4203.8, -5696.7],   // the second Two Creeks b
 // Areas whose stand-ins go [x0, x1, z0, z1]: the houses behind Two Creeks (batch 5, pin 14)
 const GONE = [[4080, 4200, -6180, -5900]];
 // Stand-in blocks drawn as industrial buildings, by centre: the maintenance buildings at Max Park (Jack's pin 4)
-// Rich cabins (batch 4, pins 8 to 15): every stand-in inside this box, the section between Lower Banzai, Adams' Avenue
-// (Lower) and Green Cabin (Lower) above Snowmass Mall; [x0, x1, z0, z1]
-const RICH_AREA = [1190, 1720, -4860, -4180];
-const RICH_KINDS = ['garage', 'chalet', 'hip'];
+// Cabins in the trees (batch 6 pin 2; batch 4's rich cabins before): every stand-in inside this box, the section between
+// Lower Banzai, Adams' Avenue (Lower) and Green Cabin (Lower) above Snowmass Mall; [x0, x1, z0, z1]. The same box is a
+// forest fill in source-data/runs/forest_fill.json ("Cabin section"), runs kept.
+const CABIN_AREA = [1190, 1720, -4860, -4180];
 const VILLAGE = MAP.meta.village;                     // the boilerplate kit's village blocks stand within 450 m of it
 const INDUSTRIAL = [[-350.8, -2846.4], [-383.6, -2840.6], [-358.8, -2826.2], [-332.5, -2854.8], [-334.8, -2866.2], [-338, -2874.4]];
 // named buildings by their SPECIAL tag (announcer and UP4Pizza also take the uphill direction, below)
 const NAMED = { base: addBase, sams: addSamsKnob, map: addMapStand, venga: addVenga, westin: addWestin, wing: addWestinWing, tan: addTanHotel,
-  lizard: addLizardLodge, twocreeks: (b) => addTwoCreeks(b), checkin: (b) => addTwoCreeks(b, true) };
+  lizard: addLizardLodge, vxhut: (b) => { const t = SPECIAL.find((q) => q[2] === 'base'), dx = t[0] - b.x, dz = t[1] - b.z, n = Math.hypot(dx, dz); addVillageExpressHut(b, [dx / n, dz / n]); }, twocreeks: (b) => addTwoCreeks(b), checkin: (b) => addTwoCreeks(b, true) };
 // a stand-in block as the buildings take it: centre, yaw, size, ground low and high, and front, the side of the block
 // that faces the nearest run (+1 or -1 on local z if w >= l, else on local x)
 function blockFrame(x, z, yawD, w, l, y0, y1) {
@@ -304,8 +305,7 @@ if (RUN_DATA) {
     }
     const b = blockFrame(x, z, yawD, w, l, y0, y1);
     if (INDUSTRIAL.some(([ix, iz]) => Math.hypot(ix - x, iz - z) < 1)) addIndustrial(b);
-    // small footprints in the rich-cabin section get the garage house; the rest alternate by position so neighbours differ
-    else if (x > RICH_AREA[0] && x < RICH_AREA[1] && z > RICH_AREA[2] && z < RICH_AREA[3]) addRichCabin(b, w * l < 260 ? 'garage' : RICH_KINDS[1 + (Math.round(x * 7 + z * 3) & 1)]);
+    else if (x > CABIN_AREA[0] && x < CABIN_AREA[1] && z > CABIN_AREA[2] && z < CABIN_AREA[3]) addCabin(b);
     else {
       // the boilerplate kit (2026-11-02): huts on the mountain, village blocks round the Mall, condos on big footprints,
       // chalet houses on the rest

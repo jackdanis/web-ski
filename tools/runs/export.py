@@ -64,6 +64,9 @@ def main(d):
     h0 = np.load(f'{d}/h0.npy')
     import woodrd
     hp, bridges, roads = woodrd.apply(d, hp, h0, aedge) if os.path.exists(IN + 'wood_rd.json') else (hp, [], [])
+    if os.path.exists(IN + 'lunchline_road.json'):
+        import lunchrd
+        hp = lunchrd.apply(hp)
     nz, nx = hp.shape
     tz, tx = -(-nz // TILE), -(-nx // TILE)
     pad = lambda a, v: np.pad(a, ((0, tz * TILE - nz), (0, tx * TILE - nx)), constant_values=v)
