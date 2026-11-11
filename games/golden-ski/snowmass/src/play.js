@@ -10,6 +10,7 @@ import { RIDES, RING_R, carrierAt, ride } from './ride.js';
 import { applyTime, pixelLook, setPixelLook, timeOfDay } from './atmosphere.js';
 import { FRAMES } from './goldie.js';
 import { mogulH } from './snow.js';
+import { RAILS, railY } from './park.js';
 
 // ---------- Input ----------
 // Keys: Left/Right or A/D steer, Up/W poles, Down/S brakes, Shift tucks, Space jumps (hold to load an ollie).
@@ -236,6 +237,8 @@ export const sk = {
   crashed: false, crashT: 0, landT: 0, landQ: '', skid: 0, tuck: false, brake: false, steer: 0, frame: FRAMES.stand,
   stopT: 0,
   edge: 0, spin: 0, yawRate: 0, charge: 0, pole: false,
+  popT: -1,                           // s since a Space pop, for the camera's release zoom (-1: none)
+  grind: null, grindCD: 0,            // the rail she is sliding (see grindStep), and s before she can lock on again
   poleP: -1, poleQ: false,            // where she is in a double-pole push (0..1, -1 not poling), and the next push queued
   flip: 0, flipRate: 0, flipIn: 0,    // rad turned forward in the air (front flip +), its rate, and the stick on it
   edgeA: 0, latA: 0, roll: 0, kappa: 0, lean: 0,
@@ -262,6 +265,7 @@ export function placeSkier(x, z, heading, speed) {
   sk.grounded = true; sk.airTime = 0; sk.airMax = 0; sk.popCD = 0;
   sk.crashed = false; sk.crashT = 0; sk.landT = 0; sk.skid = 0; sk.stopT = 0;
   sk.edge = 0; sk.spin = 0; sk.yawRate = 0; sk.charge = 0; sk.poleP = -1; sk.poleQ = false;
+  sk.grind = null; sk.grindCD = 0; sk.popT = -1;
   sk.flip = 0; sk.flipRate = 0;
   sk.edgeA = 0; sk.latA = 0; sk.roll = 0; sk.kappa = 0; sk.lean = 0; sk.knee = 0; sk.crouch = 0; sk.bodyY = 0;
   state.cameraSnap = true;
@@ -448,6 +452,7 @@ function groundStep(dt) {
     sk.popCD = POP_COOLDOWN;
     popped = true;
     sk.charge = 0;
+    sk.popT = 0;
   }
 
   sk.pos.addScaledVector(sk.vel, dt);
@@ -508,6 +513,94 @@ function airStep(dt) {
   const s = sample(sk.pos.x, sk.pos.z);
   sk.airMax = Math.max(sk.airMax, sk.pos.y - s.h);
   if (sk.pos.y <= s.h) land(s);
+}
+
+// ---------- Rails and boxes: the grind (Jack 2026-11-11: A2, B1, C1) ----------
+// She locks on when her feet come within GRIND.LOCK m of a rail's line (or a box's top) at its height, moving along it.
+// She snaps her skis across it (B1) and slides its line with little friction. Left/Right spin her as in the air, and
+// any spin she brought from the air is reset on lock. Her angle is her balance: steady with skis across or along the
+// rail, wobbling in between; held off steady too long and she slips off the side. She leaves at either end or with Space.
+const GRIND = {
+  LOCK: 0.15,            // m from the rail's line (boxes: from the edge of the top) and above its top
+  BELOW: 0.25,           // m her feet may already be under the top (skiing up the ramp onto it)
+  MIN_V: 1.5,            // m/s along the rail to lock on
+  MU: 0.06,              // friction on the metal, x g
+  STEADY: 15,            // degrees off across/along that stays steady
+  TIP: 2.4,              // balance lost per second at 45 degrees off (falls at 1), scaled from STEADY
+  RECOVER: 1.5,          // balance won back per second while steady
+  SLIP: 1.5,             // m/s sideways she slips off with
+  CD: 0.3,               // s before she can lock on again after leaving
+};
+const gP = new THREE.Vector3(), gD = new THREE.Vector3();
+// the rail's line at u: position and unit direction (with its slope)
+function railAt(t, u, pos, dir) {
+  pos.set(t.x + t.fx * u, railY(t, u), t.z + t.fz * u);
+  const a = Math.max(0, u - 0.2), b = Math.min(t.len, u + 0.2);
+  dir.set(t.fx * (b - a), railY(t, b) - railY(t, a), t.fz * (b - a)).normalize();
+}
+function grindLock() {
+  if (sk.grindCD > 0 || (!sk.grounded && sk.vel.y > 0.5)) return;
+  for (const t of RAILS) {
+    const dx = sk.pos.x - t.x, dz = sk.pos.z - t.z, u = dx * t.fx + dz * t.fz;
+    if (u < 0 || u > t.len) continue;
+    const v = dz * t.fx - dx * t.fz, reach = (t.jib.kind === 'box' ? t.hw : 0) + GRIND.LOCK;
+    if (Math.abs(v) > reach) continue;
+    const y = railY(t, u);
+    if (sk.pos.y > y + GRIND.LOCK || sk.pos.y < y - GRIND.BELOW || sk.prev.y < y - GRIND.BELOW) continue;
+    railAt(t, u, gP, gD);
+    const along = sk.vel.dot(gD);
+    if (Math.abs(along) < GRIND.MIN_V) continue;
+    const dir = Math.sign(along);
+    // skis across the rail, on the side nearer where she was facing
+    const ry = Math.atan2(gD.x * dir, -gD.z * dir), a = wrapAngle(sk.heading - ry);
+    sk.heading = wrapAngle(ry + (a >= 0 ? 1 : -1) * Math.PI / 2);
+    sk.grind = { t, u, v: Math.min(Math.abs(v), t.jib.kind === 'box' ? t.hw : 0) * Math.sign(v), dir, speed: Math.abs(along), bal: 0 };
+    sk.spin = 0; sk.flip = 0; sk.flipRate = 0; sk.yawRate = 0;
+    sk.grounded = true; sk.airTime = 0; sk.airMax = 0;
+    sk.edgeA = sk.lean = sk.kappa = 0; sk.poleP = -1;
+    return;
+  }
+}
+function grindLeave(side) {
+  const g = sk.grind;
+  railAt(g.t, clamp(g.u, 0, g.t.len), gP, gD);
+  sk.vel.copy(gD).multiplyScalar(g.dir * g.speed);
+  if (side) sk.vel.x += -g.t.fz * side * GRIND.SLIP, sk.vel.z += g.t.fx * side * GRIND.SLIP;
+  sk.grind = null; sk.grindCD = GRIND.CD;
+  sk.grounded = false; sk.airTime = 0; sk.airMax = 0; sk.spin = 0;
+}
+function grindStep(dt) {
+  const g = sk.grind, t = g.t;
+  sk.popCD = Math.max(0, sk.popCD - dt);
+  // spin as in the air
+  if (sk.steer) sk.spin += sk.steer * MO.SPIN_IN * dt;
+  else {
+    sk.spin *= Math.max(0, 1 - MO.SPIN_DAMP * dt);
+    if (Math.abs(sk.spin) < 2) sk.spin *= Math.max(0, 1 - 3 * dt);
+  }
+  sk.heading = wrapAngle(sk.heading + sk.spin * dt);
+  // slide: gravity along the rail less a little friction
+  railAt(t, g.u, gP, gD);
+  const slope = gD.y * g.dir;                    // + when the way she's going climbs
+  g.speed = Math.max(0, g.speed - (G * slope + GRIND.MU * G) * dt - MO.DRAG * g.speed * g.speed * dt);
+  g.u += g.dir * g.speed * dt * Math.hypot(gD.x, gD.z);       // u is metres along the ground
+  // balance: her angle off the nearest steady line (across or along)
+  const ry = Math.atan2(t.fx, -t.fz), rel = Math.abs(wrapAngle(sk.heading - ry)) * 180 / Math.PI % 90;
+  const off = Math.min(rel, 90 - rel);
+  if (off > GRIND.STEADY) g.bal += GRIND.TIP * (off - GRIND.STEADY) / (45 - GRIND.STEADY) * dt;
+  else g.bal = Math.max(0, g.bal - GRIND.RECOVER * dt);
+  if (g.speed < 0.3 || g.u < 0 || g.u > t.len) { grindLeave(0); return; }
+  if (g.bal >= 1) { grindLeave(sk.spin >= 0 ? 1 : -1); return; }
+  railAt(t, g.u, gP, gD);
+  sk.pos.set(gP.x - t.fz * g.v, gP.y, gP.z + t.fx * g.v);
+  sk.vel.copy(gD).multiplyScalar(g.dir * g.speed);
+  // Space pops her off it like an ollie
+  if (input.jump && sk.popCD === 0) {
+    const pop = MO.OLLIE_MIN + (MO.OLLIE_MAX - MO.OLLIE_MIN) * clamp(sk.charge / MO.OLLIE_CHARGE, 0, 1);
+    grindLeave(0);
+    sk.vel.addScaledVector(UP, pop);
+    sk.popCD = POP_COOLDOWN; sk.charge = 0; sk.popT = 0;
+  }
 }
 
 // Landing keeps the momentum along the slope and absorbs only the part into the snow:
@@ -780,7 +873,10 @@ export function step() {
 
   sk.prev.copy(sk.pos);
   state.solidY = sk.pos.y;
-  if (sk.crashed) bailStep(dt);
+  sk.grindCD = Math.max(0, sk.grindCD - dt);
+  if (!sk.crashed && !sk.grind) grindLock();
+  if (sk.crashed) { sk.grind = null; bailStep(dt); }
+  else if (sk.grind) grindStep(dt);
   else if (sk.grounded) groundStep(dt);
   else airStep(dt);
   input.jump = false;

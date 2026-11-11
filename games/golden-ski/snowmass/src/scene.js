@@ -123,6 +123,10 @@ export const GOLDIE_POLE = await (await fetch(new URL('../assets/sprites/goldie_
 export const [goldieMoveT, goldieMoveN] = await Promise.all([loadTex('sprites/goldie_move'), loadTex('sprites/goldie_move_n')]);
 goldieMoveT.flipY = goldieMoveN.flipY = false;
 export const GOLDIE_MOVE = await (await fetch(new URL('../assets/sprites/goldie_move.json', import.meta.url))).json();
+// her ollie charge and rail grind frames: same layout again
+export const [goldieTrickT, goldieTrickN] = await Promise.all([loadTex('sprites/goldie_trick'), loadTex('sprites/goldie_trick_n')]);
+goldieTrickT.flipY = goldieTrickN.flipY = false;
+export const GOLDIE_TRICK = await (await fetch(new URL('../assets/sprites/goldie_trick.json', import.meta.url))).json();
 export const [stationT, stationN] = await Promise.all([loadTex('textures/station_atlas'), loadTex('textures/station_atlas_n')]);
 export const TREE_KINDS = ['spruce', 'fir', 'aspen', 'snowghost', 'pole', 'sign', 'gate_red', 'gate_blue', 'outcrop'];
 const loadImg = (n) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = asset(n); });

@@ -192,6 +192,13 @@ const KICK_AT = [                                              // m down the run
   { run: 'Cabin', d: 330, size: 'medium' },
   { run: 'Cabin', d: 720, size: 'large' },
   { run: 'Cabin', d: 1290, size: 'small' },
+  // the park's jump zones from the trail map (Jack 2026-11-11): M/L top, M/L mid, M/L lower, S/M bottom, each pair side by
+  // side; the Cabin kickers above make one of each pair
+  { at: [517.0, -3412.0], size: 'large' },                     // top, beside Cabin's medium
+  { at: [522.0, -3659.0], size: 'medium' },                    // mid, below the culvert bridge on Cabin's line
+  { at: [538.0, -3651.0], size: 'large' },
+  { at: [591.0, -3786.0], size: 'medium' },                    // lower, beside Cabin's large
+  { at: [896.0, -4265.0], size: 'medium' },                    // bottom, beside Cabin's small
   { at: [2417.7, -3868.7], size: 'lip' },                      // laser note 8 (2026-10-27): "can we make it a bit larger?"
   { at: [3288.9, -4782.7], size: 'lipS' },                     // laser note 17: the roll-over Jack liked, smoothed away
                                                                // when the snow past it became a run, built back

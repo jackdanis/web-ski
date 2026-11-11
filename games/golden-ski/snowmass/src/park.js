@@ -40,13 +40,21 @@ const JIBS = [
   { at: [461.4, -3378.2], len: 12, hw: 0.3, shape: 'aframe', kind: 'rail' },
   { at: [482.4, -3391.8], len: 10, hw: 0.4, shape: 'flat', kind: 'tube' },
 ];
-const RAIL_START = 0.15;                     // m over the snow where a jib starts, so skis ride on
+// Rebuild (Jack 2026-11-11, from his four park photos): the start under Coney Express's top terminal with a red gate,
+// the red wall ride beside it, and a red down box beside a wooden stair set under the lift
+JIBS.push({ at: [325.0, -3296.0], len: 11, hw: 0.3, shape: 'down', kind: 'box', stairs: true });
+const GATE = { at: [349.0, -3276.0], half: 11, h: 4.2 };     // drop-in centre, half width across the fall line, banner top
+// wall ride: a red panel along the fall line, its low edge on the snow, rising 'tilt' m across its width toward +v
+const WALL = { at: [372.0, -3318.0], len: 14, hw: 1.3, tilt: 2.4, shape: 'flat0', kind: 'wall' };
+JIBS.push(WALL);
+const RAIL_START = 0.15;                     // m over the snow where a jib starts, so skis ride on: the snow ramp's top
 // m over the straight snow line at u (0..1 along)
 const SHAPES = {
   down: (u) => 0.15 + 0.6 * u,                                       // rises off the slope, the top falling less steeply
   flat: (u) => 0.15 + 1.0 * u,                                       // nearly level
   rainbow: (u) => 0.2 + 0.1 * u + 0.8 * Math.sin(Math.PI * u),
   aframe: (u) => u < 0.35 ? 0.15 + 0.85 * u / 0.35 : u < 0.65 ? 1.0 + 0.3 * (u - 0.35) / 0.3 : 1.3 - 0.9 * (u - 0.65) / 0.35,
+  flat0: (u) => 0.02 + 0.6 * u,                                     // the wall's low edge, on the snow
   kink: (u) => u < 0.45 ? 0.15 + 1.0 * u / 0.45 : 1.15 - 0.4 * (u - 0.45) / 0.55,
 };
 // transition features: three rollers before the jump line, a spine near the bottom of the lanes
@@ -174,12 +182,19 @@ const spineK = (() => {
 })();
 // the bank: open where the culvert runs through it, so Lunchline skiers ride the snow inside
 const bankK = pathFeature(BANK.pts, BANK.top + 28, (s, d, x, z) => inCulvert(x, z) ? 0 : bankTop(s) - Math.max(0, d - BANK.top) * BANK.side - base(x, z));
+// a short snow ramp up to each jib's start (not the wall, whose low edge is on the snow)
+for (const r of JIBS) {
+  if (r.kind === 'wall') continue;
+  const [fx, fz] = fall(r.at[0], r.at[1]), [x, z] = r.at, w = r.hw + 0.6, RL = 3;
+  const k = pathFeature([[x - fx * RL, z - fz * RL], [x, z]], w + 0.5, (s, d) => d >= w ? 0 : RAIL_START * Math.min(1, s / RL) * ease((w - d) / 0.4));
+  r.ramp = k;
+}
 // ---------- boxes, rails and the snow over the culvert: ground only from above ----------
 // each: start x z, unit dir, length, half width, top y at both ends (set when the snow under them is known)
 const tops = [];
 for (const r of JIBS) {
   const [fx, fz] = fall(r.at[0], r.at[1]);
-  r.top = { x: r.at[0], z: r.at[1], fx, fz, len: r.len, hw: r.hw, y0: 0, y1: 0, rise: SHAPES[r.shape] };
+  r.top = { x: r.at[0], z: r.at[1], fx, fz, len: r.len, hw: r.hw, y0: 0, y1: 0, rise: SHAPES[r.shape], tilt: r.tilt || 0, jib: r };
   tops.push(r.top);
 }
 function setTops() {
@@ -189,7 +204,11 @@ function setTops() {
   }
 }
 setTops();
-const topY = (t, u) => t.y0 + (t.y1 - t.y0) * u / t.len + t.rise(u / t.len);
+// v: m across, toward the fall line's left; a wall rises tilt m across its width
+// every jib but the wall ride can be ground (Jack C1): play.js locks her onto these
+export const RAILS = tops.filter((t) => t.jib.kind !== 'wall');
+export const railY = (t, u) => topY(t, u);
+const topY = (t, u, v = 0) => t.y0 + (t.y1 - t.y0) * u / t.len + t.rise(u / t.len) + (t.tilt ? t.tilt * (v + t.hw) / (2 * t.hw) : 0);
 const tB = { x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9 };
 const cR = Math.max(-CULVERT.a0, CULVERT.a1) + CULVERT.r;
 for (const p of [[CULVERT.c[0] - cR, CULVERT.c[1] - cR], [CULVERT.c[0] + cR, CULVERT.c[1] + cR]]) {
@@ -203,9 +222,9 @@ GROUND_ADD.push((x, z, out) => {
   for (const t of tops) {
     const dx = x - t.x, dz = z - t.z, u = dx * t.fx + dz * t.fz, v = dz * t.fx - dx * t.fz;
     if (u < 0 || u > t.len || Math.abs(v) > t.hw) continue;
-    const y = topY(t, u), g = (topY(t, Math.min(t.len, u + 0.2)) - topY(t, Math.max(0, u - 0.2))) / 0.4;
+    const y = topY(t, u, v), g = (topY(t, Math.min(t.len, u + 0.2), v) - topY(t, Math.max(0, u - 0.2), v)) / 0.4, gv = t.tilt / (2 * t.hw);
     if (y <= out.h || state.solidY < y - 0.5) continue;
-    out.h = y; out.gx = t.fx * g; out.gz = t.fz * g;
+    out.h = y; out.gx = t.fx * g - t.fz * gv; out.gz = t.fz * g + t.fx * gv;
   }
   if (inCulvert(x, z)) {
     const y = capY(x, z), E = 0.3;
@@ -215,17 +234,32 @@ GROUND_ADD.push((x, z, out) => {
 });
 
 // ---------- meshes ----------
-const CULV = [[0.62, 0.64, 0.68], [0.5, 0.52, 0.56]], BOX_TOP = [0.78, 0.8, 0.84], TUBE = [0.25, 0.42, 0.62];   // corrugation: light and dark rings
+const CULV = [[0.62, 0.64, 0.68], [0.5, 0.52, 0.56]], BOX_TOP = [0.78, 0.8, 0.84], TUBE = [0.25, 0.42, 0.62];
+// Jack's photos: gold rails on gold posts, red-sided boxes, a grey rainbow box, red wall ride and gate, wooden stairs
+const GOLD = [0.86, 0.64, 0.22], RED = [0.72, 0.12, 0.1], GREY = [0.58, 0.6, 0.64], WOOD = [0.5, 0.36, 0.24], WOOD_D = [0.3, 0.22, 0.16], WHITE = [0.95, 0.95, 0.97];
+// a smooth surface between two edge lines sampled along u: a(u), b(u) give [x,y,z] in world; both windings
+function sheet(n, a, b, col, o) {
+  const pos = [];
+  for (let i = 0; i < n; i++) {
+    const p = a(i / n), q = a((i + 1) / n), r = b((i + 1) / n), t = b(i / n);
+    for (const v of [p, q, r, p, r, t, p, r, q, p, t, r]) pos.push(v[0] - o[0], v[1] - o[1], v[2] - o[2]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return part(g, col);
+}   // corrugation: light and dark rings
 const ex = new THREE.Vector3(), ey = new THREE.Vector3(), ez = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), M = new THREE.Matrix4();
 // a box from a to b (its centre line), w wide, h tall, local origin o
 function beam(a, b, w, h, col, o) {
   ex.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
   const len = ex.length();
-  ex.normalize(); ez.crossVectors(ex, UP).normalize(); ey.crossVectors(ez, ex);
+  ex.normalize(); ez.crossVectors(ex, UP);
+  if (ez.lengthSq() < 1e-6) ez.set(0, 0, 1);         // straight up (posts): any level side will do
+  ez.normalize(); ey.crossVectors(ez, ex);
   M.makeBasis(ex, ey, ez).setPosition((a[0] + b[0]) / 2 - o[0], (a[1] + b[1]) / 2 - o[1], (a[2] + b[2]) / 2 - o[2]);
   return part(new THREE.BoxGeometry(len, h, w), col, M);
 }
-const along = (t, u, v, dy = 0) => [t.x + t.fx * u - t.fz * v, topY(t, u) + dy, t.z + t.fz * u + t.fx * v];
+const along = (t, u, v, dy = 0) => [t.x + t.fx * u - t.fz * v, topY(t, u, v) + dy, t.z + t.fz * u + t.fx * v];
 function buildMesh() {
   const o = [CULVERT.c[0], bank.yC, CULVERT.c[1]], P = [], C = CULVERT, SEG = 16, STEP = 0.5;
   // culvert: a half circle on the snow along its axis, rings of light and dark for the corrugation, seen from both sides
@@ -269,24 +303,46 @@ function buildMesh() {
   const cg = new THREE.BufferGeometry();
   cg.setAttribute('position', new THREE.Float32BufferAttribute(cap, 3));
   P.push(part(cg, SNOWCAP));
-  // boxes: a light top on dark sides down into the snow; rails and tubes: a steel bar on dark legs; in 0.5 m pieces
+  // boxes and the wall: one smooth top, sides down into the snow (no steps); rails and tubes: a gold bar on gold posts
   for (const r of JIBS) {
-    const q = r.top, sink = 0.6, n = Math.round(q.len / 0.5);
-    for (let i = 0; i < n; i++) {
-      const u0 = i * q.len / n, u1 = (i + 1) * q.len / n;
-      if (r.kind === 'box') {
-        P.push(beam(along(q, u0, 0, -0.03), along(q, u1, 0, -0.03), 2 * r.hw, 0.06, BOX_TOP, o));
-        const p0 = along(q, u0, 0), p1 = along(q, u1, 0), g = Math.min(base(p0[0], p0[2]), base(p1[0], p1[2])) - sink, mid = (p0[1] + p1[1]) / 2 - 0.06;
-        P.push(beam([p0[0], (g + mid) / 2, p0[2]], [p1[0], (g + mid) / 2, p1[2]], 2 * r.hw, mid - g, DARK, o));
-      } else {
-        const t = r.kind === 'tube' ? 0.45 : 0.1;
-        P.push(beam(along(q, u0, 0, -t / 2), along(q, u1, 0, -t / 2), t, t, r.kind === 'tube' ? TUBE : STEEL, o));
+    const q = r.top, sink = 0.6, n = Math.max(8, Math.round(q.len / 0.5));
+    const ground = (p) => [p[0], base(p[0], p[2]) - sink, p[2]];
+    if (r.kind === 'box' || r.kind === 'wall') {
+      const side = r.kind === 'wall' ? RED : r.shape === 'rainbow' ? GREY : RED, L = (u) => along(q, u * q.len, -q.hw), R = (u) => along(q, u * q.len, q.hw);
+      P.push(sheet(n, L, R, r.kind === 'wall' ? RED : BOX_TOP, o));
+      P.push(sheet(n, L, (u) => ground(L(u)), side, o));
+      P.push(sheet(n, R, (u) => ground(R(u)), side, o));
+      for (const u of [0, 1]) P.push(sheet(1, (k) => along(q, u * q.len, -q.hw + 2 * q.hw * k), (k) => ground(along(q, u * q.len, -q.hw + 2 * q.hw * k)), side, o));
+      if (r.kind === 'wall') {         // white stripe along the top edge
+        P.push(sheet(n, (u) => along(q, u * q.len, q.hw - 0.12, 0.01), (u) => along(q, u * q.len, q.hw, 0.01), WHITE, o));
+      }
+    } else {
+      const t = r.kind === 'tube' ? 0.45 : 0.1;
+      for (let i = 0; i < n; i++) P.push(beam(along(q, i * q.len / n, 0, -t / 2), along(q, (i + 1) * q.len / n, 0, -t / 2), t, t, r.kind === 'tube' ? TUBE : GOLD, o));
+      for (let u = 0.4; u < q.len; u += Math.max(2.5, (q.len - 0.8) / 3)) {
+        const top = along(q, u, 0, -0.1), g = base(top[0], top[2]) - sink;
+        P.push(beam([top[0], g, top[2]], top, 0.12, 0.12, GOLD, o));
       }
     }
-    if (r.kind !== 'box') for (let u = 0.4; u < q.len; u += Math.max(2.5, (q.len - 0.8) / 3)) {
-      const top = along(q, u, 0, -0.1), g = base(top[0], top[2]) - sink;
-      P.push(beam([top[0], g, top[2]], top, 0.12, 0.12, DARK, o));
+    // the stair set beside the down box: flat wooden treads stepping down the snow, a dark riser under each
+    if (r.stairs) {
+      const N = 12, W = 2.6, off = -(q.hw + 0.4 + W / 2);
+      for (let i = 0; i < N; i++) {
+        const u0 = i * q.len / N, u1 = (i + 1) * q.len / N, c0 = along(q, u0, off), y = base(c0[0], c0[2]) + 0.02;
+        const m0 = along(q, (u0 + u1) / 2, off), lo = base(along(q, u1, off)[0], along(q, u1, off)[2]) - 0.3;
+        P.push(beam([c0[0], y - 0.05, c0[2]], [along(q, u1, off)[0], y - 0.05, along(q, u1, off)[2]], W, 0.1, WOOD, o));
+        P.push(beam([m0[0], (y - 0.1 + lo) / 2, m0[2]], [m0[0] + q.fx * 0.01, (y - 0.1 + lo) / 2, m0[2] + q.fz * 0.01], W, y - 0.1 - lo, WOOD_D, o));
+      }
     }
+  }
+  // the start gate: two red posts and a red banner with a white edge across the drop-in
+  {
+    const [fx, fz] = fall(GATE.at[0], GATE.at[1]), G = GATE, at = (v, y) => [G.at[0] - fz * v, base(G.at[0] - fz * v, G.at[1] + fx * v) + y, G.at[1] + fx * v];
+    for (const sg of [-1, 1]) { const p = at(G.half * sg, 0); P.push(beam([p[0], p[1] - 0.5, p[2]], [p[0], p[1] + G.h, p[2]], 0.4, 0.4, RED, o)); }
+    const yl = Math.max(at(-G.half, 0)[1], at(G.half, 0)[1]);
+    const a = at(-G.half, 0), b = at(G.half, 0);
+    P.push(beam([a[0], yl + G.h - 0.6, a[2]], [b[0], yl + G.h - 0.6, b[2]], 0.15, 1.2, RED, o));
+    P.push(beam([a[0], yl + G.h - 1.25, a[2]], [b[0], yl + G.h - 1.25, b[2]], 0.17, 0.12, WHITE, o));
   }
   const mesh = new THREE.Mesh(merge(P), modelMat);
   mesh.position.set(o[0], o[1], o[2]);
@@ -303,7 +359,18 @@ const culvertWalls = [];
     SOLIDS.push(w);
   }
 }
-const placeWalls = () => { for (const w of culvertWalls) w.y = base(w.x, w.z) + 1.0; };
+// gate posts and the wall's high side
+{
+  const [fx, fz] = fall(GATE.at[0], GATE.at[1]);
+  for (const sg of [-1, 1]) {
+    const w = { x: GATE.at[0] - fz * GATE.half * sg, z: GATE.at[1] + fx * GATE.half * sg, y: 0, hx: 0.25, hy: GATE.h / 2, hz: 0.25, c: fx, s: -fz, what: 'park gate', yOff: GATE.h / 2 };
+    culvertWalls.push(w); SOLIDS.push(w);
+  }
+  const t = WALL.top, a = { x: t.x + t.fx * t.len / 2 - t.fz * (t.hw + 0.1), z: t.z + t.fz * t.len / 2 + t.fx * (t.hw + 0.1) };
+  const w = { ...a, y: 0, hx: t.len / 2, hy: 1.4, hz: 0.12, c: t.fx, s: -t.fz, what: 'wall ride', yOff: 1.2 };
+  culvertWalls.push(w); SOLIDS.push(w);
+}
+const placeWalls = () => { for (const w of culvertWalls) w.y = base(w.x, w.z) + (w.yOff ?? 1.0); };
 placeWalls();
 
 // rebuild when the 2 m tiles under the park load or drop, so everything sits on the snow the skier rides
@@ -319,7 +386,7 @@ export function updatePark() {
   if (m !== mode) {
     mode = m;
     bankHeights(); setTops(); placeWalls();
-    for (const k of [bermK, rollK, spineK, bankK]) k.mode = -1;     // lifts.js remeshes the snow
+    for (const k of [bermK, rollK, spineK, bankK, ...JIBS.map((r) => r.ramp).filter(Boolean)]) k.mode = -1;     // lifts.js remeshes the snow
     if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
     mesh = buildMesh();
     scene.add(mesh);

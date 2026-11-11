@@ -1,16 +1,16 @@
 // Rendering, the main loop and the test hooks. index.html loads this file.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { state } from './state.js';
-import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, physics, wrapAngle } from './config.js';
+import { ASSIST, BAIL, BODY, CV, G, MO, STEP, clamp, ease, physics, wrapAngle } from './config.js';
 import { H, KICKERS, META, PCELL, POWDER, SOLIDS, aspen, cellAt, conifer, groundY, isRock, normalFrom, patchEdge, sample, sampleBase, samplePatch, surfaceAt } from './world.js';
-import { GOLDIE, GOLDIE_AIR, GOLDIE_MOVE, GOLDIE_POLE, SUN_DIR, camera, goldieAirN, goldieAirT, goldieMoveN, goldieMoveT, goldieN, goldiePoleN, goldiePoleT, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
+import { GOLDIE, GOLDIE_AIR, GOLDIE_MOVE, GOLDIE_POLE, GOLDIE_TRICK, goldieTrickN, goldieTrickT, SUN_DIR, camera, goldieAirN, goldieAirT, goldieMoveN, goldieMoveT, goldieN, goldiePoleN, goldiePoleT, goldieT, renderer, runWork, scene, sky, updateTerrain, work } from './scene.js';
 import { addBuilding, ringed, updateRings } from './buildings.js';
 import { clumpGeo, fillGeo, pages, treeGeo, updateTrees } from './trees.js';
 import { carriers, liftPaths, updateKickers } from './lifts.js';
 import { PATCH_STEP, RUNS, STARTS, meshY, runStream, setPatch, signSpots, updatePatch } from './slopes.js';
 import { LOAD, RIDES, carrierAt, ride, ringMat } from './ride.js';
 import { applyTime, resize, setPixelLook, sunAt, updateWorld } from './atmosphere.js';
-import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, MOVE_FRAMES, POLE_FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
+import { AIR_ELEVS, CARVE_EDGES, FLIP_SKIS, FRAMES, MOVE_FRAMES, POLE_FRAMES, TRICK_FRAMES, SHEET_H, SHEET_PX, SHEET_W, SHEET_YAWS, SKIER_LIT, SPRAY_N, shadow, skiUp, skierMat, skierMesh, skis, spray, sprayPoints } from './goldie.js';
 import { FLAT_Q, FREE_FAST, FREE_SPEED, UP, bA, bMat, bail, debugEl, free, input, keys, leanAxis, perf, placeSkier, POLE_PHASES, setFreecam, sk, skiDir, skipRide, speedEl, startRide, step, tmpA, tmpN, toSummit, trips, wake } from './play.js';
 import { drawMiniMap, hudMap, setFullMap, updateHudMap } from './hudmap.js';
 import { notes, updateNotes } from './notes.js';
@@ -25,6 +25,8 @@ import { MAP } from '../data/mountain.js';
 // ---------- Rendering ----------
 const view = new THREE.Vector3(), camDir = new THREE.Vector3(0, 0, -1), camPos = new THREE.Vector3(), look = new THREE.Vector3();
 const tmpC = new THREE.Vector3();
+const ZOOM = { IN: 4, OUT: 6, RISE: 0.12, T: 0.6 };
+let baseFov = 60, zoomIn = 0;
 function updateCamera(p, dt) {
   const speed = sk.vel.length();
   tmpC.set(sk.vel.x, 0, sk.vel.z);
@@ -47,8 +49,17 @@ function updateCamera(p, dt) {
   sk.roll += (bankTo - sk.roll) * (state.cameraSnap ? 1 : 1 - Math.exp(-2 * dt));
   camera.rotateZ(-sk.roll);
   const fov = Math.min(78, 60 + speed * 0.4) * (camera.aspect < 1 ? 1.15 : 1);
-  if (state.cameraSnap) { camera.fov = fov; camera.updateProjectionMatrix(); }
-  else if (Math.abs(camera.fov - fov) > 0.05) { camera.fov += (fov - camera.fov) * (1 - Math.exp(-3 * dt)); camera.updateProjectionMatrix(); }
+  if (state.cameraSnap) baseFov = fov;
+  else baseFov += (fov - baseFov) * (1 - Math.exp(-3 * dt));
+  // Jump push and release (Jack E1): eases in up to ZOOM.IN degrees while she loads an ollie, then on the pop widens
+  // ZOOM.OUT past normal in ZOOM.RISE s and settles back by ZOOM.T s
+  const load = sk.charge > 0 ? -ZOOM.IN * clamp(sk.charge / MO.OLLIE_CHARGE, 0, 1) : 0;
+  zoomIn += (load - zoomIn) * (state.cameraSnap ? 1 : 1 - Math.exp(-8 * dt));
+  if (sk.popT >= 0) sk.popT += dt;
+  const t = sk.popT, kick = t < 0 || t > ZOOM.T ? 0 : t < ZOOM.RISE ? ZOOM.OUT * ease(t / ZOOM.RISE) : ZOOM.OUT * (1 - ease((t - ZOOM.RISE) / (ZOOM.T - ZOOM.RISE)));
+  if (t > ZOOM.T) sk.popT = -1;
+  const want = baseFov + zoomIn + kick;
+  if (Math.abs(camera.fov - want) > 0.01) { camera.fov = want; camera.updateProjectionMatrix(); }
   state.cameraSnap = false;
 }
 
@@ -70,6 +81,7 @@ const MOVE = { POP: 0.3, ABSORB: 0.12, UNWEIGHT: 0.35, edged: 0 };
 function pickFrame() {
   const speed = sk.vel.length();
   if (sk.crashed) return FRAMES.wipeout;
+  if (sk.grind) return FRAMES.grind;
   // in the air: tucked while she flips, arms out otherwise
   if (!sk.grounded && sk.airTime > 0.12) {
     if (sk.flipIn || Math.abs(wrapAngle(sk.flip)) > 0.25 || Math.abs(sk.flipRate) > 1) return FRAMES.flip;
@@ -77,7 +89,7 @@ function pickFrame() {
   }
   if (sk.landT > 0) return FRAMES.land;
   if (sk.brake && speed > 1) return FRAMES.brake;
-  if (sk.charge > 0) return FRAMES.absorb;                   // loading an ollie: knees down
+  if (sk.charge > 0) return TRICK_FRAMES[Math.min(2, Math.floor(3 * sk.charge / MO.OLLIE_CHARGE))];   // loading an ollie: she sinks
   if (sk.tuck) return FRAMES.tuck;
   if (sk.poleP >= 0) {
     let i = 0, a = POLE_PHASES[0];
@@ -256,11 +268,12 @@ function drawSkier(p, riding, dY) {
   let tilt = elev < 6 ? 0 : elev < 28.5 ? 12 : 45, yaw = SHEET_YAWS[yi];
   if (mirror) pose = pose.replace(/_([lr])$/, (_, s) => (s === 'l' ? '_r' : '_l'));
   if (crashed) { tilt = 12; yaw = 0; }
-  const poling = pose.startsWith('pole_'), between = MOVE_FRAMES.includes(pose);
-  const sheet = poling ? GOLDIE_POLE : between ? GOLDIE_MOVE : GOLDIE, [SW, SH] = sheet.size;
+  const poling = pose.startsWith('pole_'), between = MOVE_FRAMES.includes(pose), trick = TRICK_FRAMES.includes(pose);
+  const sheet = poling ? GOLDIE_POLE : between ? GOLDIE_MOVE : trick ? GOLDIE_TRICK : GOLDIE, [SW, SH] = sheet.size;
   const [fx, fy, fw, fh, ax, ay] = sheet.frames[pose][tilt][yaw];
   const U = skierMat.uniforms;
-  U.map.value = poling ? goldiePoleT : between ? goldieMoveT : goldieT; U.normalMap.value = poling ? goldiePoleN : between ? goldieMoveN : goldieN;
+  U.map.value = poling ? goldiePoleT : between ? goldieMoveT : trick ? goldieTrickT : goldieT;
+  U.normalMap.value = poling ? goldiePoleN : between ? goldieMoveN : trick ? goldieTrickN : goldieN;
   U.rect.value.set(fx / SW, fy / SH, fw / SW, fh / SH);
   U.mirror.value = mirror ? 1 : 0;
   const w = fw / SHEET_PX;

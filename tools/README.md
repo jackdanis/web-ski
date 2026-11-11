@@ -34,6 +34,9 @@ walked along the run edges); rerun it after the runs move, then `export.py`.
 3. Flip frames (`assets/sprites/goldie_air*`): `node goldie/run_air.js <model.glb> flip 0,22.5,...,180 -90,-67.5,...,90 <outdir>`
    renders the tuck centred on her turning point from every elevation, then
    `PAL=<goldie_body.png> CENTER=1 python3 goldie/sheet3.py <outdir> <out> 1024 goldie_air` packs it in the body sheet's palette.
+4. Charge and grind frames (`assets/sprites/goldie_trick*`): `POSEJS=movepose.js,chargepose.js node goldie/runpole.js <model.glb>
+   charge_1,charge_2,charge_3,grind 0,22.5,...,180 0,12,45 <outdir>`, then
+   `PAL=<goldie_body.png> PALADD=34,44,96 python3 goldie/sheet3.py <outdir> <out> 1024 goldie_trick`.
 
 ## Textures
 

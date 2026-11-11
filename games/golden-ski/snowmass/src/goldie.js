@@ -14,7 +14,10 @@ export const POLE_FRAMES = ['pole_reach', 'pole_plant', 'pole_crunch', 'pole_pus
 // The in-between frames (goldie_move.json, same layout): absorb (knees folded over a mogul or loading an ollie),
 // pop (legs driving off the lip) and unweight (tall and light between edges).
 export const MOVE_FRAMES = ['absorb', 'pop', 'unweight'];
-export const FRAMES = { absorb: 'absorb', pop: 'pop', unweight: 'unweight', stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
+// Ollie charge and rail grind (goldie_trick.json, same layout): charge_1..3 sink from standing to a deep crouch over the
+// load, grind is the slide stance with arms out wide.
+export const TRICK_FRAMES = ['charge_1', 'charge_2', 'charge_3', 'grind'];
+export const FRAMES = { grind: 'grind', absorb: 'absorb', pop: 'pop', unweight: 'unweight', stand: 'stand', carveL: 'carve_l', carveR: 'carve_r', tuck: 'tuck', brake: 'brake', air: 'air', land: 'land', wipeout: 'wipeout', celebrate: 'celebrate', sit: 'sit', flip: 'flip' };
 // Flips use their own sheet (goldie_air.json): the tucked body from every camera direction round her, elevation -90
 // (from below) to 90 (from above) in 22.5 degree steps, each frame's anchor at the point she turns about. Her skis'
 // middle sits FLIP_SKIS from that point (m: up, forward in her body frame).
