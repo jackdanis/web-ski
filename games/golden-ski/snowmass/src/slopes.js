@@ -377,8 +377,10 @@ function buildGroupMesh(P, g, level) {
       pos.push(x, hr[c] - (drop ? 1.5 * s : 0), z);
       cov.push(edge[c], isRock(k) && edge[c] > 3 ? 1 : 0, conifer(k), aspen(k));
       run.push(...groomFrame(x, z));
-      if (drop === undefined) nrm.push(0, 0, 0);
-      else {
+      if (drop === undefined) {
+        const hl = h(a - 1, j) ?? hr[c], hx = h(a + 1, j) ?? hr[c], hu = h(a, j - 1) ?? hr[c], hd = h(a, j + 1) ?? hr[c];
+        nrm.push(-(hx - hl) / PCELL, 2, -(hd - hu) / PCELL);
+      } else {
         // skirt normals match the run beside them
         const hl = h(a - 1, j) ?? hr[c], hx = h(a + 1, j) ?? hr[c], hu = h(a, j - 1) ?? hr[c], hd = h(a, j + 1) ?? hr[c];
         nrm.push(-(hx - hl) / (2 * PCELL), 1, -(hd - hu) / (2 * PCELL));

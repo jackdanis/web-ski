@@ -265,7 +265,7 @@ export const terrainMat = new THREE.ShaderMaterial({
       vec4 mv = viewMatrix * w;
       // skirts sit just behind the ground so the ground wins depth ties and no seams show
 #ifndef MOGUL
-      if (dot(aN, aN) > 0.0) mv.xyz *= 1.003;
+      if (aN.y > 0.0 && aN.y < 1.5) mv.xyz *= 1.003;
 #endif
       vD = -mv.z;
       gl_Position = projectionMatrix * mv;
@@ -408,12 +408,11 @@ function buildChunk(ch, level) {
     const k = j * NX + i;
     pos[v * 3] = X0 + i * CELL; pos[v * 3 + 1] = H[k] - drop; pos[v * 3 + 2] = Z0 + j * CELL;
     cov[v * 4] = runDist(k); cov[v * 4 + 1] = isRock(k); cov[v * 4 + 2] = conifer(k); cov[v * 4 + 3] = aspen(k);
-    if (skirt) {
-      // skirt normals match the ground beside them
-      nrm[v * 3] = -(gridH(i + 1, j) - gridH(i - 1, j)) / (2 * CELL);
-      nrm[v * 3 + 1] = 1;
-      nrm[v * 3 + 2] = -(gridH(i, j + 1) - gridH(i, j - 1)) / (2 * CELL);
-    }
+    // smooth normals (y 2 on the surface, 1 on skirts, so only skirts are pushed back)
+    const ys = skirt ? 1 : 2;
+    nrm[v * 3] = -ys * (gridH(i + 1, j) - gridH(i - 1, j)) / (2 * CELL);
+    nrm[v * 3 + 1] = ys;
+    nrm[v * 3 + 2] = -ys * (gridH(i, j + 1) - gridH(i, j - 1)) / (2 * CELL);
   };
   for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) put(b * nx + a, is[a], js[b], 0);
   const idx = [];

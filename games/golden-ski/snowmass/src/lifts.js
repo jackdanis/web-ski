@@ -198,13 +198,23 @@ if (apronGeos.length) {
   let o = 0;
   for (const g of apronGeos) { p.set(g.attributes.position.array, o * 3); o += g.attributes.position.count; }
   for (let k = 0; k < n; k++) cov[k * 4] = -5;
+  // smooth normals: shared corners average their faces, so the slope down from the deck reads as one soft bank, not a pinwheel of flat triangles
+  const nrm = new Float32Array(n * 3), acc = new Map(), key = (k) => `${Math.round(p[k * 3] * 10)},${Math.round(p[k * 3 + 2] * 10)}`;
+  for (let k = 0; k < n; k += 3) {
+    const ax = p[k * 3 + 3] - p[k * 3], ay = p[k * 3 + 4] - p[k * 3 + 1], az = p[k * 3 + 5] - p[k * 3 + 2];
+    const bx = p[k * 3 + 6] - p[k * 3], by = p[k * 3 + 7] - p[k * 3 + 1], bz = p[k * 3 + 8] - p[k * 3 + 2];
+    let fx = ay * bz - az * by, fy = az * bx - ax * bz, fz = ax * by - ay * bx;
+    if (fy < 0) { fx = -fx; fy = -fy; fz = -fz; }
+    for (let q = k; q < k + 3; q++) { const m = acc.get(key(q)) || [0, 0, 0]; m[0] += fx; m[1] += fy; m[2] += fz; acc.set(key(q), m); }
+  }
+  for (let k = 0; k < n; k++) nrm.set(acc.get(key(k)), k * 3);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
   geo.setAttribute('aCov', new THREE.BufferAttribute(cov, 4));
-  geo.setAttribute('aN', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  geo.setAttribute('aN', new THREE.BufferAttribute(nrm, 3));
   const mat = new THREE.ShaderMaterial({
     uniforms: Object.assign({}, terrainMat.uniforms, { uPFar: { value: 1e9 } }), vertexShader: terrainMat.vertexShader, fragmentShader: terrainMat.fragmentShader,
-    defines: { PATCH: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    defines: { PATCH: 1, MOGUL: 1 }, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
   });
   scene.add(new THREE.Mesh(geo, mat));
 }
