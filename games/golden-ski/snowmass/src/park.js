@@ -182,10 +182,20 @@ const spineK = (() => {
 })();
 // the bank: open where the culvert runs through it, so Lunchline skiers ride the snow inside
 const bankK = pathFeature(BANK.pts, BANK.top + 28, (s, d, x, z) => inCulvert(x, z) ? 0 : bankTop(s) - Math.max(0, d - BANK.top) * BANK.side - base(x, z));
+// Every jib faces along its lane (Jack's laser notes batch 6, pin 3: point them along the course, not down the fall
+// line): toward the next jib's start in its lane, the last one as the one before it. The stair box, the wall ride and
+// the gate face along the right lane's start.
+const unit = (dx, dz) => { const l = Math.hypot(dx, dz); return [dx / l, dz / l]; };
+for (const lane of [JIBS.slice(0, 8), JIBS.slice(8, 15)]) lane.forEach((r, i) => {
+  const a = lane[Math.min(i, lane.length - 2)], b = lane[Math.min(i, lane.length - 2) + 1];
+  r.dir = unit(b.at[0] - a.at[0], b.at[1] - a.at[1]);
+});
+const LANE_DIR = JIBS[8].dir;
+for (const r of JIBS) if (!r.dir) r.dir = LANE_DIR;
 // a short snow ramp up to each jib's start (not the wall, whose low edge is on the snow)
 for (const r of JIBS) {
   if (r.kind === 'wall') continue;
-  const [fx, fz] = fall(r.at[0], r.at[1]), [x, z] = r.at, w = r.hw + 0.6, RL = 3;
+  const [fx, fz] = r.dir, [x, z] = r.at, w = r.hw + 0.6, RL = 3;
   const k = pathFeature([[x - fx * RL, z - fz * RL], [x, z]], w + 0.5, (s, d) => d >= w ? 0 : RAIL_START * Math.min(1, s / RL) * ease((w - d) / 0.4));
   r.ramp = k;
 }
@@ -193,7 +203,7 @@ for (const r of JIBS) {
 // each: start x z, unit dir, length, half width, top y at both ends (set when the snow under them is known)
 const tops = [];
 for (const r of JIBS) {
-  const [fx, fz] = fall(r.at[0], r.at[1]);
+  const [fx, fz] = r.dir;
   r.top = { x: r.at[0], z: r.at[1], fx, fz, len: r.len, hw: r.hw, y0: 0, y1: 0, rise: SHAPES[r.shape], tilt: r.tilt || 0, jib: r };
   tops.push(r.top);
 }
@@ -337,7 +347,7 @@ function buildMesh() {
   }
   // the start gate: two red posts and a red banner with a white edge across the drop-in
   {
-    const [fx, fz] = fall(GATE.at[0], GATE.at[1]), G = GATE, at = (v, y) => [G.at[0] - fz * v, base(G.at[0] - fz * v, G.at[1] + fx * v) + y, G.at[1] + fx * v];
+    const [fx, fz] = LANE_DIR, G = GATE, at = (v, y) => [G.at[0] - fz * v, base(G.at[0] - fz * v, G.at[1] + fx * v) + y, G.at[1] + fx * v];
     for (const sg of [-1, 1]) { const p = at(G.half * sg, 0); P.push(beam([p[0], p[1] - 0.5, p[2]], [p[0], p[1] + G.h, p[2]], 0.4, 0.4, RED, o)); }
     const yl = Math.max(at(-G.half, 0)[1], at(G.half, 0)[1]);
     const a = at(-G.half, 0), b = at(G.half, 0);
@@ -361,7 +371,7 @@ const culvertWalls = [];
 }
 // gate posts and the wall's high side
 {
-  const [fx, fz] = fall(GATE.at[0], GATE.at[1]);
+  const [fx, fz] = LANE_DIR;
   for (const sg of [-1, 1]) {
     const w = { x: GATE.at[0] - fz * GATE.half * sg, z: GATE.at[1] + fx * GATE.half * sg, y: 0, hx: 0.25, hy: GATE.h / 2, hz: 0.25, c: fx, s: -fz, what: 'park gate', yOff: GATE.h / 2 };
     culvertWalls.push(w); SOLIDS.push(w);
