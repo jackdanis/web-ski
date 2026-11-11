@@ -517,7 +517,7 @@ function airStep(dt) {
 
 // ---------- Rails and boxes: the grind (Jack 2026-11-11: A2, B1, C1) ----------
 // She locks on when her feet come within GRIND.LOCK m of a rail's line (or a box's top) at its height, moving along it.
-// She snaps her skis across it (B1) and slides its line with little friction. Left/Right spin her as in the air, and
+// She keeps whatever way she faced coming on and slides its line with little friction. Left/Right spin her as in the air, and
 // any spin she brought from the air is reset on lock. Her angle is her balance: steady with skis across or along the
 // rail, wobbling in between; held off steady too long and she slips off the side. She leaves at either end or with Space.
 const GRIND = {
@@ -551,9 +551,7 @@ function grindLock() {
     const along = sk.vel.dot(gD);
     if (Math.abs(along) < GRIND.MIN_V) continue;
     const dir = Math.sign(along);
-    // skis across the rail, on the side nearer where she was facing
-    const ry = Math.atan2(gD.x * dir, -gD.z * dir), a = wrapAngle(sk.heading - ry);
-    sk.heading = wrapAngle(ry + (a >= 0 ? 1 : -1) * Math.PI / 2);
+    // she keeps the way she was facing as she locks on (Jack 2026-11-11), free to spin from there
     sk.grind = { t, u, v: Math.min(Math.abs(v), t.jib.kind === 'box' ? t.hw : 0) * Math.sign(v), dir, speed: Math.abs(along), bal: 0 };
     sk.spin = 0; sk.flip = 0; sk.flipRate = 0; sk.yawRate = 0;
     sk.grounded = true; sk.airTime = 0; sk.airMax = 0;
